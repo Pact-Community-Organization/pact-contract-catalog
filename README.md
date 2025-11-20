@@ -10,4 +10,4 @@ Mission: Make it easy and safe for businesses to start building with Pact.
 
 Vision: A trusted Pact ecosystem where businesses can confidently start using audited, reliable open source Pact contracts.
 
-See `ARCHITECTURE.md` for the repository layout and contribution guidelines in `CONTRIBUTING.md`.
+See [`ARCHITECTURE.md`](https://github.com/Pact-Community-Organization/pact-contract-catalog/blob/master/ARCHITECTURE.md) for the repository layout and contribution guidelines in [foundation/CONTRIBUTING.md](https://github.com/Pact-Community-Organization/foundation/blob/main/CONTRIBUTING.md).
