@@ -1,0 +1,51 @@
+name: Validate contract catalog
+
+on:
+  pull_request:
+    paths:
+      - 'pact-contract-catalog/**'
+  push:
+    branches: [ main ]
+    paths:
+      - 'pact-contract-catalog/**'
+
+jobs:
+  validate-index:
+    name: Generate and validate index
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Make generator executable
+        run: |
+          chmod +x pact-contract-catalog/scripts/generate_index.sh || true
+
+      - name: Run generator
+        run: |
+          set -euo pipefail
+          cd pact-contract-catalog
+          ./scripts/generate_index.sh > index.json
+
+      - name: Validate index is parseable JSON
+        run: |
+          python - <<'PY'
+import json
+import sys
+open('pact-contract-catalog/index.json')
+with open('pact-contract-catalog/index.json') as f:
+    json.load(f)
+print('index.json is valid JSON')
+PY
