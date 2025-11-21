@@ -1,0 +1,5 @@
+# Catalog ownership
+/contracts/             @Pact-Community-Organization/catalog-team
+/metadata/              @Pact-Community-Organization/catalog-team
+/scripts/               @Pact-Community-Organization/catalog-team @Pact-Community-Organization/core-maintainers
+*                      @Pact-Community-Organization/core-maintainers
