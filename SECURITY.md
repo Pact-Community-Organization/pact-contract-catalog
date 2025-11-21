@@ -1,10 +1,15 @@
 # Security Policy
 
-If you discover a security vulnerability in this project, please report it to the maintainers so we can address it promptly.
+If you discover a security vulnerability in this project, please report it so we can address it promptly.
 
-Suggested reporting steps:
+Preferred reporting options:
 
-- Open a repository issue and mark it with the `security` label (if the issue tracker supports private reports, use that).
-- For sensitive reports, contact the maintainers directly. Replace `security@example.com` with the appropriate security contact for this project.
+- Open a new issue in this repository and add the label `security` (maintainers will triage it).
+- If you need to report confidential details, use GitHub Security Advisories for this repository or email the maintainers directly.
 
-We will triage and respond to security reports as soon as possible.
+Guidance for reporters:
+
+- Provide a minimal repro or steps to reproduce, affected versions, and an assessment of impact when possible.
+- Mark the issue private or use the Security Advisory flow for sensitive information.
+
+The maintainers will acknowledge and triage security reports as quickly as possible. If you prefer an email contact, provide the preferred address in this file.
