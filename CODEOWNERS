@@ -1,0 +1,6 @@
+# CODEOWNERS for pact-contract-catalog
+# Require maintainer review for contract additions and important paths
+
+/contracts/    @DaisukeFlowers
+/ARCHITECTURE.md @DaisukeFlowers
+/CONTRIBUTING.md  @DaisukeFlowers
