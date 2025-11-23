@@ -17,7 +17,7 @@ The Pact Contract Catalog serves as:
 
 ## Repository Structure
 
-- `contracts/`: Verified Pact contracts organized by category.
+- `contracts/`: Verified Pact contracts organized by category (includes co-located test files in .repl format).
 - `metadata/`: JSON/YAML files describing contract details (e.g., version, author, dependencies, audit status).
 - `tests/`: (Deprecated) Test suites for contract validation - tests are now co-located with contracts.
 - `docs/`: Documentation, usage guides, and onboarding instructions.
