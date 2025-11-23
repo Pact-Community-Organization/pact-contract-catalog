@@ -6,6 +6,6 @@ license: 'Apache-2.0'
 authors:
   - name: 'Pact Community Organization'
     email: 'maintainers@pact.org'
-audit_status: 'not-audited'
+audit_status: 'in-review'
 tags: ['hello-world', 'tutorial', 'basic']
 keywords: ['pact', 'smart-contract', 'example']

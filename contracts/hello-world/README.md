@@ -54,7 +54,13 @@ Retrieves a stored message by its hash.
 
 ## Deployment
 
-This contract uses a simple keyset for administration. In production, consider more robust governance mechanisms.
+This contract requires a keyset named `hello-world-admin` for administrative operations. Deploy with:
+
+```pact
+(define-keyset 'hello-world-admin (read-keyset "admin-keyset"))
+```
+
+Administrative functions require the ADMIN capability. In production, use a secure keyset with proper access controls.
 
 ## Testing
 
