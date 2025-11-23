@@ -2,13 +2,21 @@
 
 (define-keyset 'admin-keyset (read-keyset "admin-keyset"))
 
+(define-keyset 'hello-world-admin (read-keyset "hello-world-admin"))
+
 (load "hello-world.pact")
 
 (commit-tx)
 
 (begin-tx)
 
-; Test hello-world function
+; Test hello-world function (public)
 (hello-world "Alice")
+
+; Test store-message (requires admin)
+(with-capability (ADMIN) (store-message "Test message"))
+
+; Test get-message (public)
+(get-message (hash "Test message"))
 
 (commit-tx)

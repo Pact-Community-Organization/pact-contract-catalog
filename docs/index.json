@@ -11,7 +11,7 @@
       "email": "maintainers@pact.org"
     }
   ],
-  "audit_status": "not-audited",
+  "audit_status": "in-review",
   "tags": [
     "hello-world",
     "tutorial",

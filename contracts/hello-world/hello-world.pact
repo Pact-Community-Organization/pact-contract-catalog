@@ -1,6 +1,6 @@
-(module hello-world GOVERNANCE
+(module hello-world ADMIN
 
-  (defcap GOVERNANCE () true)
+  (defcap ADMIN () (enforce-guard (keyset-ref-guard "hello-world-admin")))
 
   (defschema message-schema
     message:string
@@ -14,10 +14,11 @@
 
   (defun store-message (message:string)
     "Stores a message with timestamp."
-    (insert messages (hash message) {
-      "message": message,
-      "timestamp": (at 'block-time (chain-data))
-    }))
+    (with-capability (ADMIN)
+      (insert messages (hash message) {
+        "message": message,
+        "timestamp": (at 'block-time (chain-data))
+      })))
 
   (defun get-message (msg-hash:string)
     "Retrieves a stored message."
