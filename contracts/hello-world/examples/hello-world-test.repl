@@ -1,0 +1,14 @@
+(begin-tx)
+
+(define-keyset 'admin-keyset (read-keyset "admin-keyset"))
+
+(load "hello-world.pact")
+
+(commit-tx)
+
+(begin-tx)
+
+; Test hello-world function
+(hello-world "Alice")
+
+(commit-tx)

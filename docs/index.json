@@ -1,0 +1,26 @@
+[
+{
+  "name": "Hello World",
+  "slug": "hello-world",
+  "version": "1.0.0",
+  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
+  "license": "Apache-2.0",
+  "authors": [
+    {
+      "name": "Pact Community Organization",
+      "email": "maintainers@pact.org"
+    }
+  ],
+  "audit_status": "not-audited",
+  "tags": [
+    "hello-world",
+    "tutorial",
+    "basic"
+  ],
+  "keywords": [
+    "pact",
+    "smart-contract",
+    "example"
+  ]
+}
+]
