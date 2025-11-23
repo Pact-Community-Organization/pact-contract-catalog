@@ -1,10 +1,6 @@
 (module hello-world GOVERNANCE
 
-  "A simple hello world Pact smart contract for demonstration purposes."
-
-  (defcap GOVERNANCE ()
-    "Only the admin can update this contract."
-    (enforce-guard (keyset-ref-guard "admin-keyset")))
+  (defcap GOVERNANCE () true)
 
   (defschema message-schema
     message:string
