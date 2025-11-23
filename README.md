@@ -18,9 +18,22 @@ The Pact Contract Catalog serves as:
 ## Repository Structure
 
 - `contracts/`: Verified Pact contracts organized by category (includes co-located metadata and test files).
-- `tests/`: (Deprecated) Test suites for contract validation - tests are now co-located with contracts.
 - `docs/`: Documentation, usage guides, and onboarding instructions.
 - `policies/`: Community policies for contract submission and maintenance.
+
+## Testing Contracts
+
+To test Pact contracts locally, use the Kadena REPL Sandbox:
+
+1. Go to the repository: https://github.com/CryptoPascal31/kadena_repl_sandbox
+2. Follow the instructions in its README to set up the local REPL environment.
+3. Clone the sandbox repository and use it to run `.repl` test files from this catalog.
+
+For example, to test the hello-world contract:
+- Navigate to `contracts/hello-world/`
+- Run the test using the sandbox environment as per the kadena_repl_sandbox instructions.
+
+This ensures contracts are tested in a proper Pact environment before submission.
 
 ## Onboarding a New Contract
 

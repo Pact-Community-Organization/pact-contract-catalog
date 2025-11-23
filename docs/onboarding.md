@@ -20,7 +20,7 @@ This guide outlines the process for onboarding a new Pact smart contract to the 
 
 3. **Validate Locally**:
    - Run Pact compiler to check syntax.
-   - Execute tests to ensure functionality.
+   - Execute tests using the Kadena REPL Sandbox (see README.md for setup).
 
 4. **Submit Pull Request**:
    - Create a PR with a clear description.
