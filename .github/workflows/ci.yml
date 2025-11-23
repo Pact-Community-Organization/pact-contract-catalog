@@ -27,4 +27,4 @@ jobs:
     
     - name: Run Tests
       run: |
-        find tests -name "*.pact" -exec pact -t {} \;
+        find contracts -name "*test*.pact" -exec pact -t {} \;

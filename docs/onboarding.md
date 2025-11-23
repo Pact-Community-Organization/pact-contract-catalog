@@ -16,7 +16,7 @@ This guide outlines the process for onboarding a new Pact smart contract to the 
 2. **Create Contract Structure**:
    - Add your contract file(s) to `contracts/<category>/<contract-name>/`
    - Create metadata in `metadata/<contract-name>.json`
-   - Add tests to `tests/<contract-name>-test.pact`
+   - Add tests to `contracts/<category>/<contract-name>/` (co-located with the contract)
 
 3. **Validate Locally**:
    - Run Pact compiler to check syntax.

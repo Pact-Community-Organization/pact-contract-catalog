@@ -19,7 +19,7 @@ The Pact Contract Catalog serves as:
 
 - `contracts/`: Verified Pact contracts organized by category.
 - `metadata/`: JSON/YAML files describing contract details (e.g., version, author, dependencies, audit status).
-- `tests/`: Test suites for contract validation.
+- `tests/`: (Deprecated) Test suites for contract validation - tests are now co-located with contracts.
 - `docs/`: Documentation, usage guides, and onboarding instructions.
 - `policies/`: Community policies for contract submission and maintenance.
 
