@@ -40,13 +40,6 @@ This contract has been prepared for external security audit. It demonstrates bas
 - Validate table operations and hash key usage
 - Review capability enforcement mechanisms
 
-## External Audit Plan
-
-- Target auditor: Reputable blockchain security firm (e.g., Certik, OpenZeppelin, Trail of Bits)
-- Scope: Full code review, test coverage analysis, security assessment
-- Timeline: 2-4 weeks post-submission
-- Cost estimate: $2,000-$5,000 for basic audit
-
 ## Submission Ready
 
 The contract is now ready for external audit submission. All core logic has been validated, and the security model is properly implemented.
