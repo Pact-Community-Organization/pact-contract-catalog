@@ -1,6 +1,6 @@
 # Contributing to the Pact Contract Catalog
 
-Thank you for your interest in contributing to the Pact Contract Catalog! This repository is a critical resource for the Kadena ecosystem, and we appreciate your help in maintaining its quality and accessibility.
+Thank you for your interest in contributing to the Pact Contract Catalog! This repository is a critical resource for the smart contract ecosystem, and we appreciate your help in maintaining its quality and accessibility.
 
 ## How to Contribute
 

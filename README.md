@@ -1,6 +1,6 @@
 # Pact Contract Catalog
 
-Welcome to the Pact Contract Catalog, the central repository for reusable, trusted Pact smart contracts in the Kadena ecosystem. This repository is maintained by the Pact Community Organization (PCO) to ensure the safety, quality, and accessibility of Pact contracts.
+Welcome to the Pact Contract Catalog, the central repository for reusable, trusted Pact smart contracts. This repository is maintained by the Pact Community Organization (PCO) to ensure the safety, quality, and accessibility of Pact contracts.
 
 ## Mission Alignment
 
@@ -23,7 +23,7 @@ The Pact Contract Catalog serves as:
 
 ## Testing Contracts
 
-To test Pact contracts locally, use the Kadena REPL Sandbox:
+To test Pact contracts locally, use a Pact REPL environment:
 
 1. Go to the repository: https://github.com/CryptoPascal31/kadena_repl_sandbox
 2. Follow the instructions in its README to set up the local REPL environment.

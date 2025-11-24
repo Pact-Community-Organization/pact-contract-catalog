@@ -68,7 +68,7 @@ Administrative functions require the ADMIN capability. In production, use a secu
 The `examples/hello-world-test.repl` file provides comprehensive validation of the contract's core logic and security model:
 
 **Environment Setup:**
-- ✓ Kadena REPL environment initialization
+- ✓ Pact REPL environment initialization
 - ✓ Keyset configuration for admin and user roles
 - ✓ Contract module loading and validation
 
