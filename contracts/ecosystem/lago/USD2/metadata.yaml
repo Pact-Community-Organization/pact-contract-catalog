@@ -1,0 +1,23 @@
+name: lago.USD2
+namespace: lago
+module: USD2
+version: "1.0"
+layer: ecosystem
+project: Lago Bridge
+category: governance-shell
+status: production
+chains_deployed: 20
+network: mainnet01
+blockchain_hash: "gx8dwzIfbuiqHtZ9km0W0bp1p7zAPYmrxfBmO7696S0"
+tx_hash: ""
+implements: []
+dependencies:
+  - lago.fungible-burn-mint
+source:
+  url: "https://github.com/Lago-defi"
+  license: unknown
+description: >
+  lago.USD2 is a namespace reservation shell deployed on all 20 chains. Contains only a GOVERNANCE capability enforcing lago-ns-user. On chain 1 a companion lago.USD2-wrapper module also exists as a governance shell (MINTER-ADMIN cap). No stablecoin functionality is currently deployed.
+maturity: stable
+audit_status: unaudited
+census_date: "2025-01"

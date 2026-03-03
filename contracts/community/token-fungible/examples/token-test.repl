@@ -1,0 +1,83 @@
+(load "../../../../kadena_repl_sandbox/kda-env/init.repl")
+
+(env-keys ["gov","alice-key","bob-key","carol-key"]) 
+
+(begin-tx)
+
+; Keysets for testing
+(env-data
+  {"token-gov": ["gov"],
+   "alice": ["alice-key"],
+   "bob": ["bob-key"],
+   "carol": ["carol-key"]})
+
+(define-keyset 'token-gov (read-keyset "token-gov"))
+(define-keyset 'alice (read-keyset "alice"))
+(define-keyset 'bob (read-keyset "bob"))
+(define-keyset 'carol (read-keyset "carol"))
+
+; Load interfaces (done by init) and contract under test
+(load "../token.pact")
+
+; create storage table for the token module
+(create-table token-table)
+
+; Provision accounts and initial balance (seed via CREDIT)
+(with-capability (token.GOV)
+  (token.create-account "alice" (read-keyset 'alice))
+  (token.create-account "bob" (read-keyset 'bob)))
+
+(with-capability (token.CREDIT "alice")
+  (token.credit "alice" (read-keyset 'alice) 100.0))
+
+(commit-tx)
+
+; =====================
+; Positive unit tests
+; =====================
+(begin-tx)
+
+(install-capability (token.TRANSFER "alice" "bob" 25.5))
+(token.transfer "alice" "bob" 25.5)
+(format "Balances after transfer: alice={}, bob={}" [(token.get-balance "alice") (token.get-balance "bob")])
+
+; 2) transfer-create Bob -> Carol (new account)
+(install-capability (token.TRANSFER "bob" "carol" 10.0))
+(token.transfer-create "bob" "carol" (keyset-ref-guard "carol") 10.0)
+(format "Balances post transfer-create: bob={}, carol={}" [(token.get-balance "bob") (token.get-balance "carol")])
+
+; 3) Details and precision
+(token.details "alice")
+(token.precision)
+
+(commit-tx)
+
+; =====================
+; Negative & security tests
+; =====================
+(begin-tx)
+
+; 4) Insufficient funds should fail and not alter balances
+(let ((a-before (token.get-balance "alice"))
+      (b-before (token.get-balance "bob")))
+  (format "Insufficient funds error triggered: {}"
+    [(try true (install-capability (token.TRANSFER "alice" "bob" 10000.0)) (token.transfer "alice" "bob" 10000.0))])
+  (format "Balances unchanged: {}"
+    [(and (= a-before (token.get-balance "alice"))
+          (= b-before (token.get-balance "bob")))]))
+
+; 5) Same sender/receiver should fail
+(try true (install-capability (token.TRANSFER "alice" "alice" 1.0)) (token.transfer "alice" "alice" 1.0))
+
+; 6) Missing signer (attempt debit without alice key)
+(env-keys ["gov","bob"]) ; drop alice key
+(let ((b1 (token.get-balance "bob")))
+  (format "Unauthorized debit blocked: {}"
+    [(try true (install-capability (token.TRANSFER "alice" "bob" 1.0)) (token.transfer "alice" "bob" 1.0))])
+  (format "Bob unchanged: {}" [(= b1 (token.get-balance "bob"))]))
+
+; restore keys for remaining tests
+(env-keys ["gov","alice","bob"]) 
+(commit-tx)
+
+; No cross-chain tests in minimal token

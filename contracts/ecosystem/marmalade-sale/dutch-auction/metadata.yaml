@@ -1,0 +1,28 @@
+name: marmalade-sale.dutch-auction
+namespace: marmalade-sale
+module: dutch-auction
+version: "1.0"
+layer: ecosystem
+project: Marmalade (Kadena)
+category: nft-auction
+status: production
+chains_deployed: 20
+network: mainnet01
+blockchain_hash: "tXavhdiFeIFFPHklwz2AaxYzodtmcKL3V_cVFYqynPI"
+tx_hash: "M09AhpncRnGPWBuSfDLOtLJGz73QUKnjj7R39yPPtE8"
+implements:
+  - marmalade-v2.sale-v2
+dependencies:
+  - marmalade-v2.ledger
+  - marmalade-v2.policy-manager
+  - marmalade-v2.sale-v2
+source:
+  url: "https://github.com/marmalade-io/marmalade"
+  license: BUSL-1.1
+description: >
+  The dutch-auction contract implements marmalade-v2.sale-v2 to provide
+  descending-price (Dutch) auctions for NFTs. Price starts high and decreases
+  at each block interval until a buyer accepts. Deployed on all 20 chains.
+maturity: stable
+audit_status: community-reviewed
+census_date: "2025-01"

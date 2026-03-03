@@ -1,0 +1,11 @@
+name: 'Token (fungible-v2)'
+slug: 'token-fungible'
+version: '0.1.0'
+repository: 'https://github.com/Pact-Community-Organization/pact-contract-catalog'
+license: 'Apache-2.0'
+authors:
+  - name: 'Pact Community Organization'
+    email: 'maintainers@pact.org'
+audit_status: 'in-review'
+tags: ['token', 'fungible', 'reference']
+keywords: ['pact', 'smart-contract', 'fungible-v2', 'xchain']
