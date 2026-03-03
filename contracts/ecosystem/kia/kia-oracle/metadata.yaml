@@ -1,0 +1,28 @@
+name: n_40c883decc192e1e3214898f04656b2e9ea7b74e.kia-oracle
+namespace: n_40c883decc192e1e3214898f04656b2e9ea7b74e
+module: kia-oracle
+version: "1.0"
+layer: ecosystem
+project: KIA Oracle
+category: oracle
+status: production
+chains_deployed: 1
+chain_primary: "1"
+network: mainnet01
+blockchain_hash: "_CX5irSxr1MKCQzlEdRO9qQghNnBe36F-J2QdHjMZeA"
+tx_hash: ""
+implements: []
+dependencies:
+  - free.util-time
+description: >
+  KIA Oracle is a key/value price oracle deployed on KDA-CE mainnet01.
+  It supports multiple data-point updates in a single transaction (batch writes),
+  storing timestamped decimal values for arbitrary keys. Access is controlled
+  by two keysets: ADMIN (full governance) and REPORT (write-only data push).
+  Ranked #1 by function call frequency in the 90-day census of mainnet01 activity.
+maturity: stable
+audit_status: community-reviewed
+census_rank: 1
+census_calls: 30
+census_date: "2026-03"
+census_methodology: "block-payload-sampling (stride=1000, 90 days, 20 chains)"

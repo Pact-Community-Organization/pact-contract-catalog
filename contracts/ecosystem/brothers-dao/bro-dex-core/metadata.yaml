@@ -1,0 +1,33 @@
+name: n_f6aa9328b19b8bf7e788603bd669dcf549e07575.bro-dex-core-BRO-KDA-M
+namespace: n_f6aa9328b19b8bf7e788603bd669dcf549e07575
+module: bro-dex-core-BRO-KDA-M
+version: "1.0"
+layer: ecosystem
+project: Brothers DAO
+category: dex
+status: production
+chains_deployed: 1
+chain_primary: "2"
+network: mainnet01
+blockchain_hash: "FLUb_895yIUDwt6pP_OCm3YTx3avLAH58YxtqFY7XuM"
+tx_hash: ""
+implements: []
+dependencies:
+  - free.util-lists
+  - free.util-math
+  - n_582fed11af00dc626812cd7890bb88e72067f28c.bro
+  - coin
+source:
+  url: "https://github.com/brothers-DAO/bro-dex"
+  license: BUSL-1.1
+description: >
+  BRO DEX Core is the order-book DEX module for the BRO/KDA market pair from Brothers DAO.
+  Licensed under BUSL-1.1. Implements a sorted limit-order-book using a balanced binary
+  tree structure. Primary capabilities (MAKE-ORDER, TAKE-ORDER) emit @event for
+  off-chain indexing. Dependencies include util-lists and util-math from free namespace.
+maturity: stable
+audit_status: community-reviewed
+census_rank: 7
+census_calls: 2
+census_date: "2026-03"
+census_methodology: "block-payload-sampling (stride=1000, 90 days, 20 chains)"

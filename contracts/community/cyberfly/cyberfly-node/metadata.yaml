@@ -1,0 +1,29 @@
+name: free.cyberfly_node
+namespace: free
+module: cyberfly_node
+version: "1.0"
+layer: community
+project: CyberFly
+category: depin
+status: production
+chains_deployed: 1
+chain_primary: "1"
+network: mainnet01
+blockchain_hash: "hj7oEIB2J3sYyEnY-0lBhqMMKl8J5d3e891z9VWPvCA"
+tx_hash: ""
+implements: []
+dependencies:
+  - coin
+  - free.cyberfly_token
+description: >
+  CyberFly Node is the DePIN (Decentralized Physical Infrastructure Network) node
+  registry for the CyberFly network. Nodes are identified by peer_id and multiaddr,
+  registered with on-chain staking of CFLY tokens to a designated staking vault.
+  The module handles node registration, stake management, and reward distribution.
+  Ranked #2 by function call frequency in the 90-day census.
+maturity: stable
+audit_status: community-reviewed
+census_rank: 2
+census_calls: 28
+census_date: "2026-03"
+census_methodology: "block-payload-sampling (stride=1000, 90 days, 20 chains)"

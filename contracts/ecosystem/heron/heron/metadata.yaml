@@ -1,0 +1,31 @@
+name: n_e309f0fa7cf3a13f93a8da5325cdad32790d2070.heron
+namespace: n_e309f0fa7cf3a13f93a8da5325cdad32790d2070
+module: heron
+version: "1.0"
+layer: ecosystem
+project: Heron
+category: fungible-token
+status: production
+chains_deployed: 1
+chain_primary: "1"
+network: mainnet01
+blockchain_hash: "-mOSJ41JJMY5fXiq1dTWqnowgyRk-PlX0jf3ZqiMRD4"
+tx_hash: ""
+implements:
+  - fungible-v2
+  - fungible-xchain-v1
+dependencies:
+  - fungible-v2
+  - fungible-xchain-v1
+description: >
+  Heron is a community utility token on KDA-CE, self-described as "a fun community
+  driven utility memecoin". Despite its casual description, the module (524 lines)
+  includes formal verification properties enforcing mass conservation and valid account
+  length bounds, indicating production-quality engineering discipline.
+  Implements full fungible-v2 + fungible-xchain-v1 with cross-chain transfer support.
+maturity: stable
+audit_status: community-reviewed
+census_rank: 9
+census_calls: 1
+census_date: "2026-03"
+census_methodology: "block-payload-sampling (stride=1000, 90 days, 20 chains)"

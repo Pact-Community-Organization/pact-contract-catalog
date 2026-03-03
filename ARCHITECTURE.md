@@ -18,7 +18,7 @@ contracts/             — contract entries, grouped by dependency layer
   kip/                 — KIP standard interfaces (no executable logic)
   core/                — Pre-deployed KDA-CE chain infrastructure
   marmalade/           — Marmalade v2 NFT framework (pre-deployed)
-  ecosystem/           — Top 10 production third-party modules (from blockchain census)
+  ecosystem/           — 20 production third-party modules (deployment breadth + call-frequency census)
   community/           — PCO community templates and reference contracts
 scripts/               — validation, index generation
 docs/                  — onboarding, index output (index.md, index.json)
@@ -61,26 +61,41 @@ Layer 2 — NFT Framework (marmalade/)
 
 Layer 3 — Ecosystem (ecosystem/)
   Production modules from major KDA-CE ecosystem projects.
-  Selected by cross-chain deployment census (all deployed on 20/20 chains).
-  Methodology: live (list-modules) query on all 20 mainnet01 chains Jan 2025.
+  Two selection cohorts:
+    Cohort A (PR#15): top-10 by deployment breadth — (list-modules) on all 20 chains, Jan 2025
+    Cohort B (PR#17): top-10 by function call frequency — block-payload-sampling census,
+                      stride=1000, 90-day window, all 20 chains, March 2026
 
-    ecosystem/kaddex/kaddex-kdx          implements fungible-v2 + fungible-xchain-v1
-    ecosystem/runonflux/flux             implements fungible-v2
-    ecosystem/lago/kwBTC                 (governance shell — namespace reservation only)
-    ecosystem/lago/kwUSDC                (governance shell — namespace reservation only)
-    ecosystem/lago/USD2                  (governance shell — namespace reservation only)
-    ecosystem/kadena/spirekey            implements gas-payer-v1
+    --- Cohort A: deployment breadth ---
+    ecosystem/kaddex/kaddex-kdx              implements fungible-v2 + fungible-xchain-v1
+    ecosystem/runonflux/flux                 implements fungible-v2
+    ecosystem/lago/kwBTC                     (governance shell — namespace reservation only)
+    ecosystem/lago/kwUSDC                    (governance shell — namespace reservation only)
+    ecosystem/lago/USD2                      (governance shell — namespace reservation only)
+    ecosystem/kadena/spirekey                implements gas-payer-v1
     ecosystem/marmalade-sale/conventional-auction  implements marmalade-v2.sale-v2
     ecosystem/marmalade-sale/dutch-auction         implements marmalade-v2.sale-v2
-    ecosystem/mok/mok-token              implements fungible-v2 + fungible-xchain-v1
-    ecosystem/arkade/arkade-token        implements fungible-v2 + fungible-xchain-v1
+    ecosystem/mok/mok-token                  implements fungible-v2 + fungible-xchain-v1
+    ecosystem/arkade/arkade-token            implements fungible-v2 + fungible-xchain-v1
+
+    --- Cohort B: call frequency (rank #1–10 exc. already cataloged) ---
+    ecosystem/kia/kia-oracle                 price oracle (key/value, batch writes)
+    ecosystem/chips/chips                    DeFi/gaming protocol (locking, staking, orders)
+    ecosystem/chips/chips-oracle             NFT price oracle for Chips protocol
+    ecosystem/kdlaunch/kdswap-exchange       AMM DEX (formal verification, constant-product)
+    ecosystem/brothers-dao/bro-dex-core      order-book DEX — BRO/KDA market (BUSL-1.1)
+    ecosystem/brothers-dao/bro               BRO governance token (fungible-v2)
+    ecosystem/heron/heron                    community utility token (fungible-v2, mass conservation FV)
 
 Layer 4 — Community (community/)
-  PCO-authored templates. Implements interfaces from Layer 0.
-  Depends on Layer 1 for runtime calls.
+  PCO-authored templates and community-grown free-namespace modules.
+  Implements interfaces from Layer 0. Depends on Layer 1 for runtime calls.
 
     community/hello-world
-    community/token-fungible    implements kip/fungible-v2
+    community/token-fungible           implements kip/fungible-v2
+    community/cyberfly/cyberfly-node   DePIN node registry (staking, rewards)
+    community/cyberfly/cyberfly-token  CFLY token (fungible-v2 + fungible-xchain-v1)
+    community/p2p-escrow               P2P escrow with reputation (⚠️ experimental)
 ```
 
 ### Full dependency graph
@@ -105,6 +120,22 @@ ecosystem/kadena.spirekey──────── kip/gas-payer-v1
 ecosystem/lago.*──────────────── (governance shells — no fungible logic deployed on-chain)
 ecosystem/marmalade-sale.*───────► marmalade/policy-manager
                                 ► marmalade-v2.sale-v2
+
+cohort-B additions (call-frequency census):
+ecosystem/kia/kia-oracle──────── free.util-time
+ecosystem/chips/chips─────────── kip/fungible-v2 ► core/coin
+                                ► chips-oracle ► chips-presale
+ecosystem/chips/chips-oracle──── core/coin
+ecosystem/kdlaunch/kdswap──────── kip/fungible-v2 ► core/coin
+ecosystem/brothers-dao/bro──────── kip/fungible-v2 + kip/fungible-xchain-v1
+                                 ► free.util-fungible
+ecosystem/brothers-dao/bro-dex── bro ► core/coin ► free.util-lists ► free.util-math
+ecosystem/heron/heron────────────kip/fungible-v2 + kip/fungible-xchain-v1
+
+community/cyberfly/cyberfly-token── kip/fungible-v2 + kip/fungible-xchain-v1
+                                 ► free.util-fungible
+community/cyberfly/cyberfly-node── core/coin ► free.cyberfly_token
+community/p2p-escrow──────────── core/coin  (⚠️ governance: true — experimental)
 ```
 
 ---
