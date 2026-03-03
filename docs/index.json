@@ -23,4 +23,588 @@
     "example"
   ]
 }
+,
+{
+  "name": "Token (fungible-v2)",
+  "slug": "token-fungible",
+  "version": "0.1.0",
+  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
+  "license": "Apache-2.0",
+  "authors": [
+    {
+      "name": "Pact Community Organization",
+      "email": "maintainers@pact.org"
+    }
+  ],
+  "audit_status": "in-review",
+  "tags": [
+    "token",
+    "fungible",
+    "reference"
+  ],
+  "keywords": [
+    "pact",
+    "smart-contract",
+    "fungible-v2",
+    "xchain"
+  ]
+}
+,
+{
+  "name": "coin",
+  "slug": "coin",
+  "version": "6.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "coin",
+    "kda",
+    "fungible",
+    "transfer",
+    "gas",
+    "core",
+    "pre-deployed"
+  ]
+}
+,
+{
+  "name": "util.fungible-util",
+  "slug": "util-fungible-util",
+  "version": "1.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "utility",
+    "fungible",
+    "validation",
+    "helper",
+    "pre-deployed"
+  ]
+}
+,
+{
+  "name": "ns",
+  "slug": "ns",
+  "version": "1.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "namespace",
+    "governance",
+    "registry",
+    "core",
+    "pre-deployed"
+  ]
+}
+,
+{
+  "name": "arkade.token",
+  "namespace": "arkade",
+  "module": "token",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Arkade Gaming",
+  "category": "gaming-token",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "noElac-ldWYHMLDINfZR6busoYrJ1K",
+  "implements": [
+    "fungible-v2",
+    "fungible-xchain-v1"
+  ],
+  "dependencies": [
+    "fungible-v2",
+    "fungible-xchain-v1"
+  ],
+  "source": {
+    "url": "https://github.com/arkade-gaming",
+    "license": "unknown"
+  },
+  "description": "ARKADE is the native utility token of the Arkade gaming platform on Kadena. Deployed on all 20 chains with fungible-v2 and fungible-xchain-v1, it enables in-game purchases, tournament prizes, and marketplace activity across Arkade's blockchain games. Companion modules include arkade.arkade-staking and arkade.airdrop for token distribution.\n",
+  "maturity": "stable",
+  "audit_status": "unaudited",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "kaddex.kdx",
+  "namespace": "kaddex",
+  "module": "kdx",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Ecko DEX (Kaddex)",
+  "category": "governance-token",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "UbAj2RYupaT-x4vrBv8VcSzY9VN7EV",
+  "implements": [
+    "fungible-v2",
+    "fungible-xchain-v1",
+    "kaddex.supply-control-v1",
+    "kaddex.special-accounts-v1"
+  ],
+  "dependencies": [
+    "fungible-v2",
+    "fungible-xchain-v1",
+    "kaddex.supply-control-v1",
+    "kaddex.special-accounts-v1"
+  ],
+  "source": {
+    "url": "https://github.com/kaddex-org/swap-v2",
+    "license": "MIT"
+  },
+  "description": "KDX is the governance and utility token of the Ecko DEX (formerly Kaddex), Kadena's primary decentralized exchange. Deployed on all 20 chains, KDX implements both fungible-v2 and fungible-xchain-v1 standards, enabling native cross-chain transfers. It also implements supply-control and special-accounts interfaces used in the Ecko staking and DAO modules.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "kadena.spirekey",
+  "namespace": "kadena",
+  "module": "spirekey",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Kadena Inc.",
+  "category": "authentication",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "wZIoPnkgwaXYenTfUTYP",
+  "implements": [
+    "gas-payer-v1"
+  ],
+  "dependencies": [
+    "gas-payer-v1"
+  ],
+  "source": {
+    "url": "https://github.com/kadena-io/spirekey",
+    "license": "BSD-3-Clause"
+  },
+  "description": "SpireKey is Kadena's official WebAuthn-based wallet and authentication module. It implements gas-payer-v1 so dApps using SpireKey accounts can offer gas-free UX. SpireKey accounts are passkey-controlled (biometric/device) without requiring a seed phrase, making it the recommended onboarding path for mainstream users on KDA-CE.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "lago.USD2",
+  "namespace": "lago",
+  "module": "USD2",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Lago Bridge",
+  "category": "stablecoin",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "gx8dwzIfbuiqHtZ9km0W",
+  "implements": [],
+  "dependencies": [
+    "lago.fungible-burn-mint"
+  ],
+  "source": {
+    "url": "https://github.com/Lago-defi",
+    "license": "unknown"
+  },
+  "description": "USD2 is Lago's native USD-pegged stablecoin on Kadena. Unlike kwUSDC which wraps an external asset, USD2 is Lago's own stablecoin issued directly for KDA DeFi use. Deployed on all 20 chains.\n",
+  "maturity": "stable",
+  "audit_status": "unaudited",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "lago.kwBTC",
+  "namespace": "lago",
+  "module": "kwBTC",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Lago Bridge",
+  "category": "wrapped-asset",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "eMK6d8w17TqILbIYcbvh",
+  "implements": [],
+  "dependencies": [
+    "lago.fungible-burn-mint"
+  ],
+  "source": {
+    "url": "https://github.com/Lago-defi",
+    "license": "unknown"
+  },
+  "description": "kwBTC is Lago's wrapped Bitcoin token on Kadena, bridged from Bitcoin via the Lago cross-chain bridge. Deployed on all 20 chains, it enables BTC liquidity in the KDA DeFi ecosystem. Supply is managed by the Lago bridge protocol using the fungible-burn-mint pattern.\n",
+  "maturity": "stable",
+  "audit_status": "unaudited",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "lago.kwUSDC",
+  "namespace": "lago",
+  "module": "kwUSDC",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Lago Bridge",
+  "category": "wrapped-asset",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "ZYJ-acaoNxTNtgiShBi7",
+  "implements": [],
+  "dependencies": [
+    "lago.fungible-burn-mint"
+  ],
+  "source": {
+    "url": "https://github.com/Lago-defi",
+    "license": "unknown"
+  },
+  "description": "kwUSDC is Lago's wrapped USD Coin on Kadena. Each kwUSDC is backed 1:1 by USDC held by the Lago bridge. Deployed on all 20 chains, it brings a major stablecoin to KDA DeFi protocols.\n",
+  "maturity": "stable",
+  "audit_status": "unaudited",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "marmalade-sale.conventional-auction",
+  "namespace": "marmalade-sale",
+  "module": "conventional-auction",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Marmalade (Kadena)",
+  "category": "nft-auction",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "CRTIH0nyjQlEfqWNtptm",
+  "implements": [
+    "marmalade-v2.sale-v2"
+  ],
+  "dependencies": [
+    "marmalade-v2.ledger",
+    "marmalade-v2.policy-manager",
+    "marmalade-v2.sale-v2"
+  ],
+  "source": {
+    "url": "https://github.com/marmalade-io/marmalade",
+    "license": "BUSL-1.1"
+  },
+  "description": "The conventional-auction contract implements marmalade-v2.sale-v2 to provide a fixed-price (English-style) auction for NFTs in the Marmalade v2 framework. Sellers list NFTs at a starting price; buyers bid in a standard ascending auction. Deployed on all 20 chains as the primary NFT sale mechanism.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "marmalade-sale.dutch-auction",
+  "namespace": "marmalade-sale",
+  "module": "dutch-auction",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Marmalade (Kadena)",
+  "category": "nft-auction",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "tXavhdiFeIFFPHklwz2A",
+  "implements": [
+    "marmalade-v2.sale-v2"
+  ],
+  "dependencies": [
+    "marmalade-v2.ledger",
+    "marmalade-v2.policy-manager",
+    "marmalade-v2.sale-v2"
+  ],
+  "source": {
+    "url": "https://github.com/marmalade-io/marmalade",
+    "license": "BUSL-1.1"
+  },
+  "description": "The dutch-auction contract implements marmalade-v2.sale-v2 to provide descending-price (Dutch) auctions for NFTs. Price starts high and decreases at each block interval until a buyer accepts. Deployed on all 20 chains.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "mok.token",
+  "namespace": "mok",
+  "module": "token",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Momentum (MOK)",
+  "category": "governance-token",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "C5-h2VEfldax1-BsXfR5",
+  "implements": [
+    "fungible-v2",
+    "fungible-xchain-v1"
+  ],
+  "dependencies": [
+    "fungible-v2",
+    "fungible-xchain-v1"
+  ],
+  "source": {
+    "url": "https://github.com/MomentumToken",
+    "license": "unknown"
+  },
+  "description": "MOK is the governance token of the Momentum project on Kadena. Deployed on all 20 chains with both fungible-v2 and fungible-xchain-v1 interfaces, it supports native cross-chain transfers. Companion modules include mok.staking and mok.gas-station for subsidised transactions.\n",
+  "maturity": "stable",
+  "audit_status": "unaudited",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "runonflux.flux",
+  "namespace": "runonflux",
+  "module": "flux",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "RunOnFlux",
+  "category": "utility-token",
+  "status": "production",
+  "chains_deployed": 20,
+  "network": "mainnet01",
+  "blockchain_hash": "zV-EMOLy3olqMfwO9Ck9",
+  "implements": [
+    "fungible-v2"
+  ],
+  "dependencies": [
+    "fungible-v2"
+  ],
+  "source": {
+    "url": "https://github.com/RunOnFlux/flux-kadena-contracts",
+    "license": "MIT"
+  },
+  "description": "FLUX is the utility token of the RunOnFlux decentralized cloud computing network. Deployed on all 20 Kadena chains as a fungible-v2 token, it enables payment for cloud services and cross-ecosystem interoperability via the Flux multi-chain token standard.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_date": "2025-01"
+}
+,
+{
+  "name": "fungible-v2",
+  "slug": "fungible-v2",
+  "version": "2.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "interface",
+    "fungible",
+    "token",
+    "standard",
+    "kip",
+    "core",
+    "pre-deployed"
+  ]
+}
+,
+{
+  "name": "fungible-xchain-v1",
+  "slug": "fungible-xchain-v1",
+  "version": "1.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "interface",
+    "fungible",
+    "cross-chain",
+    "xchain",
+    "spv",
+    "core",
+    "pre-deployed"
+  ]
+}
+,
+{
+  "name": "gas-payer-v1",
+  "slug": "gas-payer-v1",
+  "version": "1.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "interface",
+    "gas",
+    "gas-station",
+    "meta",
+    "core",
+    "pre-deployed"
+  ]
+}
+,
+{
+  "name": "kip.token-manifest",
+  "slug": "kip-token-manifest",
+  "version": "1.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "nft",
+    "kip",
+    "marmalade",
+    "manifest",
+    "metadata",
+    "pre-deployed"
+  ]
+}
+,
+{
+  "name": "kip.token-policy-v2",
+  "slug": "kip-token-policy-v2",
+  "version": "2.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "interface",
+    "nft",
+    "kip",
+    "marmalade",
+    "policy",
+    "pre-deployed"
+  ]
+}
+,
+{
+  "name": "marmalade-v2.ledger",
+  "slug": "marmalade-v2-ledger",
+  "version": "2.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "nft",
+    "marmalade",
+    "ledger",
+    "token",
+    "poly-fungible",
+    "pre-deployed"
+  ]
+}
+,
+{
+  "name": "marmalade-v2.policy-manager",
+  "slug": "marmalade-v2-policy-manager",
+  "version": "2.0.0",
+  "repository": "https://github.com/kda-community/chainweb-node",
+  "license": "BSD-3-Clause",
+  "authors": [
+    {
+      "name": "Kadena LLC",
+      "email": ""
+    },
+    {
+      "name": "KDA Community Edition",
+      "email": ""
+    }
+  ],
+  "audit_status": "audited",
+  "tags": [
+    "nft",
+    "marmalade",
+    "policy",
+    "manager",
+    "pre-deployed"
+  ]
+}
 ]

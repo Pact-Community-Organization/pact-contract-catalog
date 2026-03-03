@@ -1,0 +1,12 @@
+name: 'util.fungible-util'
+slug: 'util-fungible-util'
+version: '1.0.0'
+repository: 'https://github.com/kda-community/chainweb-node'
+license: 'BSD-3-Clause'
+authors:
+  - name: 'Kadena LLC'
+    email: ''
+  - name: 'KDA Community Edition'
+    email: ''
+audit_status: 'audited'
+tags: ['utility', 'fungible', 'validation', 'helper', 'pre-deployed']

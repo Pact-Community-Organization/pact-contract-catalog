@@ -1,0 +1,23 @@
+name: lago.kwUSDC
+namespace: lago
+module: kwUSDC
+version: "1.0"
+layer: ecosystem
+project: Lago Bridge
+category: governance-shell
+status: production
+chains_deployed: 20
+network: mainnet01
+blockchain_hash: "ZYJ-acaoNxTNtgiShBi7q-OakMCdQkKFJLwGtLjEtSQ"
+tx_hash: ""
+implements: []
+dependencies:
+  - lago.fungible-burn-mint
+source:
+  url: "https://github.com/Lago-defi"
+  license: unknown
+description: >
+  lago.kwUSDC is a namespace reservation shell deployed on all 20 chains. It contains only a GOVERNANCE capability enforcing the lago-ns-user keyset, with no fungible token logic. Identical pattern to lago.kwBTC and lago.USD2 — reserves the module name under Lago team control.
+maturity: stable
+audit_status: unaudited
+census_date: "2025-01"

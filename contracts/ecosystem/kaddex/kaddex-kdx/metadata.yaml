@@ -1,0 +1,34 @@
+name: kaddex.kdx
+namespace: kaddex
+module: kdx
+version: "1.0"
+layer: ecosystem
+project: Ecko DEX (Kaddex)
+category: governance-token
+status: production
+chains_deployed: 20
+network: mainnet01
+blockchain_hash: "UbAj2RYupaT-x4vrBv8VcSzY9VN7EVe5yjLXiflqqds"
+tx_hash: ""
+implements:
+  - fungible-v2
+  - fungible-xchain-v1
+  - kaddex.supply-control-v1
+  - kaddex.special-accounts-v1
+dependencies:
+  - fungible-v2
+  - fungible-xchain-v1
+  - kaddex.supply-control-v1
+  - kaddex.special-accounts-v1
+source:
+  url: "https://github.com/kaddex-org/swap-v2"
+  license: MIT
+description: >
+  KDX is the governance and utility token of the Ecko DEX (formerly Kaddex),
+  Kadena's primary decentralized exchange. Deployed on all 20 chains, KDX
+  implements both fungible-v2 and fungible-xchain-v1 standards, enabling
+  native cross-chain transfers. It also implements supply-control and
+  special-accounts interfaces used in the Ecko staking and DAO modules.
+maturity: stable
+audit_status: community-reviewed
+census_date: "2025-01"

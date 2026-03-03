@@ -1,0 +1,27 @@
+name: runonflux.flux
+namespace: runonflux
+module: flux
+version: "1.0"
+layer: ecosystem
+project: RunOnFlux
+category: utility-token
+status: production
+chains_deployed: 20
+network: mainnet01
+blockchain_hash: "zV-EMOLy3olqMfwO9Ck951ER4o_cCuTD9mBBfI05D9c"
+tx_hash: ""
+implements:
+  - fungible-v2
+dependencies:
+  - fungible-v2
+source:
+  url: "https://github.com/RunOnFlux/flux-kadena-contracts"
+  license: MIT
+description: >
+  FLUX is the utility token of the RunOnFlux decentralized cloud computing
+  network. Deployed on all 20 Kadena chains as a fungible-v2 token, it enables
+  payment for cloud services and cross-ecosystem interoperability via the Flux
+  multi-chain token standard.
+maturity: stable
+audit_status: community-reviewed
+census_date: "2025-01"

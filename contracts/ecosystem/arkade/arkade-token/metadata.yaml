@@ -1,0 +1,30 @@
+name: arkade.token
+namespace: arkade
+module: token
+version: "1.0"
+layer: ecosystem
+project: Arkade Gaming
+category: gaming-token
+status: production
+chains_deployed: 20
+network: mainnet01
+blockchain_hash: "noElac-ldWYHMLDINfZR6busoYrJ1KQVtfpoD6RdEW4"
+tx_hash: ""
+implements:
+  - fungible-v2
+  - fungible-xchain-v1
+dependencies:
+  - fungible-v2
+  - fungible-xchain-v1
+source:
+  url: "https://github.com/arkade-gaming"
+  license: unknown
+description: >
+  ARKADE is the native utility token of the Arkade gaming platform on Kadena.
+  Deployed on all 20 chains with fungible-v2 and fungible-xchain-v1, it enables
+  in-game purchases, tournament prizes, and marketplace activity across Arkade's
+  blockchain games. Companion modules include arkade.arkade-staking and
+  arkade.airdrop for token distribution.
+maturity: stable
+audit_status: unaudited
+census_date: "2025-01"

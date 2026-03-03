@@ -1,0 +1,29 @@
+name: mok.token
+namespace: mok
+module: token
+version: "1.0"
+layer: ecosystem
+project: Momentum (MOK)
+category: governance-token
+status: production
+chains_deployed: 20
+network: mainnet01
+blockchain_hash: "C5-h2VEfldax1-BsXfR576rWPzPOXZqOqJc0fLnRE5I"
+tx_hash: ""
+implements:
+  - fungible-v2
+  - fungible-xchain-v1
+dependencies:
+  - fungible-v2
+  - fungible-xchain-v1
+source:
+  url: "https://github.com/MomentumToken"
+  license: unknown
+description: >
+  MOK is the governance token of the Momentum project on Kadena. Deployed on all
+  20 chains with both fungible-v2 and fungible-xchain-v1 interfaces, it supports
+  native cross-chain transfers. Companion modules include mok.staking and
+  mok.gas-station for subsidised transactions.
+maturity: stable
+audit_status: unaudited
+census_date: "2025-01"

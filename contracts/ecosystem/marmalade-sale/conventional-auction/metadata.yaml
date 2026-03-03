@@ -1,0 +1,29 @@
+name: marmalade-sale.conventional-auction
+namespace: marmalade-sale
+module: conventional-auction
+version: "1.0"
+layer: ecosystem
+project: Marmalade (Kadena)
+category: nft-auction
+status: production
+chains_deployed: 20
+network: mainnet01
+blockchain_hash: "CRTIH0nyjQlEfqWNtptmDT4p1XFMh6pRvVqdFbq2HKg"
+tx_hash: "5mv3aylv-6wU78uvKs1c1yvyzOFZIAoAM5qIypP99Qg"
+implements:
+  - marmalade-v2.sale-v2
+dependencies:
+  - marmalade-v2.ledger
+  - marmalade-v2.policy-manager
+  - marmalade-v2.sale-v2
+source:
+  url: "https://github.com/marmalade-io/marmalade"
+  license: BUSL-1.1
+description: >
+  The conventional-auction contract implements marmalade-v2.sale-v2 to provide
+  a fixed-price (English-style) auction for NFTs in the Marmalade v2 framework.
+  Sellers list NFTs at a starting price; buyers bid in a standard ascending
+  auction. Deployed on all 20 chains as the primary NFT sale mechanism.
+maturity: stable
+audit_status: community-reviewed
+census_date: "2025-01"
