@@ -1,0 +1,30 @@
+name: kdlaunch.kdswap-exchange
+namespace: kdlaunch
+module: kdswap-exchange
+version: "1.0"
+layer: ecosystem
+project: KDLaunch / KDSwap
+category: dex
+status: production
+chains_deployed: 1
+chain_primary: "1"
+network: mainnet01
+blockchain_hash: "EvTCHQ5GOQGBPoAnOP50Dwp3Y19zqwEiJ3aqmObTsLs"
+tx_hash: ""
+implements: []
+dependencies:
+  - fungible-v2
+  - coin
+description: >
+  KDSwap Exchange is the AMM (Automated Market Maker) DEX module from KDLaunch.
+  Implements constant-product swap mechanics (swap-exact-in, swap-exact-out,
+  add-liquidity, remove-liquidity) with on-chain formal verification properties
+  ensuring reserve conservation and guarded pair writes. The module uses a
+  deterministic pair-key scheme and tracks reserves per liquidity pair.
+  Ranked #5 by function call frequency in the 90-day census.
+maturity: stable
+audit_status: community-reviewed
+census_rank: 5
+census_calls: 3
+census_date: "2026-03"
+census_methodology: "block-payload-sampling (stride=1000, 90 days, 20 chains)"

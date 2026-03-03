@@ -1,0 +1,33 @@
+name: free.cyberfly_token
+namespace: free
+module: cyberfly_token
+version: "1.0"
+layer: community
+project: CyberFly
+category: governance-token
+status: production
+chains_deployed: 1
+chain_primary: "1"
+network: mainnet01
+blockchain_hash: "IhH0xyxClo8oyDaZFYVmddYPCLqvXc9zLukVsWmcjIY"
+tx_hash: ""
+implements:
+  - fungible-v2
+  - fungible-xchain-v1
+dependencies:
+  - fungible-v2
+  - fungible-xchain-v1
+  - free.util-fungible
+  - free.util-chain-data
+description: >
+  CyberFly Token (CFLY) is the native governance and staking token for the CyberFly
+  DePIN network. Implements fungible-v2 and fungible-xchain-v1 for standard token
+  operations and cross-chain transfers. Multiple blessed hashes indicate active
+  cross-chain upgrade history. Required dependency for cyberfly_node staking.
+  Ranked #4 by function call frequency in the 90-day census.
+maturity: stable
+audit_status: community-reviewed
+census_rank: 4
+census_calls: 4
+census_date: "2026-03"
+census_methodology: "block-payload-sampling (stride=1000, 90 days, 20 chains)"

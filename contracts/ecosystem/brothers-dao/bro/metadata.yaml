@@ -1,0 +1,32 @@
+name: n_582fed11af00dc626812cd7890bb88e72067f28c.bro
+namespace: n_582fed11af00dc626812cd7890bb88e72067f28c
+module: bro
+version: "1.0"
+layer: ecosystem
+project: Brothers DAO
+category: governance-token
+status: production
+chains_deployed: 1
+chain_primary: "1"
+network: mainnet01
+blockchain_hash: "bKvdA4fjD_APL9i5GgQF90y5DovlBO-mCc0SSYXQEq0"
+tx_hash: ""
+implements:
+  - fungible-v2
+  - fungible-xchain-v1
+dependencies:
+  - fungible-v2
+  - fungible-xchain-v1
+  - free.util-fungible
+  - free.util-chain-data
+description: >
+  BRO is the governance token of Brothers DAO, a decentralized exchange ecosystem
+  on KDA-CE. Implements fungible-v2 and fungible-xchain-v1 for cross-chain transfers.
+  Initial supply minted on chain 2 (SUPPLY-CHAIN). Used as the quote/base asset in
+  the bro-dex order book. Multiple blessed hashes indicate active cross-chain history.
+maturity: stable
+audit_status: community-reviewed
+census_rank: 8
+census_calls: 1
+census_date: "2026-03"
+census_methodology: "block-payload-sampling (stride=1000, 90 days, 20 chains)"

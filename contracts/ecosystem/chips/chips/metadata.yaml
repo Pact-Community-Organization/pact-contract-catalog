@@ -1,0 +1,31 @@
+name: n_e98a056e3e14203e6ec18fada427334b21b667d8.chips
+namespace: n_e98a056e3e14203e6ec18fada427334b21b667d8
+module: chips
+version: "1.0"
+layer: ecosystem
+project: Chips Protocol
+category: defi-protocol
+status: production
+chains_deployed: 1
+chain_primary: "1"
+network: mainnet01
+blockchain_hash: "r_k91-_vsHSukibFwARo7uZPM7ENmgfU2ZPYifZrQsw"
+tx_hash: ""
+implements: []
+dependencies:
+  - fungible-v2
+  - coin
+  - n_e98a056e3e14203e6ec18fada427334b21b667d8.chips-oracle
+  - chips-presale
+description: >
+  Chips is a DeFi and gaming protocol on KDA-CE mainnet01. The module (1,549 lines)
+  implements token locking/staking with configurable lock durations, early-withdraw
+  penalties, multi-coin reward distribution (kWATT, external coins), order book
+  mechanics, and presale integration. It depends on its own companion chips-oracle
+  for NFT price feeds. Ranked #3 by function call frequency in the 90-day census.
+maturity: stable
+audit_status: community-reviewed
+census_rank: 3
+census_calls: 9
+census_date: "2026-03"
+census_methodology: "block-payload-sampling (stride=1000, 90 days, 20 chains)"

@@ -1,0 +1,30 @@
+name: free.p2p-escrow
+namespace: free
+module: p2p-escrow
+version: "1.0"
+layer: community
+project: P2P Escrow
+category: utility
+status: experimental
+chains_deployed: 1
+chain_primary: "1"
+network: mainnet01
+blockchain_hash: "TVW-AGUF6DP1V86xR7wGWcw5_kw3pa4T3W7QBKV1O-w"
+tx_hash: ""
+implements: []
+dependencies:
+  - coin
+description: >
+  A peer-to-peer escrow module with a three-party reputation system (creator, buyer,
+  arbiter). Implements a state-machine (open → funded → accepted → paid/disputed)
+  with configurable timeout windows (T1/T2/T3). On-chain reputation tracking records
+  totalTrades, successfulTrades, and dispute counts. SECURITY NOTE: governance
+  capability is defined as (defcap GOVERNANCE () true), meaning no keyset guards
+  module upgrades — any account can invoke governance. Review carefully before use in
+  production.
+maturity: experimental
+audit_status: needs-review
+census_rank: 10
+census_calls: 1
+census_date: "2026-03"
+census_methodology: "block-payload-sampling (stride=1000, 90 days, 20 chains)"
