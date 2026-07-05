@@ -8,5 +8,5 @@ authors:
     email: ''
   - name: 'KDA Community Edition'
     email: ''
-audit_status: 'audited'
+audit_status: 'reference'
 tags: ['namespace', 'governance', 'registry', 'core', 'pre-deployed']

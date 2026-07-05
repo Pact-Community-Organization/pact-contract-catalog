@@ -23,7 +23,7 @@ description: >
   module upgrades — any account can invoke governance. Review carefully before use in
   production.
 maturity: experimental
-audit_status: needs-review
+audit_status: unaudited
 census_rank: 10
 census_calls: 1
 census_date: "2026-03"

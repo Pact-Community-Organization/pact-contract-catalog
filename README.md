@@ -17,9 +17,9 @@ The Pact Contract Catalog serves as:
 
 ## Repository Structure
 
-- `contracts/`: Example Pact contracts with testing (currently 1 example: hello-world)
-- `docs/`: Documentation, usage guides, and onboarding instructions
-- `policies/`: Community policies for contract submission and maintenance
+- `contracts/`: Contract entries, grouped by dependency layer (`kip/`, `core/`, `marmalade/`, `ecosystem/`, `community/`). See [ARCHITECTURE.md](ARCHITECTURE.md) for the layer model and dependency graph.
+- `docs/`: Documentation, the generated contract index, onboarding instructions, and contract policies.
+- `scripts/`: Validation and index-generation tooling.
 
 ## Testing Contracts
 
@@ -30,7 +30,7 @@ To test Pact contracts locally, use a Pact REPL environment:
 3. Clone the sandbox repository and use it to run `.repl` test files from this catalog.
 
 For example, to test the hello-world contract:
-- Navigate to `contracts/hello-world/`
+- Navigate to `contracts/community/hello-world/`
 - Run the test using the sandbox environment as per the kadena_repl_sandbox instructions.
 
 This ensures contracts are tested in a proper Pact environment before submission.
@@ -45,11 +45,11 @@ To contribute a new contract to the catalog:
 4. **Testing**: Ensure contracts work with the provided testing framework.
 5. **Publication**: Approved contracts are merged and become part of the growing catalog.
 
-See [docs/onboarding.md](docs/onboarding.md) for detailed instructions.
+See [docs/ONBOARDING.md](docs/ONBOARDING.md) for detailed instructions.
 
 ## How to Use
 
-1. Browse the `contracts/` directory to see example Pact contracts (currently hello-world).
+1. Browse the `contracts/` directory to see catalogued Pact contracts, or the generated [contract index](docs/index.md).
 2. Use the testing framework to validate your own contracts.
 3. Follow the contribution guidelines to add new contracts.
 4. Refer to the `docs/` directory for development guides.
@@ -60,7 +60,7 @@ We welcome contributions to the Pact Contract Catalog! Please see our [CONTRIBUT
 
 ## Governance
 
-This repository follows the governance model defined in the [PCO Foundation](https://github.com/Pact-Community-Organization/foundation). For contract-specific policies, see [policies/](policies/).
+This repository follows the governance model defined in the [PCO Foundation](https://github.com/Pact-Community-Organization/foundation). For contract-specific policies, see [docs/CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md).
 
 ## License
 

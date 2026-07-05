@@ -18,7 +18,27 @@ This document outlines the comprehensive policies governing the submission, main
 - All contracts undergo automated security scans during CI.
 - The Security Working Group (WG) conducts manual reviews for contracts deemed high-risk (e.g., those handling significant value or complex logic).
 - External security audits are required for contracts in critical categories (e.g., financial, governance) or upon maintainer discretion.
-- Security issues must be reported via the PCO's security disclosure process.
+- Security issues must be reported via the PCO's security disclosure process (see [SECURITY.md](../SECURITY.md)).
+
+### 3.1 Audit-status ladder (canonical)
+
+Every contract entry declares an `audit_status` in its `metadata.yaml`. The value
+**must** be exactly one of the five levels below. These are the only accepted
+values; the CI validator rejects any other string. The word "audited", unqualified,
+is deliberately **not** a value — it overclaims. Each level states precisely who
+looked at the code and how, so an enterprise evaluator can calibrate trust.
+
+| Level | Meaning | Evidence required in `AUDIT.md` |
+|-------|---------|----------------------------------|
+| `reference` | Upstream code (Kadena LLC / third-party) catalogued verbatim for documentation. PCO makes **no** security claim of its own. | Provenance: source repo or on-chain module hash. |
+| `unaudited` | Catalogued but not reviewed by PCO. Use at your own risk. | None; status is the honest default. |
+| `self-reviewed` | The author performed a documented self-review against the PCO checklist. Not independent. | Self-review notes + checklist coverage. |
+| `community-reviewed` | At least one PCO reviewer other than the author reviewed the code and signed off. | Reviewer name(s), date, findings + dispositions. |
+| `independently-audited` | An independent third-party auditor (firm or PCO Security WG member with no authorship stake) produced a dated report, and the audited source hash matches the catalogued source. | Auditor identity, report link/attachment, audited module hash, remediation status. |
+
+Promotion up the ladder requires the evidence in the right-hand column to be
+present in the contract's `AUDIT.md`. Downgrades occur automatically when a
+contract changes without re-review, or when a maintainer flags a regression.
 
 ## 4. Maintenance
 - Contracts must be actively maintained by their authors or designated maintainers.
@@ -33,7 +53,7 @@ This document outlines the comprehensive policies governing the submission, main
 - Contracts promoting scams, fraud, or unethical practices are strictly prohibited.
 
 ## 6. Submission Requirements
-- Submissions must include the contract code, metadata JSON, and test suite.
+- Submissions must include the contract code, a co-located `metadata.yaml`, a `README.md`, an `AUDIT.md`, and a test suite.
 - Metadata must accurately describe the contract's purpose, functions, dependencies, and audit status.
 - Contracts must pass all CI checks (syntax validation, tests, security scans).
 - Submissions from new contributors may require additional scrutiny.

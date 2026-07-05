@@ -1,68 +1,111 @@
 #!/bin/bash
+#
+# validate_contract.sh — validate a single contract entry's metadata and docs.
+#
+# Enforces the catalog's structural contract for one directory:
+#   - metadata.yaml exists and is valid YAML
+#   - README.md and AUDIT.md exist
+#   - audit_status is one of the canonical ladder values
+#     (see docs/CONTRACT_POLICIES.md §3.1)
+#   - a .pact source file is present (unless the entry is a pure interface)
+#
+# Two metadata schemas are accepted:
+#   Schema A (kip/core/marmalade/community): name, slug, version, repository,
+#            license, audit_status
+#   Schema B (ecosystem):                    name, namespace, module, version,
+#            layer, audit_status
+# The union requirement is: `name`, `version`, and `audit_status` must always be
+# present; the schema is inferred from whether `slug` (A) or `namespace` (B) exists.
+#
+# Exit codes: 0 = valid, 1 = validation error (blocking).
 
-# validate_contract.sh - Validate contract metadata and basic checks
+set -euo pipefail
 
-set -e
-
-CONTRACT_DIR="$1"
+CONTRACT_DIR="${1:-}"
 
 if [ -z "$CONTRACT_DIR" ]; then
     echo "Usage: $0 <contract-directory>"
     exit 1
 fi
 
+if ! command -v yq >/dev/null 2>&1; then
+    echo "ERROR: 'yq' is required but not installed."
+    exit 1
+fi
+
 METADATA="$CONTRACT_DIR/metadata.yaml"
-PACT_FILE=$(find "$CONTRACT_DIR" -name "*.pact" | head -1)
+PACT_FILE=$(find "$CONTRACT_DIR" -maxdepth 2 -name "*.pact" | head -1 || true)
+FAIL=0
 
-echo "Validating contract in $CONTRACT_DIR..."
+err()  { echo "  VIOLATION: $1"; FAIL=1; }
+warn() { echo "  WARNING:   $1"; }
 
-# Check if metadata.yaml exists
+echo "Validating $CONTRACT_DIR ..."
+
+# --- metadata.yaml presence + YAML validity -------------------------------
 if [ ! -f "$METADATA" ]; then
-    echo "ERROR: metadata.yaml not found in $CONTRACT_DIR"
+    err "metadata.yaml not found"
+    exit 1
+fi
+if ! yq '.' "$METADATA" > /dev/null 2>&1; then
+    err "metadata.yaml is not valid YAML"
     exit 1
 fi
 
-# Validate YAML syntax
-if ! yq '.' "$METADATA" > /dev/null; then
-    echo "ERROR: Invalid YAML in $METADATA"
+# --- schema inference ------------------------------------------------------
+HAS_SLUG=$(yq 'has("slug")' "$METADATA")
+HAS_NS=$(yq 'has("namespace")' "$METADATA")
+
+if [ "$HAS_SLUG" = "true" ]; then
+    SCHEMA="A"
+    REQUIRED_FIELDS=(name slug version repository license audit_status)
+elif [ "$HAS_NS" = "true" ]; then
+    SCHEMA="B"
+    REQUIRED_FIELDS=(name namespace module version layer audit_status)
+else
+    err "metadata.yaml matches neither schema A (needs 'slug') nor schema B (needs 'namespace')"
     exit 1
 fi
+echo "  schema: $SCHEMA"
 
-# Check required fields
-REQUIRED_FIELDS=("name" "slug" "version" "repository" "license" "audit_status")
+# --- required fields -------------------------------------------------------
 for field in "${REQUIRED_FIELDS[@]}"; do
-    if ! yq -e ".$field" "$METADATA" > /dev/null; then
-        echo "ERROR: Missing required field '$field' in $METADATA"
-        exit 1
+    if [ "$(yq "has(\"$field\")" "$METADATA")" != "true" ]; then
+        err "missing required field '$field'"
     fi
 done
 
-# Check audit_status values
-AUDIT_STATUS=$(yq '.audit_status' "$METADATA")
-if [[ "$AUDIT_STATUS" != "audited" && "$AUDIT_STATUS" != "in-review" && "$AUDIT_STATUS" != "not-audited" ]]; then
-    echo "ERROR: Invalid audit_status '$AUDIT_STATUS'. Must be 'audited', 'in-review', or 'not-audited'"
-    exit 1
-fi
+# --- audit_status ladder ---------------------------------------------------
+AUDIT_STATUS=$(yq '.audit_status // ""' "$METADATA")
+case "$AUDIT_STATUS" in
+    reference|unaudited|self-reviewed|community-reviewed|independently-audited) ;;
+    *) err "invalid audit_status '$AUDIT_STATUS' — must be one of: reference, unaudited, self-reviewed, community-reviewed, independently-audited (see docs/CONTRACT_POLICIES.md §3.1)";;
+esac
 
-# Check if README.md exists
-if [ ! -f "$CONTRACT_DIR/README.md" ]; then
-    echo "ERROR: README.md not found in $CONTRACT_DIR"
-    exit 1
-fi
+# --- companion docs --------------------------------------------------------
+[ -f "$CONTRACT_DIR/README.md" ] || err "README.md not found"
+[ -f "$CONTRACT_DIR/AUDIT.md" ]  || err "AUDIT.md not found"
 
-# Basic Pact file check (if exists)
-if [ -n "$PACT_FILE" ]; then
-    echo "Found Pact file: $PACT_FILE"
-    # Add basic syntax check if pact tool is available
-    if command -v pact &> /dev/null; then
-        if ! pact -r "$PACT_FILE" > /dev/null 2>&1; then
-            echo "WARNING: Pact file may have syntax issues"
-        fi
+# --- pact source -----------------------------------------------------------
+# Pure-interface entries (kip/) may legitimately have no local .pact source
+# when the interface is pre-deployed; everything else should ship source.
+if [ -z "$PACT_FILE" ]; then
+    if [[ "$CONTRACT_DIR" == *"/kip/"* ]]; then
+        warn "no .pact file (interface entry — acceptable)"
     else
-        echo "INFO: Pact CLI not available for syntax check"
+        warn "no .pact file found"
     fi
 else
-    echo "WARNING: No .pact file found in $CONTRACT_DIR"
+    echo "  source: $PACT_FILE"
+    if command -v pact >/dev/null 2>&1; then
+        # Non-blocking: ecosystem/reference sources have external deps that
+        # need full network context; a load failure here is informational.
+        pact "$PACT_FILE" > /dev/null 2>&1 || warn "pact could not load $PACT_FILE standalone (may need dependencies)"
+    fi
 fi
 
-echo "Validation passed for $CONTRACT_DIR"
+if [ "$FAIL" -eq 1 ]; then
+    echo "  RESULT: FAILED"
+    exit 1
+fi
+echo "  RESULT: OK"

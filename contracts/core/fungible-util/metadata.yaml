@@ -8,5 +8,5 @@ authors:
     email: ''
   - name: 'KDA Community Edition'
     email: ''
-audit_status: 'audited'
+audit_status: 'reference'
 tags: ['utility', 'fungible', 'validation', 'helper', 'pre-deployed']

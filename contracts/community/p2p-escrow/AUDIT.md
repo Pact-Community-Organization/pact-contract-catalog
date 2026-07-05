@@ -1,7 +1,11 @@
 # Security Assessment — P2P Escrow
 
 **Module:** `free.p2p-escrow`
-**Status:** needs-review ⚠️ | **Date:** 2026-03 | **Reviewer:** Pact Community Org
+**Status:** unaudited ⚠️ | **Date:** 2026-03 | **Reviewer:** Pact Community Org
+
+> ⚠️ This contract carries a CRITICAL open finding (see below) and is catalogued as
+> `unaudited`. It is an experimental reference only and **must not** be deployed to
+> production without remediation. Do not treat it as a starting template.
 
 ## ⚠️ Critical Finding
 

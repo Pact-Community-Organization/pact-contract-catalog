@@ -14,9 +14,10 @@ This guide outlines the process for onboarding a new Pact smart contract to the 
 1. **Fork the Repository**: Fork the pact-contract-catalog repository.
 
 2. **Create Contract Structure**:
-   - Add your contract file(s) to `contracts/<category>/<contract-name>/`
-   - Create metadata in `contracts/<category>/<contract-name>/metadata/<contract-name>.json`
-   - Add tests to `contracts/<category>/<contract-name>/` (co-located with the contract, using .repl extension)
+   - Add your contract file(s) to `contracts/<layer>/<contract-name>/` (layers: `community/`, `ecosystem/` — see [ARCHITECTURE.md](../ARCHITECTURE.md))
+   - Create metadata at `contracts/<layer>/<contract-name>/metadata.yaml` (co-located YAML, not JSON)
+   - Add a `README.md` and `AUDIT.md` in the same directory
+   - Add tests to `contracts/<layer>/<contract-name>/examples/` using the `.repl` extension
 
 3. **Validate Locally**:
    - Run Pact compiler to check syntax.
@@ -47,4 +48,4 @@ This guide outlines the process for onboarding a new Pact smart contract to the 
 - No malicious or vulnerable code.
 - Regular maintenance required.
 
-See [policies/contract-policies.md](policies/contract-policies.md) for details.
+See [CONTRACT_POLICIES.md](CONTRACT_POLICIES.md) for details.
