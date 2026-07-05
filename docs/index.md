@@ -10,7 +10,7 @@ _Generated from `contracts/**/metadata.yaml`._
 | Name | Slug | Version | Audit Status | Tags |
 |------|------|---------|--------------|------|
 | Hello World | hello-world | 1.0.0 | self-reviewed | hello-world, tutorial, basic |
-| Token (fungible-v2) | token-fungible | 0.1.0 | self-reviewed | token, fungible, reference |
+| Token (fungible-v2 + fungible-xchain-v1) | token-fungible | 0.2.0 | self-reviewed | token, fungible, template, library |
 
 ## Registry — KIP Standards (`registry/kip/`)
 

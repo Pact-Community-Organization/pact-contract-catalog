@@ -1,83 +1,207 @@
-(load "../../../../kadena_repl_sandbox/kda-env/init.repl")
+;; token-test.repl — PCO library template test suite
+;;
+;; Self-contained: loads the fungible-v2 / fungible-xchain-v1 interfaces from
+;; this repository's registry tree. No external sandbox required.
+;;
+;; LIMIT: cross-chain step 1 (resume) needs an SPV proof and CANNOT be proven
+;; in the bare REPL — only step 0 and its guards are tested here. Prove the
+;; full cross-chain lifecycle on devnet before any production deployment.
 
-(env-keys ["gov","alice-key","bob-key","carol-key"]) 
-
-(begin-tx)
-
-; Keysets for testing
+;; ---------------------------------------------------------------------------
+;; Setup: interfaces, keyset, module, table
+;; ---------------------------------------------------------------------------
 (env-data
-  {"token-gov": ["gov"],
-   "alice": ["alice-key"],
-   "bob": ["bob-key"],
-   "carol": ["carol-key"]})
+  { "token-gov": ["gov-key"]
+  , "alice": ["alice-key"]
+  , "bob": ["bob-key"]
+  , "carol": ["carol-key"]
+  , "attacker": ["attacker-key"] })
+(env-sigs [{"key": "gov-key", "caps": []}])
+(env-chain-data {"chain-id": "0"})
 
-(define-keyset 'token-gov (read-keyset "token-gov"))
-(define-keyset 'alice (read-keyset "alice"))
-(define-keyset 'bob (read-keyset "bob"))
-(define-keyset 'carol (read-keyset "carol"))
-
-; Load interfaces (done by init) and contract under test
+(begin-tx "setup")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(define-keyset "token-gov" (read-keyset "token-gov"))
 (load "../token.pact")
-
-; create storage table for the token module
 (create-table token-table)
-
-; Provision accounts and initial balance (seed via CREDIT)
-(with-capability (token.GOV)
-  (token.create-account "alice" (read-keyset 'alice))
-  (token.create-account "bob" (read-keyset 'bob)))
-
-(with-capability (token.CREDIT "alice")
-  (token.credit "alice" (read-keyset 'alice) 100.0))
-
 (commit-tx)
 
-; =====================
-; Positive unit tests
-; =====================
-(begin-tx)
+;; ---------------------------------------------------------------------------
+;; Account creation + governed mint
+;; ---------------------------------------------------------------------------
+(begin-tx "accounts-and-mint")
+(env-sigs [{"key": "gov-key", "caps": []}])
 
-(install-capability (token.TRANSFER "alice" "bob" 25.5))
+(expect "create alice" "alice" (token.create-account "alice" (read-keyset "alice")))
+(expect "create bob"   "bob"   (token.create-account "bob"   (read-keyset "bob")))
+
+;; insert on an existing key must fail (writes are illegal inside try — use expect-failure)
+(expect-failure "duplicate account rejected"
+  (token.create-account "alice" (read-keyset "alice")))
+
+(expect "mint 100 to alice" "CREDIT_OK"
+  (token.mint "alice" (read-keyset "alice") 100.0))
+(expect "alice balance after mint" 100.0 (token.get-balance "alice"))
+
+;; mint emits the ecosystem-standard TRANSFER "" event for indexer consistency
+(let ((names (map (at 'name) (env-events true))))
+  (expect "mint emits MINT event" true (contains "token.MINT" names))
+  (expect "mint emits TRANSFER-from-null event" true (contains "token.TRANSFER" names)))
+
+;; mint requires governance
+(env-sigs [{"key": "attacker-key", "caps": []}])
+(expect-failure "mint without governance key fails" "Keyset failure"
+  (token.mint "attacker-acct" (read-keyset "attacker") 1000000.0))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Happy-path transfers (managed TRANSFER cap, sender-guard enforced)
+;; ---------------------------------------------------------------------------
+(begin-tx "transfers")
+(env-sigs [{"key": "alice-key", "caps": [(token.TRANSFER "alice" "bob" 25.5)]}])
 (token.transfer "alice" "bob" 25.5)
-(format "Balances after transfer: alice={}, bob={}" [(token.get-balance "alice") (token.get-balance "bob")])
+(expect "alice debited" 74.5 (token.get-balance "alice"))
+(expect "bob credited" 25.5 (token.get-balance "bob"))
 
-; 2) transfer-create Bob -> Carol (new account)
-(install-capability (token.TRANSFER "bob" "carol" 10.0))
-(token.transfer-create "bob" "carol" (keyset-ref-guard "carol") 10.0)
-(format "Balances post transfer-create: bob={}, carol={}" [(token.get-balance "bob") (token.get-balance "carol")])
+;; managed TRANSFER auto-emits an event on acquisition
+(expect "TRANSFER event emitted" true
+  (contains {"name": "token.TRANSFER", "params": ["alice" "bob" 25.5], "module-hash": (at 'hash (describe-module "token"))}
+    (env-events true)))
 
-; 3) Details and precision
-(token.details "alice")
-(token.precision)
+(env-sigs [{"key": "bob-key", "caps": [(token.TRANSFER "bob" "carol" 10.0)]}])
+(token.transfer-create "bob" "carol" (read-keyset "carol") 10.0)
+(expect "carol credited via transfer-create" 10.0 (token.get-balance "carol"))
 
+(expect "details shape" {"account": "alice", "balance": 74.5, "guard": (read-keyset "alice")}
+  (token.details "alice"))
+(expect "precision" 12 (token.precision))
 (commit-tx)
 
-; =====================
-; Negative & security tests
-; =====================
-(begin-tx)
+;; ---------------------------------------------------------------------------
+;; SECURITY REGRESSION — the drain attack the v0.1 template allowed
+;; An attacker signs with their OWN key, scoping the managed TRANSFER cap for
+;; someone else's account. DEBIT must enforce the SENDER's guard and refuse.
+;; ---------------------------------------------------------------------------
+(begin-tx "attack-unauthorized-transfer")
+(env-sigs [{"key": "attacker-key", "caps": [(token.TRANSFER "alice" "carol" 74.5)]}])
+(expect-failure "attacker cannot drain alice (sender guard enforced in DEBIT)"
+  "Keyset failure"
+  (token.transfer "alice" "carol" 74.5))
+(expect "alice balance untouched" 74.5 (token.get-balance "alice"))
 
-; 4) Insufficient funds should fail and not alter balances
-(let ((a-before (token.get-balance "alice"))
-      (b-before (token.get-balance "bob")))
-  (format "Insufficient funds error triggered: {}"
-    [(try true (install-capability (token.TRANSFER "alice" "bob" 10000.0)) (token.transfer "alice" "bob" 10000.0))])
-  (format "Balances unchanged: {}"
-    [(and (= a-before (token.get-balance "alice"))
-          (= b-before (token.get-balance "bob")))]))
-
-; 5) Same sender/receiver should fail
-(try true (install-capability (token.TRANSFER "alice" "alice" 1.0)) (token.transfer "alice" "alice" 1.0))
-
-; 6) Missing signer (attempt debit without alice key)
-(env-keys ["gov","bob"]) ; drop alice key
-(let ((b1 (token.get-balance "bob")))
-  (format "Unauthorized debit blocked: {}"
-    [(try true (install-capability (token.TRANSFER "alice" "bob" 1.0)) (token.transfer "alice" "bob" 1.0))])
-  (format "Bob unchanged: {}" [(= b1 (token.get-balance "bob"))]))
-
-; restore keys for remaining tests
-(env-keys ["gov","alice","bob"]) 
+;; same attack via transfer-create (own scoped cap tuple — still hits the guard)
+(env-sigs [{"key": "attacker-key", "caps": [(token.TRANSFER "alice" "attacker-acct" 74.5)]}])
+(expect-failure "attacker cannot drain alice via transfer-create"
+  "Keyset failure"
+  (token.transfer-create "alice" "attacker-acct" (read-keyset "attacker") 74.5))
 (commit-tx)
 
-; No cross-chain tests in minimal token
+;; ---------------------------------------------------------------------------
+;; Input validation
+;; ---------------------------------------------------------------------------
+(begin-tx "validation")
+(env-sigs [{"key": "alice-key", "caps": [(token.TRANSFER "alice" "bob" 10000.0)]}])
+(expect-failure "insufficient funds" "Insufficient funds"
+  (token.transfer "alice" "bob" 10000.0))
+
+(env-sigs [{"key": "alice-key", "caps": [(token.TRANSFER "alice" "alice" 1.0)]}])
+(expect-failure "same sender and receiver" "sender cannot be the receiver"
+  (token.transfer "alice" "alice" 1.0))
+
+(env-sigs [{"key": "alice-key", "caps": [(token.TRANSFER "alice" "bob" 0.0000000000001)]}])
+(expect-failure "precision violation" "violates minimum precision"
+  (token.transfer "alice" "bob" 0.0000000000001))
+
+(env-sigs [{"key": "alice-key", "caps": [(token.TRANSFER "alice" "ab" 1.0)]}])
+(expect-failure "account too short" "min length"
+  (token.transfer-create "alice" "ab" (read-keyset "bob") 1.0))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Reserved (k:) account protocol — squatting prevention
+;; ---------------------------------------------------------------------------
+(begin-tx "reserved-accounts")
+(env-sigs [{"key": "gov-key", "caps": []}])
+
+;; squat attempt: k:<alice-key> account with the ATTACKER's guard must fail
+(expect-failure "k: account with mismatched guard rejected"
+  "Single-key account protocol violation"
+  (token.create-account "k:alice-key" (read-keyset "attacker")))
+
+;; correct principal: account name derived from the guard itself
+(let ((alice-principal (create-principal (read-keyset "alice"))))
+  (expect "principal account created" alice-principal
+    (token.create-account alice-principal (read-keyset "alice"))))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Guard rotation (managed ROTATE, old guard authorizes)
+;; ---------------------------------------------------------------------------
+(begin-tx "rotation-happy")
+;; happy path: carol rotates to bob's guard — carol's key scoped to ROTATE
+(env-sigs [{"key": "carol-key", "caps": [(token.ROTATE "carol")]}])
+(expect "carol rotates guard" "carol" (token.rotate "carol" (read-keyset "bob")))
+(commit-tx)
+
+(begin-tx "rotation-old-guard-rejected")
+;; carol's OLD key can no longer rotate back (guard is now bob's).
+;; Fresh tx: the one-shot ROTATE install is per transaction.
+(env-sigs [{"key": "carol-key", "caps": [(token.ROTATE "carol")]}])
+(expect-failure "old guard no longer authorizes rotation" "Keyset failure"
+  (token.rotate "carol" (read-keyset "carol")))
+(rollback-tx)
+
+(begin-tx "rotation-principal-protected")
+;; principal accounts must not rotate away from their proper guard
+(let ((alice-principal (create-principal (read-keyset "alice"))))
+  (env-sigs [{"key": "alice-key", "caps": [(token.ROTATE alice-principal)]}])
+  (expect-failure "principal account rotation blocked"
+    "unsafe for principal accounts"
+    (token.rotate alice-principal (read-keyset "bob"))))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Cross-chain: step-0 guards (full lifecycle is devnet-only — no SPV in REPL)
+;; ---------------------------------------------------------------------------
+(begin-tx "xchain-attack")
+;; unauthorized: bob tries to cross-chain alice's funds
+(env-sigs [{"key": "bob-key", "caps": [(token.TRANSFER_XCHAIN "alice" "bob" 10.0 "1")]}])
+(expect-failure "attacker cannot start cross-chain debit of alice"
+  "Keyset failure"
+  (token.transfer-crosschain "alice" "bob" (read-keyset "bob") "1" 10.0))
+(rollback-tx)
+
+(begin-tx "xchain-same-chain")
+(env-sigs [{"key": "alice-key", "caps": [(token.TRANSFER_XCHAIN "alice" "bob" 10.0 "0")]}])
+(expect-failure "same-chain cross-chain transfer rejected"
+  "cannot run cross-chain transfers to the same chain"
+  (token.transfer-crosschain "alice" "bob" (read-keyset "bob") "0" 10.0))
+(rollback-tx)
+
+(begin-tx "xchain-bad-chain")
+(env-sigs [{"key": "alice-key", "caps": [(token.TRANSFER_XCHAIN "alice" "bob" 10.0 "99")]}])
+(expect-failure "invalid target chain rejected"
+  "not a valid chainweb chain id"
+  (token.transfer-crosschain "alice" "bob" (read-keyset "bob") "99" 10.0))
+(rollback-tx)
+
+(begin-tx "xchain-doomed-yield-failfast")
+;; a k: receiver with a mismatched guard must be rejected BEFORE the debit —
+;; otherwise the funds would lock forever in an uncompletable defpact (step 1
+;; would fail on enforce-reserved with no way to roll back step 0)
+(env-sigs [{"key": "alice-key", "caps": [(token.TRANSFER_XCHAIN "alice" "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 5.0 "1")]}])
+(expect-failure "k: receiver with mismatched guard fails fast at step 0"
+  "Single-key account protocol violation"
+  (token.transfer-crosschain "alice" "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset "bob") "1" 5.0))
+(expect "alice balance untouched by doomed-yield attempt" 74.5 (token.get-balance "alice"))
+(rollback-tx)
+
+(begin-tx "xchain-step0")
+;; authorized step 0: debit happens on the source chain, details are yielded
+(env-sigs [{"key": "alice-key", "caps": [(token.TRANSFER_XCHAIN "alice" "bob" 10.0 "1")]}])
+(token.transfer-crosschain "alice" "bob" (read-keyset "bob") "1" 10.0)
+(expect "alice debited by step 0" 64.5 (token.get-balance "alice"))
+(commit-tx)
+
+"All token-fungible template tests passed"
