@@ -4,22 +4,24 @@ Welcome to the Pact Contract Catalog, the central repository for reusable, trust
 
 ## Mission Alignment
 
-In alignment with the PCO mission to "Make it easy and safe for businesses to start building with smart contracts," the Contract Catalog provides example contracts, testing frameworks, and development tools to help build a trusted Pact ecosystem. We're starting small but growing through community contributions.
+In alignment with the PCO mission to "Make it easy and safe for businesses to start building with smart contracts," the catalog ships two clearly separated products (see [ADR-001](docs/adr/ADR-001-registry-library-split.md)):
 
-## Purpose
-
-The Pact Contract Catalog serves as:
-
-- **A Starting Point**: Example contracts and testing infrastructure for the growing Pact ecosystem
-- **A Development Framework**: Tools and processes for contract validation and testing
-- **A Quality Standard**: Guidelines for secure, maintainable Pact contract development
-- **A Community Hub**: Platform for developers to learn, contribute, and collaborate on Pact contracts
+- **[`contracts/library/`](contracts/library/) — the Library.** PCO-authored, deployable contract templates. This is where you start a project: copy a template, adapt it, deploy it. Every library entry ships with a co-located REPL test suite and a documented audit record at `self-reviewed` or better.
+- **[`contracts/registry/`](contracts/registry/) — the Registry.** An observatory of contracts that already exist: the KIP standard interfaces, the pre-deployed chain infrastructure, the Marmalade NFT framework, and census-selected third-party mainnet modules. Read-only reference for integration, education, and due diligence — these are verbatim snapshots, not starting points.
 
 ## Repository Structure
 
-- `contracts/`: Contract entries, grouped by dependency layer (`kip/`, `core/`, `marmalade/`, `ecosystem/`, `community/`). See [ARCHITECTURE.md](ARCHITECTURE.md) for the layer model and dependency graph.
-- `docs/`: Documentation, the generated contract index, onboarding instructions, and contract policies.
-- `scripts/`: Validation and index-generation tooling.
+- `contracts/library/` — deployable templates (the product). Strict quality gate.
+- `contracts/registry/` — observed contracts, grouped by dependency layer (`kip/`, `core/`, `marmalade/`, `ecosystem/`, `community/`). See [ARCHITECTURE.md](ARCHITECTURE.md) for the layer model and dependency graph.
+- `docs/` — documentation, the generated [contract index](docs/index.md), [onboarding](docs/ONBOARDING.md), [contract policies](docs/CONTRACT_POLICIES.md), and [ADRs](docs/adr/).
+- `scripts/` — validation and index-generation tooling.
+
+## Starting a Project (Library)
+
+1. Browse [`contracts/library/`](contracts/library/) or the [contract index](docs/index.md).
+2. Copy the template directory into your project and adapt it (namespace, keysets, business rules).
+3. Run its co-located `.repl` test suite (see Testing below) and extend the tests for your changes.
+4. Review the entry's `AUDIT.md` for known considerations before deploying.
 
 ## Testing Contracts
 
@@ -29,38 +31,22 @@ To test Pact contracts locally, use a Pact REPL environment:
 2. Follow the instructions in its README to set up the local REPL environment.
 3. Clone the sandbox repository and use it to run `.repl` test files from this catalog.
 
-For example, to test the hello-world contract:
-- Navigate to `contracts/community/hello-world/`
+For example, to test the hello-world template:
+- Navigate to `contracts/library/hello-world/`
 - Run the test using the sandbox environment as per the kadena_repl_sandbox instructions.
 
 This ensures contracts are tested in a proper Pact environment before submission.
 
-## Onboarding a New Contract
+## Contributing a Contract
 
-To contribute a new contract to the catalog:
+- **Library templates** (deployable, PCO-reviewed): follow [docs/ONBOARDING.md](docs/ONBOARDING.md). Library entries must pass the quality gate: schema-A metadata, co-located `.repl` tests, `AUDIT.md` at `self-reviewed` or better.
+- **Registry entries** (observed on-chain modules): require deployment evidence (module hash, `describe-module` output, or block-explorer link) matching the census methodology in [contracts/registry/ecosystem/README.md](contracts/registry/ecosystem/README.md).
 
-1. **Prepare Your Contract**: Ensure it follows Pact best practices and includes comprehensive tests.
-2. **Submit a Pull Request**: Create a PR with your contract in `contracts/`, following the hello-world example structure.
-3. **Community Review**: Get feedback from other contributors and maintainers.
-4. **Testing**: Ensure contracts work with the provided testing framework.
-5. **Publication**: Approved contracts are merged and become part of the growing catalog.
-
-See [docs/ONBOARDING.md](docs/ONBOARDING.md) for detailed instructions.
-
-## How to Use
-
-1. Browse the `contracts/` directory to see catalogued Pact contracts, or the generated [contract index](docs/index.md).
-2. Use the testing framework to validate your own contracts.
-3. Follow the contribution guidelines to add new contracts.
-4. Refer to the `docs/` directory for development guides.
-
-## Contributing
-
-We welcome contributions to the Pact Contract Catalog! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to submit new contracts or improve existing ones.
+All submissions run the CI validation gate (`scripts/validate_contract.sh`). See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 
 ## Governance
 
-This repository follows the governance model defined in the [PCO Foundation](https://github.com/Pact-Community-Organization/foundation). For contract-specific policies, see [docs/CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md).
+This repository follows the governance model defined in the [PCO Foundation](https://github.com/Pact-Community-Organization/foundation). For contract-specific policies, see [docs/CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md). Architecture decisions are recorded in [docs/adr/](docs/adr/). Security disclosures: [SECURITY.md](SECURITY.md).
 
 ## License
 

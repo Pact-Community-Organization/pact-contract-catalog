@@ -9,9 +9,9 @@ smart contracts. Security reporting is central to that promise.
 This policy covers:
 
 - The catalog tooling (`scripts/`, CI workflows, validation logic).
-- Contract entries **authored by PCO** (the `contracts/community/` layer).
+- Contract entries **authored by PCO** (the `contracts/library/` tree).
 
-Contract entries in `kip/`, `core/`, `marmalade/`, and `ecosystem/` are catalogued
+Contract entries under `contracts/registry/` are catalogued
 **verbatim** from upstream or on-chain sources and carry the `reference` or
 `community-reviewed` audit status. PCO does not control their source. If you find a
 vulnerability in one of those, please **also** report it to the originating project;
@@ -48,7 +48,7 @@ Please include:
 Severity is classified using the categories in
 [docs/CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md). Contracts found to carry a
 confirmed critical finding are downgraded to `unaudited`, flagged in their
-`AUDIT.md`, and — for the `community/` layer — may be moved out of the deployable
+`AUDIT.md`, and — for the `library/` tree — may be moved out of the deployable
 templates until remediated.
 
 ## Safe harbor

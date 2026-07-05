@@ -4,6 +4,11 @@
 
 Provide a layered, dependency-aware catalog of production Pact smart contracts on KDA-CE. Each contract entry ships with its source code (as deployed on-chain), human-readable documentation, machine-readable metadata, and an audit record.
 
+Per [ADR-001](docs/adr/ADR-001-registry-library-split.md), the catalog is split into
+two product trees: **`contracts/registry/`** (the observatory — verbatim observed
+contracts, read-only reference) and **`contracts/library/`** (the product —
+PCO-authored deployable templates with a strict quality gate).
+
 ---
 
 ## Top-level layout
@@ -13,25 +18,28 @@ README.md              — repository overview, mission & vision
 ARCHITECTURE.md        — this file
 CONTRIBUTING.md        — how to contribute contract entries and audits
 CODE_OF_CONDUCT.md     — community guidelines
-LICENSE                — project license
-contracts/             — contract entries, grouped by dependency layer
-  kip/                 — KIP standard interfaces (no executable logic)
-  core/                — Pre-deployed KDA-CE chain infrastructure
-  marmalade/           — Marmalade v2 NFT framework (pre-deployed)
-  ecosystem/           — 20 production third-party modules (deployment breadth + call-frequency census)
-  community/           — PCO community templates and reference contracts
+SECURITY.md            — vulnerability disclosure policy
+LICENSE                — project license (Apache-2.0)
+contracts/
+  library/             — PCO-authored deployable templates (the product)
+  registry/            — observed contracts, grouped by dependency layer
+    kip/               — KIP standard interfaces (no executable logic)
+    core/              — Pre-deployed KDA-CE chain infrastructure
+    marmalade/         — Marmalade v2 NFT framework (pre-deployed)
+    ecosystem/         — production third-party modules (deployment breadth + call-frequency census)
+    community/         — census-observed community free-namespace modules
 scripts/               — validation, index generation
-docs/                  — onboarding, index output (index.md, index.json)
+docs/                  — onboarding, policies, ADRs, index output (index.md, index.json)
 ```
 
 ---
 
 ## Dependency Layers
 
-The `contracts/` tree is organised by **dependency order** — lower layers are depended on by higher layers, never the reverse.
+The `contracts/registry/` tree is organised by **dependency order** — lower layers are depended on by higher layers, never the reverse. (`contracts/library/` templates sit outside the layer stack: they implement Layer-0 interfaces and call Layer-1 modules, like any project built from the catalog would.)
 
 ```
-Layer 0 — KIP Standards (kip/)
+Layer 0 — KIP Standards (registry/kip/)
   Pure interfaces: no executable code, no state.
   Every module that claims standard compliance must implement these.
 
@@ -41,7 +49,7 @@ Layer 0 — KIP Standards (kip/)
     kip/token-policy-v2        ◄─── implemented by all Marmalade policies
     kip/token-manifest              module (not interface); used by ledger
 
-Layer 1 — Core Infrastructure (core/)
+Layer 1 — Core Infrastructure (registry/core/)
   Pre-deployed production modules on all chains (0–19).
   Cannot be redeployed; integrate by calling them.
 
@@ -49,7 +57,7 @@ Layer 1 — Core Infrastructure (core/)
     core/ns                    namespace registry; called by define-namespace
     core/fungible-util         implements kip.account-protocols-v1; used by coin
 
-Layer 2 — NFT Framework (marmalade/)
+Layer 2 — NFT Framework (registry/marmalade/)
   Marmalade v2 pre-deployed NFT stack.
   Depends on kip/ interfaces and core/coin for payments.
 
@@ -59,7 +67,7 @@ Layer 2 — NFT Framework (marmalade/)
     marmalade/policy-manager    calls kip/token-policy-v2 on each policy
                                     uses  core/coin (royalty payments)
 
-Layer 3 — Ecosystem (ecosystem/)
+Layer 3 — Ecosystem (registry/ecosystem/)
   Production modules from major KDA-CE ecosystem projects.
   Two selection cohorts:
     Cohort A (PR#15): top-10 by deployment breadth — (list-modules) on all 20 chains, Jan 2025
@@ -87,15 +95,23 @@ Layer 3 — Ecosystem (ecosystem/)
     ecosystem/brothers-dao/bro               BRO governance token (fungible-v2)
     ecosystem/heron/heron                    community utility token (fungible-v2, mass conservation FV)
 
-Layer 4 — Community (community/)
-  PCO-authored templates and community-grown free-namespace modules.
+Layer 4 — Community On-Chain (registry/community/)
+  Census-observed community free-namespace modules (verbatim snapshots).
   Implements interfaces from Layer 0. Depends on Layer 1 for runtime calls.
 
-    community/hello-world
-    community/token-fungible           implements kip/fungible-v2
-    community/cyberfly/cyberfly-node   DePIN node registry (staking, rewards)
-    community/cyberfly/cyberfly-token  CFLY token (fungible-v2 + fungible-xchain-v1)
-    community/p2p-escrow               P2P escrow with reputation (⚠️ experimental)
+    registry/community/cyberfly/cyberfly-node   DePIN node registry (staking, rewards)
+    registry/community/cyberfly/cyberfly-token  CFLY token (fungible-v2 + fungible-xchain-v1)
+    registry/community/p2p-escrow               P2P escrow with reputation
+                                                (⚠️ CRITICAL open finding — see AUDIT.md)
+
+Library — Deployable Templates (contracts/library/)
+  PCO-authored starting points. Outside the registry layer stack.
+  Quality gate: schema-A metadata, co-located .repl tests,
+  audit_status self-reviewed or better. Entries with open CRITICAL
+  findings can never live here (ADR-001 rule 4).
+
+    library/hello-world                tutorial entry point
+    library/token-fungible             implements kip/fungible-v2
 ```
 
 ### Full dependency graph
@@ -107,7 +123,7 @@ kip/gas-payer-v1                                      │
 kip/token-manifest ◄──────────── marmalade/ledger ◄───┤
 kip/token-policy-v2 ◄────────── marmalade/policy-mgr  │
                                       └── core/coin ───┘
-community/* ──────────────────── kip/* + core/*
+library/* + registry/community/* ── kip/* + core/*
 
 ecosystem/kaddex.kdx──────────── kip/fungible-v2
                                 ► kip/fungible-xchain-v1
@@ -132,10 +148,13 @@ ecosystem/brothers-dao/bro──────── kip/fungible-v2 + kip/fungibl
 ecosystem/brothers-dao/bro-dex── bro ► core/coin ► free.util-lists ► free.util-math
 ecosystem/heron/heron────────────kip/fungible-v2 + kip/fungible-xchain-v1
 
-community/cyberfly/cyberfly-token── kip/fungible-v2 + kip/fungible-xchain-v1
+registry/community/cyberfly-token── kip/fungible-v2 + kip/fungible-xchain-v1
                                  ► free.util-fungible
-community/cyberfly/cyberfly-node── core/coin ► free.cyberfly_token
-community/p2p-escrow──────────── core/coin  (⚠️ governance: true — experimental)
+registry/community/cyberfly-node── core/coin ► free.cyberfly_token
+registry/community/p2p-escrow──── core/coin  (⚠️ governance: true — CRITICAL, unaudited)
+
+library/token-fungible─────────── kip/fungible-v2
+library/hello-world────────────── (no deps)
 ```
 
 ---
@@ -184,21 +203,23 @@ keywords: ['pact', 'smart-contract']
 
 ## Source provenance
 
-| Layer | Provenance | Source repository |
-|-------|------------|-------------------|
-| `kip/` | Upstream Kadena LLC | [kadena-io/marmalade/pact/kip/](https://github.com/kadena-io/marmalade/tree/main/pact/kip) + [chainweb-node](https://github.com/kda-community/chainweb-node) |
-| `core/` | Upstream Kadena LLC | [kadena-io/marmalade/pact/root/](https://github.com/kadena-io/marmalade/tree/main/pact/root) + chainweb-node |
-| `marmalade/` | Upstream Kadena LLC | [kadena-io/marmalade/pact/](https://github.com/kadena-io/marmalade/tree/main/pact) |
-| `ecosystem/` | Third-party projects | Various (see each module's `metadata.yaml`) — verified from mainnet01 blockchain census Jan 2025 |
-| `community/` | PCO contributors | [Pact-Community-Organization/pact-contract-catalog](https://github.com/Pact-Community-Organization/pact-contract-catalog) |
+| Tree | Provenance | Source repository |
+|------|------------|-------------------|
+| `registry/kip/` | Upstream Kadena LLC | [kadena-io/marmalade/pact/kip/](https://github.com/kadena-io/marmalade/tree/main/pact/kip) + [chainweb-node](https://github.com/kda-community/chainweb-node) |
+| `registry/core/` | Upstream Kadena LLC | [kadena-io/marmalade/pact/root/](https://github.com/kadena-io/marmalade/tree/main/pact/root) + chainweb-node |
+| `registry/marmalade/` | Upstream Kadena LLC | [kadena-io/marmalade/pact/](https://github.com/kadena-io/marmalade/tree/main/pact) |
+| `registry/ecosystem/` | Third-party projects | Various (see each module's `metadata.yaml`) — verified from mainnet01 blockchain census Jan 2025 / Mar 2026 |
+| `registry/community/` | Community projects | Census-observed free-namespace modules (see each module's `metadata.yaml`) |
+| `library/` | PCO contributors | [Pact-Community-Organization/pact-contract-catalog](https://github.com/Pact-Community-Organization/pact-contract-catalog) |
 
-> `kip/`, `core/`, and `marmalade/` entries are **reference entries** — authored by Kadena LLC, pre-deployed on all chains, and not re-deployable by community contributors. They are catalogued here to document the interfaces and contracts that community modules build upon.
+> All `registry/` entries are **observed entries** — verbatim snapshots of upstream or on-chain code, catalogued to document what community modules build upon and integrate with. PCO makes no security claim beyond the recorded audit status. Only `library/` entries are authored, maintained, and quality-gated by PCO.
 
 ---
 
 ## Governance notes
 
-- Additions to `kip/`, `core/`, or `marmalade/` require a maintainer PR for upstream sync.
-- Additions to `ecosystem/` require evidence of deployment on mainnet01 (module hash, describe-module output, or block explorer link) plus a PR matching the census methodology in `contracts/ecosystem/README.md`.
-- Additions to `community/` require a PR linking a GitHub issue, passing CI, and approval per `CONTRIBUTING.md`.
-- Audit promotions (`not-audited` → `in-review` → `audited`) require evidence in `AUDIT.md`.
+- Additions to `registry/kip/`, `registry/core/`, or `registry/marmalade/` require a maintainer PR for upstream sync.
+- Additions to `registry/ecosystem/` and `registry/community/` require evidence of deployment on mainnet01 (module hash, describe-module output, or block explorer link) plus a PR matching the census methodology in `contracts/registry/ecosystem/README.md`.
+- Additions to `library/` require a PR linking a GitHub issue, passing CI (including the library quality gate: schema-A metadata, co-located `.repl` tests, `audit_status` of `self-reviewed` or better), and approval per `CONTRIBUTING.md`.
+- Entries with an open CRITICAL finding live in `registry/`, never `library/` (ADR-001 rule 4).
+- Audit promotions follow the ladder in `docs/CONTRACT_POLICIES.md` §3.1 (`reference` / `unaudited` / `self-reviewed` / `community-reviewed` / `independently-audited`) and require evidence in `AUDIT.md`.

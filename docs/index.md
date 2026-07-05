@@ -1,8 +1,18 @@
 # Contract Index
 
-_Generated from `contracts/**/metadata.yaml`. Entries grouped by dependency layer._
+_Generated from `contracts/**/metadata.yaml`._
 
-## KIP Standards (`kip/`)
+- **Library** — PCO-authored deployable templates: copy, adapt, deploy.
+- **Registry** — observed contracts (upstream standards + on-chain census): read-only reference.
+
+## Library — Deployable Templates (`library/`)
+
+| Name | Slug | Version | Audit Status | Tags |
+|------|------|---------|--------------|------|
+| Hello World | hello-world | 1.0.0 | self-reviewed | hello-world, tutorial, basic |
+| Token (fungible-v2) | token-fungible | 0.1.0 | self-reviewed | token, fungible, reference |
+
+## Registry — KIP Standards (`registry/kip/`)
 
 | Name | Slug | Version | Audit Status | Tags |
 |------|------|---------|--------------|------|
@@ -12,7 +22,7 @@ _Generated from `contracts/**/metadata.yaml`. Entries grouped by dependency laye
 | kip.token-manifest | kip-token-manifest | 1.0.0 | reference | nft, kip, marmalade, manifest, metadata, pre-deployed |
 | kip.token-policy-v2 | kip-token-policy-v2 | 2.0.0 | reference | interface, nft, kip, marmalade, policy, pre-deployed |
 
-## Core Infrastructure (`core/`)
+## Registry — Core Infrastructure (`registry/core/`)
 
 | Name | Slug | Version | Audit Status | Tags |
 |------|------|---------|--------------|------|
@@ -20,14 +30,14 @@ _Generated from `contracts/**/metadata.yaml`. Entries grouped by dependency laye
 | util.fungible-util | util-fungible-util | 1.0.0 | reference | utility, fungible, validation, helper, pre-deployed |
 | ns | ns | 1.0.0 | reference | namespace, governance, registry, core, pre-deployed |
 
-## Marmalade NFT Framework (`marmalade/`)
+## Registry — Marmalade NFT Framework (`registry/marmalade/`)
 
 | Name | Slug | Version | Audit Status | Tags |
 |------|------|---------|--------------|------|
 | marmalade-v2.ledger | marmalade-v2-ledger | 2.0.0 | reference | nft, marmalade, ledger, token, poly-fungible, pre-deployed |
 | marmalade-v2.policy-manager | marmalade-v2-policy-manager | 2.0.0 | reference | nft, marmalade, policy, manager, pre-deployed |
 
-## Ecosystem Modules (`ecosystem/`) — ranked by blockchain data
+## Registry — Ecosystem Modules (`registry/ecosystem/`) — census
 
 | Name | Slug | Version | Audit Status | Category | Chains |
 |------|------|---------|--------------|----------|--------|
@@ -49,13 +59,11 @@ _Generated from `contracts/**/metadata.yaml`. Entries grouped by dependency laye
 | mok.token | mok.token | 1.0 | unaudited | governance-token | 20/20 |
 | runonflux.flux | runonflux.flux | 1.0 | community-reviewed | utility-token | 20/20 |
 
-## Community Contracts (`community/`)
+## Registry — Community On-Chain Modules (`registry/community/`) — census
 
-| Name | Slug | Version | Audit Status | Tags |
-|------|------|---------|--------------|------|
+| Name | Slug | Version | Audit Status | Category | Chains |
+|------|------|---------|--------------|----------|--------|
 | free.cyberfly_node | free.cyberfly_node | 1.0 | community-reviewed | depin | 1/20 |
 | free.cyberfly_token | free.cyberfly_token | 1.0 | community-reviewed | governance-token | 1/20 |
-| Hello World | hello-world | 1.0.0 | self-reviewed | hello-world, tutorial, basic |
 | free.p2p-escrow | free.p2p-escrow | 1.0 | unaudited | utility | 1/20 |
-| Token (fungible-v2) | token-fungible | 0.1.0 | self-reviewed | token, fungible, reference |
 

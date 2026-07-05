@@ -64,16 +64,16 @@ jobs:
         fi
         echo "Contract index is up to date."
 
-    - name: Lint community Pact contracts
-      # Only lint community/ — ecosystem/kip/core/marmalade are reference
-      # artifacts from the chain or upstream; they have external dependencies
-      # that require a full network context to resolve.
+    - name: Lint library Pact contracts
+      # Only lint library/ — registry/ entries are verbatim artifacts from the
+      # chain or upstream; they have external dependencies that require a full
+      # network context to resolve.
       # Non-blocking: syntax findings are reported but do not fail the build
       # (blocking validation is done by the validate step above).
       continue-on-error: true
       run: |
-        echo "Linting community/ contracts..."
-        find contracts/community -name "*.pact" | while read -r f; do
+        echo "Linting library/ contracts..."
+        find contracts/library -name "*.pact" | while read -r f; do
           echo "  pact $f"
           pact "$f" 2>&1 || true
         done
@@ -82,8 +82,8 @@ jobs:
     - name: Report catalog counts
       run: |
         total=$(find contracts -name "*.pact" | wc -l)
-        community=$(find contracts/community -name "*.pact" | wc -l)
-        ecosystem=$(find contracts/ecosystem -name "*.pact" | wc -l)
+        library=$(find contracts/library -name "*.pact" | wc -l)
+        registry=$(find contracts/registry -name "*.pact" | wc -l)
         echo "Total .pact files:      $total"
-        echo "Community contracts:    $community"
-        echo "Ecosystem (reference):  $ecosystem"
+        echo "Library (templates):    $library"
+        echo "Registry (reference):   $registry"

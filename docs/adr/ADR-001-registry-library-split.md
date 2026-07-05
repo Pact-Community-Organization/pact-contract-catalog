@@ -1,7 +1,7 @@
 # ADR-001: Split the catalog into a Registry (observatory) and a Library (deployable templates)
 
-Status: Proposed
-Date: 2026-07-05
+Status: Accepted
+Date: 2026-07-05 (proposed and accepted; implemented same day)
 
 ## Context
 
