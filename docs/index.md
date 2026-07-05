@@ -42,3 +42,20 @@ _Generated from `contracts/**/metadata.yaml`. Entries grouped by dependency laye
 | kdlaunch.kdswap-exchange | kdlaunch.kdswap-exchange | 1.0 | community-reviewed | dex | 1/20 |
 | n_40c883decc192e1e3214898f04656b2e9ea7b74e.kia-oracle | n_40c883decc192e1e3214898f04656b2e9ea7b74e.kia-oracle | 1.0 | community-reviewed | oracle | 1/20 |
 | lago.USD2 | lago.USD2 | 1.0 | unaudited | governance-shell | 20/20 |
+| lago.kwBTC | lago.kwBTC | 1.0 | unaudited | governance-shell | 20/20 |
+| lago.kwUSDC | lago.kwUSDC | 1.0 | unaudited | governance-shell | 20/20 |
+| marmalade-sale.conventional-auction | marmalade-sale.conventional-auction | 1.0 | community-reviewed | nft-auction | 20/20 |
+| marmalade-sale.dutch-auction | marmalade-sale.dutch-auction | 1.0 | community-reviewed | nft-auction | 20/20 |
+| mok.token | mok.token | 1.0 | unaudited | governance-token | 20/20 |
+| runonflux.flux | runonflux.flux | 1.0 | community-reviewed | utility-token | 20/20 |
+
+## Community Contracts (`community/`)
+
+| Name | Slug | Version | Audit Status | Tags |
+|------|------|---------|--------------|------|
+| free.cyberfly_node | free.cyberfly_node | 1.0 | community-reviewed | depin | 1/20 |
+| free.cyberfly_token | free.cyberfly_token | 1.0 | community-reviewed | governance-token | 1/20 |
+| Hello World | hello-world | 1.0.0 | self-reviewed | hello-world, tutorial, basic |
+| free.p2p-escrow | free.p2p-escrow | 1.0 | unaudited | utility | 1/20 |
+| Token (fungible-v2) | token-fungible | 0.1.0 | self-reviewed | token, fungible, reference |
+
