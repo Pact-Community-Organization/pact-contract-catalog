@@ -5,7 +5,7 @@ repository: 'https://github.com/Pact-Community-Organization/pact-contract-catalo
 license: 'Apache-2.0'
 authors:
   - name: 'Pact Community Organization'
-    email: 'maintainers@pact.org'
+    email: 'info@pact-community.org'
 audit_status: 'self-reviewed'
 tags: ['hello-world', 'tutorial', 'basic']
 keywords: ['pact', 'smart-contract', 'example']

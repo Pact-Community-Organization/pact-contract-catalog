@@ -64,6 +64,23 @@ jobs:
         fi
         echo "Contract index is up to date."
 
+    - name: Run library test suites (BLOCKING)
+      # Every library/ template ships a self-contained .repl suite that loads
+      # its interface dependencies from the in-repo registry/ tree. A failing
+      # assertion fails the build. NOTE: cross-chain resume steps need SPV and
+      # are provable only on devnet — suites test step-0 guards in the REPL.
+      run: |
+        fail=0
+        for f in $(find contracts/library -name "*.repl"); do
+          echo "=== pact $f"
+          if ! (cd "$(dirname "$f")" && pact "$(basename "$f")"); then
+            echo "::error::Test suite failed: $f"
+            fail=1
+          fi
+        done
+        [ "$fail" -eq 0 ] || exit 1
+        echo "All library test suites passed."
+
     - name: Lint library Pact contracts
       # Only lint library/ — registry/ entries are verbatim artifacts from the
       # chain or upstream; they have external dependencies that require a full
