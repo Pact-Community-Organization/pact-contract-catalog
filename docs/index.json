@@ -1,5 +1,56 @@
 [
 {
+  "name": "Hello World",
+  "slug": "hello-world",
+  "version": "1.0.0",
+  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
+  "license": "Apache-2.0",
+  "authors": [
+    {
+      "name": "Pact Community Organization",
+      "email": "maintainers@pact.org"
+    }
+  ],
+  "audit_status": "self-reviewed",
+  "tags": [
+    "hello-world",
+    "tutorial",
+    "basic"
+  ],
+  "keywords": [
+    "pact",
+    "smart-contract",
+    "example"
+  ]
+}
+,
+{
+  "name": "Token (fungible-v2)",
+  "slug": "token-fungible",
+  "version": "0.1.0",
+  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
+  "license": "Apache-2.0",
+  "authors": [
+    {
+      "name": "Pact Community Organization",
+      "email": "maintainers@pact.org"
+    }
+  ],
+  "audit_status": "self-reviewed",
+  "tags": [
+    "token",
+    "fungible",
+    "reference"
+  ],
+  "keywords": [
+    "pact",
+    "smart-contract",
+    "fungible-v2",
+    "xchain"
+  ]
+}
+,
+{
   "name": "free.cyberfly_node",
   "namespace": "free",
   "module": "cyberfly_node",
@@ -61,31 +112,6 @@
 }
 ,
 {
-  "name": "Hello World",
-  "slug": "hello-world",
-  "version": "1.0.0",
-  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
-  "license": "Apache-2.0",
-  "authors": [
-    {
-      "name": "Pact Community Organization",
-      "email": "maintainers@pact.org"
-    }
-  ],
-  "audit_status": "self-reviewed",
-  "tags": [
-    "hello-world",
-    "tutorial",
-    "basic"
-  ],
-  "keywords": [
-    "pact",
-    "smart-contract",
-    "example"
-  ]
-}
-,
-{
   "name": "free.p2p-escrow",
   "namespace": "free",
   "module": "p2p-escrow",
@@ -110,32 +136,6 @@
   "census_calls": 1,
   "census_date": "2026-03",
   "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
-}
-,
-{
-  "name": "Token (fungible-v2)",
-  "slug": "token-fungible",
-  "version": "0.1.0",
-  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
-  "license": "Apache-2.0",
-  "authors": [
-    {
-      "name": "Pact Community Organization",
-      "email": "maintainers@pact.org"
-    }
-  ],
-  "audit_status": "self-reviewed",
-  "tags": [
-    "token",
-    "fungible",
-    "reference"
-  ],
-  "keywords": [
-    "pact",
-    "smart-contract",
-    "fungible-v2",
-    "xchain"
-  ]
 }
 ,
 {

@@ -411,7 +411,7 @@ def main() -> None:
     print("Next steps:")
     print("  1. Review the 'NEW candidates' list above.")
     print("  2. Run: pact-contract-catalog/scripts/describe_tokens.sh to fetch source.")
-    print("  3. Create catalog entries under contracts/ecosystem/ or contracts/community/.")
+    print("  3. Create catalog entries under contracts/registry/ecosystem/ or contracts/registry/community/.")
     print()
 
 

@@ -1,4 +1,4 @@
-# AUDIT — community/token-fungible
+# AUDIT — library/token-fungible
 
 ## Summary
 

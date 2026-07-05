@@ -53,7 +53,7 @@ arkade.token──────────implements──────► fungib
 
 ## Adding ecosystem modules
 
-1. Create a directory `contracts/ecosystem/<project>/<module-name>/`.
+1. Create a directory `contracts/registry/ecosystem/<project>/<module-name>/`.
 2. Add `metadata.yaml`, `README.md`, `AUDIT.md`, and the `.pact` source file.
 3. Run `scripts/generate_index.sh` to rebuild `docs/index.md`.
 4. Open a PR that links to the issuing project's GitHub or deployment transaction.
