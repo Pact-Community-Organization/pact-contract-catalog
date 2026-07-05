@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | **Module** | `token` (namespace: project-specific) |
-| **Audit Status** | in-review |
+| **Audit Status** | self-reviewed |
 | **Category** | PCO Community Template |
 | **Source** | PCO-authored reference implementation |
 
@@ -59,4 +59,4 @@ not for direct deployment without customization.
 ## Audit Date
 
 Community review: 2026-03-02.
-Status: **in-review** — pending full independent security audit.
+Status: **self-reviewed** — documented author self-review; pending independent security audit.

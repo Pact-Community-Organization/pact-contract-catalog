@@ -1,5 +1,66 @@
 [
 {
+  "name": "free.cyberfly_node",
+  "namespace": "free",
+  "module": "cyberfly_node",
+  "version": "1.0",
+  "layer": "community",
+  "project": "CyberFly",
+  "category": "depin",
+  "status": "production",
+  "chains_deployed": 1,
+  "chain_primary": "1",
+  "network": "mainnet01",
+  "blockchain_hash": "hj7oEIB2J3sYyEnY-0lBhqMMKl8J5d3e891z9VWPvCA",
+  "tx_hash": "",
+  "implements": [],
+  "dependencies": [
+    "coin",
+    "free.cyberfly_token"
+  ],
+  "description": "CyberFly Node is the DePIN (Decentralized Physical Infrastructure Network) node registry for the CyberFly network. Nodes are identified by peer_id and multiaddr, registered with on-chain staking of CFLY tokens to a designated staking vault. The module handles node registration, stake management, and reward distribution. Ranked #2 by function call frequency in the 90-day census.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_rank": 2,
+  "census_calls": 28,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
+}
+,
+{
+  "name": "free.cyberfly_token",
+  "namespace": "free",
+  "module": "cyberfly_token",
+  "version": "1.0",
+  "layer": "community",
+  "project": "CyberFly",
+  "category": "governance-token",
+  "status": "production",
+  "chains_deployed": 1,
+  "chain_primary": "1",
+  "network": "mainnet01",
+  "blockchain_hash": "IhH0xyxClo8oyDaZFYVmddYPCLqvXc9zLukVsWmcjIY",
+  "tx_hash": "",
+  "implements": [
+    "fungible-v2",
+    "fungible-xchain-v1"
+  ],
+  "dependencies": [
+    "fungible-v2",
+    "fungible-xchain-v1",
+    "free.util-fungible",
+    "free.util-chain-data"
+  ],
+  "description": "CyberFly Token (CFLY) is the native governance and staking token for the CyberFly DePIN network. Implements fungible-v2 and fungible-xchain-v1 for standard token operations and cross-chain transfers. Multiple blessed hashes indicate active cross-chain upgrade history. Required dependency for cyberfly_node staking. Ranked #4 by function call frequency in the 90-day census.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_rank": 4,
+  "census_calls": 4,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
+}
+,
+{
   "name": "Hello World",
   "slug": "hello-world",
   "version": "1.0.0",
@@ -11,7 +72,7 @@
       "email": "maintainers@pact.org"
     }
   ],
-  "audit_status": "in-review",
+  "audit_status": "self-reviewed",
   "tags": [
     "hello-world",
     "tutorial",
@@ -22,6 +83,33 @@
     "smart-contract",
     "example"
   ]
+}
+,
+{
+  "name": "free.p2p-escrow",
+  "namespace": "free",
+  "module": "p2p-escrow",
+  "version": "1.0",
+  "layer": "community",
+  "project": "P2P Escrow",
+  "category": "utility",
+  "status": "experimental",
+  "chains_deployed": 1,
+  "chain_primary": "1",
+  "network": "mainnet01",
+  "blockchain_hash": "TVW-AGUF6DP1V86xR7wGWcw5_kw3pa4T3W7QBKV1O-w",
+  "tx_hash": "",
+  "implements": [],
+  "dependencies": [
+    "coin"
+  ],
+  "description": "A peer-to-peer escrow module with a three-party reputation system (creator, buyer, arbiter). Implements a state-machine (open → funded → accepted → paid/disputed) with configurable timeout windows (T1/T2/T3). On-chain reputation tracking records totalTrades, successfulTrades, and dispute counts. SECURITY NOTE: governance capability is defined as (defcap GOVERNANCE () true), meaning no keyset guards module upgrades — any account can invoke governance. Review carefully before use in production.\n",
+  "maturity": "experimental",
+  "audit_status": "unaudited",
+  "census_rank": 10,
+  "census_calls": 1,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
 }
 ,
 {
@@ -36,7 +124,7 @@
       "email": "maintainers@pact.org"
     }
   ],
-  "audit_status": "in-review",
+  "audit_status": "self-reviewed",
   "tags": [
     "token",
     "fungible",
@@ -66,7 +154,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "coin",
     "kda",
@@ -94,7 +182,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "utility",
     "fungible",
@@ -120,7 +208,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "namespace",
     "governance",
@@ -141,7 +229,8 @@
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "noElac-ldWYHMLDINfZR6busoYrJ1K",
+  "blockchain_hash": "noElac-ldWYHMLDINfZR6busoYrJ1KQVtfpoD6RdEW4",
+  "tx_hash": "",
   "implements": [
     "fungible-v2",
     "fungible-xchain-v1"
@@ -161,6 +250,161 @@
 }
 ,
 {
+  "name": "n_f6aa9328b19b8bf7e788603bd669dcf549e07575.bro-dex-core-BRO-KDA-M",
+  "namespace": "n_f6aa9328b19b8bf7e788603bd669dcf549e07575",
+  "module": "bro-dex-core-BRO-KDA-M",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Brothers DAO",
+  "category": "dex",
+  "status": "production",
+  "chains_deployed": 1,
+  "chain_primary": "2",
+  "network": "mainnet01",
+  "blockchain_hash": "FLUb_895yIUDwt6pP_OCm3YTx3avLAH58YxtqFY7XuM",
+  "tx_hash": "",
+  "implements": [],
+  "dependencies": [
+    "free.util-lists",
+    "free.util-math",
+    "n_582fed11af00dc626812cd7890bb88e72067f28c.bro",
+    "coin"
+  ],
+  "source": {
+    "url": "https://github.com/brothers-DAO/bro-dex",
+    "license": "BUSL-1.1"
+  },
+  "description": "BRO DEX Core is the order-book DEX module for the BRO/KDA market pair from Brothers DAO. Licensed under BUSL-1.1. Implements a sorted limit-order-book using a balanced binary tree structure. Primary capabilities (MAKE-ORDER, TAKE-ORDER) emit @event for off-chain indexing. Dependencies include util-lists and util-math from free namespace.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_rank": 7,
+  "census_calls": 2,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
+}
+,
+{
+  "name": "n_582fed11af00dc626812cd7890bb88e72067f28c.bro",
+  "namespace": "n_582fed11af00dc626812cd7890bb88e72067f28c",
+  "module": "bro",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Brothers DAO",
+  "category": "governance-token",
+  "status": "production",
+  "chains_deployed": 1,
+  "chain_primary": "1",
+  "network": "mainnet01",
+  "blockchain_hash": "bKvdA4fjD_APL9i5GgQF90y5DovlBO-mCc0SSYXQEq0",
+  "tx_hash": "",
+  "implements": [
+    "fungible-v2",
+    "fungible-xchain-v1"
+  ],
+  "dependencies": [
+    "fungible-v2",
+    "fungible-xchain-v1",
+    "free.util-fungible",
+    "free.util-chain-data"
+  ],
+  "description": "BRO is the governance token of Brothers DAO, a decentralized exchange ecosystem on KDA-CE. Implements fungible-v2 and fungible-xchain-v1 for cross-chain transfers. Initial supply minted on chain 2 (SUPPLY-CHAIN). Used as the quote/base asset in the bro-dex order book. Multiple blessed hashes indicate active cross-chain history.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_rank": 8,
+  "census_calls": 1,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
+}
+,
+{
+  "name": "n_e98a056e3e14203e6ec18fada427334b21b667d8.chips-oracle",
+  "namespace": "n_e98a056e3e14203e6ec18fada427334b21b667d8",
+  "module": "chips-oracle",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Chips Protocol",
+  "category": "oracle",
+  "status": "production",
+  "chains_deployed": 1,
+  "chain_primary": "1",
+  "network": "mainnet01",
+  "blockchain_hash": "PqwHQY4HwbRPAiXxIDc-rtXy0smRabQzx85Q266g_jc",
+  "tx_hash": "",
+  "implements": [],
+  "dependencies": [
+    "coin"
+  ],
+  "description": "Chips Oracle is the price-feed companion to the Chips protocol. It stores decimal prices for NFT types and upgrade items, maintains price history keyed by coin and count, and restricts write access to the protocol admin and a designated Discord integration account. Required dependency for the chips module. Ranked #6 by function call frequency in the 90-day census.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_rank": 6,
+  "census_calls": 4,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
+}
+,
+{
+  "name": "n_e98a056e3e14203e6ec18fada427334b21b667d8.chips",
+  "namespace": "n_e98a056e3e14203e6ec18fada427334b21b667d8",
+  "module": "chips",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Chips Protocol",
+  "category": "defi-protocol",
+  "status": "production",
+  "chains_deployed": 1,
+  "chain_primary": "1",
+  "network": "mainnet01",
+  "blockchain_hash": "r_k91-_vsHSukibFwARo7uZPM7ENmgfU2ZPYifZrQsw",
+  "tx_hash": "",
+  "implements": [],
+  "dependencies": [
+    "fungible-v2",
+    "coin",
+    "n_e98a056e3e14203e6ec18fada427334b21b667d8.chips-oracle",
+    "chips-presale"
+  ],
+  "description": "Chips is a DeFi and gaming protocol on KDA-CE mainnet01. The module (1,549 lines) implements token locking/staking with configurable lock durations, early-withdraw penalties, multi-coin reward distribution (kWATT, external coins), order book mechanics, and presale integration. It depends on its own companion chips-oracle for NFT price feeds. Ranked #3 by function call frequency in the 90-day census.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_rank": 3,
+  "census_calls": 9,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
+}
+,
+{
+  "name": "n_e309f0fa7cf3a13f93a8da5325cdad32790d2070.heron",
+  "namespace": "n_e309f0fa7cf3a13f93a8da5325cdad32790d2070",
+  "module": "heron",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "Heron",
+  "category": "fungible-token",
+  "status": "production",
+  "chains_deployed": 1,
+  "chain_primary": "1",
+  "network": "mainnet01",
+  "blockchain_hash": "-mOSJ41JJMY5fXiq1dTWqnowgyRk-PlX0jf3ZqiMRD4",
+  "tx_hash": "",
+  "implements": [
+    "fungible-v2",
+    "fungible-xchain-v1"
+  ],
+  "dependencies": [
+    "fungible-v2",
+    "fungible-xchain-v1"
+  ],
+  "description": "Heron is a community utility token on KDA-CE, self-described as \"a fun community driven utility memecoin\". Despite its casual description, the module (524 lines) includes formal verification properties enforcing mass conservation and valid account length bounds, indicating production-quality engineering discipline. Implements full fungible-v2 + fungible-xchain-v1 with cross-chain transfer support.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_rank": 9,
+  "census_calls": 1,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
+}
+,
+{
   "name": "kaddex.kdx",
   "namespace": "kaddex",
   "module": "kdx",
@@ -171,7 +415,8 @@
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "UbAj2RYupaT-x4vrBv8VcSzY9VN7EV",
+  "blockchain_hash": "UbAj2RYupaT-x4vrBv8VcSzY9VN7EVe5yjLXiflqqds",
+  "tx_hash": "",
   "implements": [
     "fungible-v2",
     "fungible-xchain-v1",
@@ -205,7 +450,8 @@
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "wZIoPnkgwaXYenTfUTYP",
+  "blockchain_hash": "wZIoPnkgwaXYenTfUTYPIrpO_Qem6HyYT2c040p3ukM",
+  "tx_hash": "",
   "implements": [
     "gas-payer-v1"
   ],
@@ -223,17 +469,73 @@
 }
 ,
 {
+  "name": "kdlaunch.kdswap-exchange",
+  "namespace": "kdlaunch",
+  "module": "kdswap-exchange",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "KDLaunch / KDSwap",
+  "category": "dex",
+  "status": "production",
+  "chains_deployed": 1,
+  "chain_primary": "1",
+  "network": "mainnet01",
+  "blockchain_hash": "EvTCHQ5GOQGBPoAnOP50Dwp3Y19zqwEiJ3aqmObTsLs",
+  "tx_hash": "",
+  "implements": [],
+  "dependencies": [
+    "fungible-v2",
+    "coin"
+  ],
+  "description": "KDSwap Exchange is the AMM (Automated Market Maker) DEX module from KDLaunch. Implements constant-product swap mechanics (swap-exact-in, swap-exact-out, add-liquidity, remove-liquidity) with on-chain formal verification properties ensuring reserve conservation and guarded pair writes. The module uses a deterministic pair-key scheme and tracks reserves per liquidity pair. Ranked #5 by function call frequency in the 90-day census.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_rank": 5,
+  "census_calls": 3,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
+}
+,
+{
+  "name": "n_40c883decc192e1e3214898f04656b2e9ea7b74e.kia-oracle",
+  "namespace": "n_40c883decc192e1e3214898f04656b2e9ea7b74e",
+  "module": "kia-oracle",
+  "version": "1.0",
+  "layer": "ecosystem",
+  "project": "KIA Oracle",
+  "category": "oracle",
+  "status": "production",
+  "chains_deployed": 1,
+  "chain_primary": "1",
+  "network": "mainnet01",
+  "blockchain_hash": "_CX5irSxr1MKCQzlEdRO9qQghNnBe36F-J2QdHjMZeA",
+  "tx_hash": "",
+  "implements": [],
+  "dependencies": [
+    "free.util-time"
+  ],
+  "description": "KIA Oracle is a key/value price oracle deployed on KDA-CE mainnet01. It supports multiple data-point updates in a single transaction (batch writes), storing timestamped decimal values for arbitrary keys. Access is controlled by two keysets: ADMIN (full governance) and REPORT (write-only data push). Ranked #1 by function call frequency in the 90-day census of mainnet01 activity.\n",
+  "maturity": "stable",
+  "audit_status": "community-reviewed",
+  "census_rank": 1,
+  "census_calls": 30,
+  "census_date": "2026-03",
+  "census_methodology": "block-payload-sampling (stride=1000, 90 days, 20 chains)"
+}
+,
+{
   "name": "lago.USD2",
   "namespace": "lago",
   "module": "USD2",
   "version": "1.0",
   "layer": "ecosystem",
   "project": "Lago Bridge",
-  "category": "stablecoin",
+  "category": "governance-shell",
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "gx8dwzIfbuiqHtZ9km0W",
+  "blockchain_hash": "gx8dwzIfbuiqHtZ9km0W0bp1p7zAPYmrxfBmO7696S0",
+  "tx_hash": "",
   "implements": [],
   "dependencies": [
     "lago.fungible-burn-mint"
@@ -242,7 +544,7 @@
     "url": "https://github.com/Lago-defi",
     "license": "unknown"
   },
-  "description": "USD2 is Lago's native USD-pegged stablecoin on Kadena. Unlike kwUSDC which wraps an external asset, USD2 is Lago's own stablecoin issued directly for KDA DeFi use. Deployed on all 20 chains.\n",
+  "description": "lago.USD2 is a namespace reservation shell deployed on all 20 chains. Contains only a GOVERNANCE capability enforcing lago-ns-user. On chain 1 a companion lago.USD2-wrapper module also exists as a governance shell (MINTER-ADMIN cap). No stablecoin functionality is currently deployed.\n",
   "maturity": "stable",
   "audit_status": "unaudited",
   "census_date": "2025-01"
@@ -255,11 +557,12 @@
   "version": "1.0",
   "layer": "ecosystem",
   "project": "Lago Bridge",
-  "category": "wrapped-asset",
+  "category": "governance-shell",
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "eMK6d8w17TqILbIYcbvh",
+  "blockchain_hash": "eMK6d8w17TqILbIYcbvhOWsMX49r5W5jqHdpRCLsDJY",
+  "tx_hash": "",
   "implements": [],
   "dependencies": [
     "lago.fungible-burn-mint"
@@ -268,7 +571,7 @@
     "url": "https://github.com/Lago-defi",
     "license": "unknown"
   },
-  "description": "kwBTC is Lago's wrapped Bitcoin token on Kadena, bridged from Bitcoin via the Lago cross-chain bridge. Deployed on all 20 chains, it enables BTC liquidity in the KDA DeFi ecosystem. Supply is managed by the Lago bridge protocol using the fungible-burn-mint pattern.\n",
+  "description": "lago.kwBTC is a namespace reservation shell deployed on all 20 chains. It contains only a GOVERNANCE capability enforcing the lago-ns-user keyset, with no fungible token logic. Companion interface lago.fungible-burn-mint defines mint/burn signatures. The lago.bridge module (chain 1 only) is also a governance shell. All lago modules are name reservations pending future token deployment.\n",
   "maturity": "stable",
   "audit_status": "unaudited",
   "census_date": "2025-01"
@@ -281,11 +584,12 @@
   "version": "1.0",
   "layer": "ecosystem",
   "project": "Lago Bridge",
-  "category": "wrapped-asset",
+  "category": "governance-shell",
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "ZYJ-acaoNxTNtgiShBi7",
+  "blockchain_hash": "ZYJ-acaoNxTNtgiShBi7q-OakMCdQkKFJLwGtLjEtSQ",
+  "tx_hash": "",
   "implements": [],
   "dependencies": [
     "lago.fungible-burn-mint"
@@ -294,7 +598,7 @@
     "url": "https://github.com/Lago-defi",
     "license": "unknown"
   },
-  "description": "kwUSDC is Lago's wrapped USD Coin on Kadena. Each kwUSDC is backed 1:1 by USDC held by the Lago bridge. Deployed on all 20 chains, it brings a major stablecoin to KDA DeFi protocols.\n",
+  "description": "lago.kwUSDC is a namespace reservation shell deployed on all 20 chains. It contains only a GOVERNANCE capability enforcing the lago-ns-user keyset, with no fungible token logic. Identical pattern to lago.kwBTC and lago.USD2 — reserves the module name under Lago team control.\n",
   "maturity": "stable",
   "audit_status": "unaudited",
   "census_date": "2025-01"
@@ -311,7 +615,8 @@
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "CRTIH0nyjQlEfqWNtptm",
+  "blockchain_hash": "CRTIH0nyjQlEfqWNtptmDT4p1XFMh6pRvVqdFbq2HKg",
+  "tx_hash": "5mv3aylv-6wU78uvKs1c1yvyzOFZIAoAM5qIypP99Qg",
   "implements": [
     "marmalade-v2.sale-v2"
   ],
@@ -341,7 +646,8 @@
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "tXavhdiFeIFFPHklwz2A",
+  "blockchain_hash": "tXavhdiFeIFFPHklwz2AaxYzodtmcKL3V_cVFYqynPI",
+  "tx_hash": "M09AhpncRnGPWBuSfDLOtLJGz73QUKnjj7R39yPPtE8",
   "implements": [
     "marmalade-v2.sale-v2"
   ],
@@ -371,7 +677,8 @@
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "C5-h2VEfldax1-BsXfR5",
+  "blockchain_hash": "C5-h2VEfldax1-BsXfR576rWPzPOXZqOqJc0fLnRE5I",
+  "tx_hash": "",
   "implements": [
     "fungible-v2",
     "fungible-xchain-v1"
@@ -401,7 +708,8 @@
   "status": "production",
   "chains_deployed": 20,
   "network": "mainnet01",
-  "blockchain_hash": "zV-EMOLy3olqMfwO9Ck9",
+  "blockchain_hash": "zV-EMOLy3olqMfwO9Ck951ER4o_cCuTD9mBBfI05D9c",
+  "tx_hash": "",
   "implements": [
     "fungible-v2"
   ],
@@ -434,7 +742,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "interface",
     "fungible",
@@ -462,7 +770,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "interface",
     "fungible",
@@ -490,7 +798,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "interface",
     "gas",
@@ -517,7 +825,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "nft",
     "kip",
@@ -544,7 +852,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "interface",
     "nft",
@@ -571,7 +879,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "nft",
     "marmalade",
@@ -598,7 +906,7 @@
       "email": ""
     }
   ],
-  "audit_status": "audited",
+  "audit_status": "reference",
   "tags": [
     "nft",
     "marmalade",

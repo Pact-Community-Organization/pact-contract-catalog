@@ -4,10 +4,10 @@ Thank you for your interest in contributing to the Pact Contract Catalog! This r
 
 ## How to Contribute
 
-1. **Submit New Contracts**: Add reusable Pact contracts to the `contracts/` directory. See [docs/onboarding.md](docs/onboarding.md) for detailed instructions.
-2. **Improve Metadata**: Update or add metadata files in the `metadata/` directory.
+1. **Submit New Contracts**: Add reusable Pact contracts to the `contracts/` directory. See [docs/ONBOARDING.md](docs/ONBOARDING.md) for detailed instructions.
+2. **Improve Metadata**: Update or add the `metadata.yaml` file co-located with each contract in `contracts/<layer>/<slug>/`.
 3. **Enhance Documentation**: Improve usage guides and examples in the `docs/` directory.
-4. **Report Issues**: Found a bug or have a suggestion? Open an issue in this repository.
+4. **Report Issues**: Found a bug or have a suggestion? Open an issue in this repository. For security issues, follow [SECURITY.md](SECURITY.md).
 
 ## Contribution Guidelines
 
@@ -15,7 +15,7 @@ Thank you for your interest in contributing to the Pact Contract Catalog! This r
 - Ensure your contracts pass all linting and testing checks.
 - Include metadata files for new contracts.
 - Write clear commit messages and PR descriptions.
-- Comply with [policies/contract-policies.md](policies/contract-policies.md).
+- Comply with [docs/CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md).
 
 ## Development Workflow
 

@@ -7,11 +7,18 @@ on:
     branches: [ main, master ]
 
 jobs:
-  validate-pact:
+  validate-catalog:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install yq
+      run: |
+        sudo wget -qO /usr/local/bin/yq \
+          https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+        yq --version
 
     - name: Install Pact CLI (kda-community pact-5)
       run: |
@@ -26,43 +33,57 @@ jobs:
         sudo chmod +x /usr/local/bin/pact
         pact --version
 
-    - name: Validate metadata files exist
+    - name: Validate every contract entry (BLOCKING)
+      # Runs scripts/validate_contract.sh on each contract directory.
+      # Enforces metadata schema, the audit_status ladder, and required docs.
+      # Any VIOLATION fails the build.
       run: |
-        echo "Checking all contract directories have required files..."
+        chmod +x scripts/validate_contract.sh
         fail=0
         for dir in $(find contracts -name "metadata.yaml" -exec dirname {} \;); do
-          if [ ! -f "$dir/README.md" ]; then
-            echo "MISSING README.md in $dir"
-            fail=1
-          fi
-          if [ ! -f "$dir/AUDIT.md" ]; then
-            echo "MISSING AUDIT.md in $dir"
+          if ! bash scripts/validate_contract.sh "$dir"; then
             fail=1
           fi
         done
-        if [ "$fail" -eq 1 ]; then exit 1; fi
-        echo "All contract directories have required documentation files."
+        if [ "$fail" -eq 1 ]; then
+          echo "::error::One or more contract entries failed validation."
+          exit 1
+        fi
+        echo "All contract entries passed validation."
+
+    - name: Index is up to date
+      # The generated index must match committed docs/index.{md,json}.
+      # Regenerate and fail if the working tree changes.
+      run: |
+        chmod +x scripts/generate_index.sh
+        ./scripts/generate_index.sh
+        if ! git diff --quiet -- docs/index.md docs/index.json; then
+          echo "::error::docs/index.md or docs/index.json is stale. Run scripts/generate_index.sh and commit the result."
+          git diff -- docs/index.md docs/index.json | head -60
+          exit 1
+        fi
+        echo "Contract index is up to date."
 
     - name: Lint community Pact contracts
       # Only lint community/ — ecosystem/kip/core/marmalade are reference
       # artifacts from the chain or upstream; they have external dependencies
       # that require a full network context to resolve.
-      # continue-on-error: syntax errors are reported but don't block PRs
-      # (blocking is done by the metadata validation step above).
+      # Non-blocking: syntax findings are reported but do not fail the build
+      # (blocking validation is done by the validate step above).
       continue-on-error: true
       run: |
         echo "Linting community/ contracts..."
-        find contracts/community -name "*.pact" | while read f; do
+        find contracts/community -name "*.pact" | while read -r f; do
           echo "  pact $f"
           pact "$f" 2>&1 || true
         done
         echo "Lint complete."
 
-    - name: Validate contract count
+    - name: Report catalog counts
       run: |
         total=$(find contracts -name "*.pact" | wc -l)
-        echo "Total .pact files in catalog: $total"
         community=$(find contracts/community -name "*.pact" | wc -l)
-        echo "Community contracts: $community"
         ecosystem=$(find contracts/ecosystem -name "*.pact" | wc -l)
-        echo "Ecosystem contracts (on-chain reference): $ecosystem"
+        echo "Total .pact files:      $total"
+        echo "Community contracts:    $community"
+        echo "Ecosystem (reference):  $ecosystem"
