@@ -32,6 +32,43 @@ Thank you for your interest in contributing to the Pact Contract Catalog! This r
 - Feedback will be provided, and changes may be requested.
 - Once approved, your PR will be merged.
 
+## Reviewing a Library Template
+
+Reviewing an existing template is the highest-leverage contribution this
+catalog accepts: a qualifying independent review promotes an entry from
+`self-reviewed` to `community-reviewed` on the
+[audit-status ladder](docs/CONTRACT_POLICIES.md) (§3.1), which is exactly the
+signal enterprise evaluators look for.
+
+**Who qualifies.** Anyone who did not author the template and has working Pact
+security knowledge. Disclose any affiliation in the review record.
+
+**What a qualifying review is.** Not a rubber stamp — a documented adversarial
+pass:
+
+1. Read the template cold: `<slug>.pact`, its `README.md`, and its `AUDIT.md`
+   (which lists the attacks already tried, so you don't repeat them — try new
+   ones).
+2. Run the co-located suite and write at least a few probes of your own
+   against the entry's stated security claims (each `AUDIT.md` has a threat
+   model table — attack it).
+3. Check the KDA-CE trap classes the suite cannot prove, at minimum: table
+   reads inside `enforce` conditions, capability acquisition paths for every
+   weak-body cap, and managed-cap argument exactness on any externally
+   invoked capability.
+4. Write up findings with severity and reproduction. "No findings" is a valid
+   result if the work behind it is shown.
+
+**How to submit.** Open a PR that (a) appends your review record to the
+entry's `AUDIT.md` — reviewer name/handle, date, scope, findings and their
+dispositions — and (b) flips `audit_status` to `community-reviewed` in its
+`metadata.yaml` once all findings at MEDIUM or above are resolved. Maintainers
+verify the review meets the evidence bar in
+[CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md) §3.1 before merging.
+
+If you find a vulnerability with live-deployment impact, follow
+[SECURITY.md](SECURITY.md) instead of opening a public PR.
+
 ## Thank You
 
 Your contributions help make the Pact ecosystem stronger and more accessible for everyone!

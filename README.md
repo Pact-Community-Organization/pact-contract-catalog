@@ -1,53 +1,64 @@
 # Pact Contract Catalog
 
-Welcome to the Pact Contract Catalog, the central repository for reusable, trusted Pact smart contracts. This repository is maintained by the Pact Community Organization (PCO) to ensure the safety, quality, and accessibility of Pact contracts.
+Reusable, trusted Pact smart contracts, maintained by the Pact Community Organization (PCO) in service of one mission: **make it easy and safe for businesses to start building with smart contracts.**
 
-## Mission Alignment
+The catalog ships two clearly separated products (see [ADR-001](docs/adr/ADR-001-registry-library-split.md)):
 
-In alignment with the PCO mission to "Make it easy and safe for businesses to start building with smart contracts," the catalog ships two clearly separated products (see [ADR-001](docs/adr/ADR-001-registry-library-split.md)):
+- **[`contracts/library/`](contracts/library/) — the Library**: PCO-authored, deployable templates. Start here.
+- **[`contracts/registry/`](contracts/registry/) — the Registry**: an observatory of contracts that already exist on-chain, catalogued verbatim for reference.
 
-- **[`contracts/library/`](contracts/library/) — the Library.** PCO-authored, deployable contract templates. This is where you start a project: copy a template, adapt it, deploy it. Every library entry ships with a co-located REPL test suite and a documented audit record at `self-reviewed` or better.
-- **[`contracts/registry/`](contracts/registry/) — the Registry.** An observatory of contracts that already exist: the KIP standard interfaces, the pre-deployed chain infrastructure, the Marmalade NFT framework, and census-selected third-party mainnet modules. Read-only reference for integration, education, and due diligence — these are verbatim snapshots, not starting points.
+## The Library
 
-## Repository Structure
+Eight production-grade templates covering the foundations most projects need. Every one shipped through the same three gates: a **blocking CI test suite**, a **static-analysis pass**, and an **independent adversarial security review** whose findings and fixes are documented in the entry's `AUDIT.md` — including the attacks that were tried and defeated.
 
-- `contracts/library/` — deployable templates (the product). Strict quality gate.
-- `contracts/registry/` — observed contracts, grouped by dependency layer (`kip/`, `core/`, `marmalade/`, `ecosystem/`, `community/`). See [ARCHITECTURE.md](ARCHITECTURE.md) for the layer model and dependency graph.
-- `docs/` — documentation, the generated [contract index](docs/index.md), [onboarding](docs/ONBOARDING.md), [contract policies](docs/CONTRACT_POLICIES.md), and [ADRs](docs/adr/).
-- `scripts/` — validation and index-generation tooling.
+| Template | What it is |
+|---|---|
+| [token-fungible](contracts/library/token-fungible/) | A hardened `fungible-v2` + `fungible-xchain-v1` token: coin-pattern guard enforcement, governed mint, reserved-name protection, cross-chain step semantics. |
+| [gas-station](contracts/library/gas-station/) | Drain-defended gas sponsorship: bounds and accounting against *actual* chain gas (never signer-supplied values), per-user on-chain allowlist. |
+| [multisig-treasury](contracts/library/multisig-treasury/) | M-of-N treasury: KDA in a capability-guarded vault, asynchronous propose/approve/execute, rotation that revokes stale approvals. |
+| [vesting](contracts/library/vesting/) | Cliff + linear vesting, escrowed upfront: the beneficiary never depends on the funder's solvency; revoke returns only the unvested part; governance has zero fund paths. |
+| [dao-voting](contracts/library/dao-voting/) | Membership voting with quorum + threshold: per-proposal snapshot of the passage bar, rotation revokes a compromised member's in-flight votes. Pairs with the treasury. |
+| [nft-collection-policy](contracts/library/nft-collection-policy/) | A marmalade-v2 concrete policy: creator-gated collections with size caps and a strict one-of-one NFT invariant, tested against the real marmalade ledger. |
+| [oracle-feed](contracts/library/oracle-feed/) | Median data/price feed with fail-closed consumption: chain-assigned timestamps, staleness windows, publisher rotation as instant revocation, plus a worked consumer pattern. |
+| [hello-world](contracts/library/hello-world/) | The minimal starter: module shape, governance, a real test suite. |
 
-## Starting a Project (Library)
+All entries currently carry `audit_status: self-reviewed` — a defined claim, not a vibe: see the [audit-status ladder](docs/CONTRACT_POLICIES.md) (§3.1) for exactly what each level means and what evidence it requires. Nothing in this catalog calls itself "audited" without naming who audited it.
 
-1. Browse [`contracts/library/`](contracts/library/) or the [contract index](docs/index.md).
-2. Copy the template directory into your project and adapt it (namespace, keysets, business rules).
-3. Run its co-located `.repl` test suite (see Testing below) and extend the tests for your changes.
-4. Review the entry's `AUDIT.md` for known considerations before deploying.
+### Starting a project
 
-## Testing Contracts
+1. Browse the table above or the generated [contract index](docs/index.md).
+2. Copy the template directory into your project; adapt the namespace, keysets, and business rules.
+3. Read the entry's `README.md` (usage, deployment checklist, known limits) and `AUDIT.md` (threat model, findings history) — they are short and written to be read.
+4. Run and extend the co-located test suite (below).
+5. **Validate on devnet before mainnet.** Every entry's README says this because it is load-bearing: one class of KDA-CE bug (table reads inside `enforce` conditions) is invisible in the REPL. The templates are written to the node-safe pattern, but your adaptations need the same proof.
 
-To test Pact contracts locally, use a Pact REPL environment:
+### Testing
 
-1. Go to the repository: https://github.com/CryptoPascal31/kadena_repl_sandbox
-2. Follow the instructions in its README to set up the local REPL environment.
-3. Clone the sandbox repository and use it to run `.repl` test files from this catalog.
+Library test suites are **self-contained** — they load their dependencies (coin, kip interfaces, marmalade) from this repo's registry tree. With a [Pact 5 binary](https://github.com/kadena-io/pact-5) on your PATH:
 
-For example, to test the hello-world template:
-- Navigate to `contracts/library/hello-world/`
-- Run the test using the sandbox environment as per the kadena_repl_sandbox instructions.
+```bash
+cd contracts/library/multisig-treasury/examples
+pact treasury-test.repl
+```
 
-This ensures contracts are tested in a proper Pact environment before submission.
+CI runs every library suite as a blocking check on every PR, plus the catalog validator and an index-freshness gate.
 
-## Contributing a Contract
+## The Registry
 
-- **Library templates** (deployable, PCO-reviewed): follow [docs/ONBOARDING.md](docs/ONBOARDING.md). Library entries must pass the quality gate: schema-A metadata, co-located `.repl` tests, `AUDIT.md` at `self-reviewed` or better.
-- **Registry entries** (observed on-chain modules): require deployment evidence (module hash, `describe-module` output, or block-explorer link) matching the census methodology in [contracts/registry/ecosystem/README.md](contracts/registry/ecosystem/README.md).
+[`contracts/registry/`](contracts/registry/) catalogues contracts that already exist, grouped by dependency layer: `kip/` (standard interfaces), `core/` (pre-deployed chain infrastructure), `marmalade/` (the NFT framework), `ecosystem/` (census-selected third-party mainnet modules), and `community/`. These are **verbatim snapshots** — read-only reference for integration, education, and due diligence, not starting points. See [ARCHITECTURE.md](ARCHITECTURE.md) for the layer model and the census methodology.
+
+## Contributing
+
+- **Library templates** (deployable, PCO-reviewed): follow [docs/ONBOARDING.md](docs/ONBOARDING.md). The quality gate requires schema-A metadata, a co-located `.repl` suite, a `README.md`, and an `AUDIT.md` at `self-reviewed` or better.
+- **Registry entries** (observed on-chain modules): require deployment evidence (module hash, `describe-module` output, or block-explorer link) matching the census methodology.
+- **Reviews**: the fastest way to raise the whole catalog's trust level is to review an existing template — see "Reviewing a library template" in [CONTRIBUTING.md](CONTRIBUTING.md). A qualifying independent review promotes an entry to `community-reviewed`.
 
 All submissions run the CI validation gate (`scripts/validate_contract.sh`). See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 
 ## Governance
 
-This repository follows the governance model defined in the [PCO Foundation](https://github.com/Pact-Community-Organization/foundation). For contract-specific policies, see [docs/CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md). Architecture decisions are recorded in [docs/adr/](docs/adr/). Security disclosures: [SECURITY.md](SECURITY.md).
+This repository follows the governance model defined in the [PCO Foundation](https://github.com/Pact-Community-Organization/foundation). Contract policies: [docs/CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md). Architecture decisions: [docs/adr/](docs/adr/). Security disclosures: [SECURITY.md](SECURITY.md).
 
 ## License
 
-This repository is licensed under the Apache-2.0 License. See the [LICENSE](LICENSE) file for details.
+Apache-2.0 — see [LICENSE](LICENSE).
