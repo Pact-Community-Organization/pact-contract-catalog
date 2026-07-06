@@ -15,6 +15,7 @@ _Generated from `contracts/**/metadata.yaml`._
 | Multisig Treasury (M-of-N) | multisig-treasury | 1.0.0 | self-reviewed | treasury, multisig, governance, template, library |
 | NFT Collection Policy (marmalade-v2) | nft-collection-policy | 1.0.0 | self-reviewed | nft, marmalade, collection, token-policy, template, library |
 | Oracle Feed (median, staleness-guarded) | oracle-feed | 1.0.0 | self-reviewed | oracle, price-feed, median, template, library |
+| Property Lease (rental rails) | property-lease | 1.0.0 | self-reviewed | lease, rental, escrow, revenue-split, template, library |
 | Token (fungible-v2 + fungible-xchain-v1) | token-fungible | 0.2.0 | self-reviewed | token, fungible, template, library |
 | Token Vesting (cliff + linear) | vesting | 1.0.0 | self-reviewed | vesting, escrow, timelock, template, library |
 

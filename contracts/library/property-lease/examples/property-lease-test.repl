@@ -1,0 +1,561 @@
+;; property-lease-test.repl — PCO library template test suite
+;;
+;; Self-contained: loads coin + interfaces from this repo's registry tree.
+;;
+;; Scenarios: property registration, mutual-assent lease signing, deposit
+;; escrow gating rent, on-time + late rent with exact bucket splits, guarded
+;; and permissionless withdrawals, rounding-dust conservation (33.33%x3),
+;; notice/renewal bounds, and the deposit claim + settlement lifecycle.
+;; Every expect-failure that could mutate state sits in its own rolled-back tx.
+;; Conservation (vault = Sum buckets + Sum deposits held) is asserted to 12dp.
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+
+;; --- coin environment (root namespace) ---
+(begin-tx "load coin")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- fund actors (test-capability CREDIT, the catalog's funding pattern) ---
+(begin-tx "fund actors")
+(env-data
+  { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "tenant-ks":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"],   "pred": "keys-all" }
+  , "rando-ks":    { "keys": ["rando-key"],    "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(coin.credit "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks) 10000.0)
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'tenant-ks) 10000.0)
+(test-capability (coin.CREDIT "rando-acct"))
+(coin.credit "rando-acct" (read-keyset 'rando-ks) 1000.0)
+(commit-tx)
+
+;; --- namespace + module ---
+(begin-tx "load property-lease")
+(env-data { "gov-ks": { "keys": ["admin-key"], "pred": "keys-all" } })
+(env-keys ["admin-key"])
+(define-namespace "free" (read-keyset 'gov-ks) (read-keyset 'gov-ks))
+(namespace "free")
+(define-keyset "free.property-lease-gov" (read-keyset 'gov-ks))
+(load "../property-lease.pact")
+(commit-tx)
+
+;; ===========================================================================
+;; 1. Property registration
+;; ===========================================================================
+(begin-tx "register casa-verde: 8% tax / 7% repairs / 5% beneficiary")
+(env-data
+  { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "benef-ks":    { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"],    "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(free.property-lease.register-property "casa-verde"
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks)
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'benef-ks)
+  "hash-of-premises-record-casa-verde"
+  800 700 500)
+(expect "splits stored" 800 (at 'tax-bps (free.property-lease.get-property "casa-verde")))
+(commit-tx)
+
+(begin-tx "REJECT duplicate property id")
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+          , "benef-ks": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect-failure "duplicate id rejected" "Value already found while in Insert mode"
+  (free.property-lease.register-property "casa-verde"
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks)
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'benef-ks) "x" 0 0 0))
+(rollback-tx)
+
+(begin-tx "REJECT splits over 100%")
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+          , "benef-ks": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect-failure "bps sum > 10000 rejected" "splits exceed 100%"
+  (free.property-lease.register-property "over-prop"
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks)
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'benef-ks) "x" 5000 4000 2000))
+(rollback-tx)
+
+(begin-tx "REJECT registration without the landlord's signature")
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+          , "benef-ks": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "rando-key", "caps": [] } ])
+(expect-failure "unsigned registration rejected" "Keyset failure"
+  (free.property-lease.register-property "stolen-prop"
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks)
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'benef-ks) "x" 100 100 100))
+(rollback-tx)
+
+;; N1 regression: payout destinations must be PRINCIPAL accounts. A vanity
+;; name could be squatted with a foreign guard, and coin.transfer-create would
+;; then abort every payout to it - permanently locking the deposit/bucket.
+(begin-tx "REJECT vanity (non-principal) landlord/beneficiary payout account")
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+          , "benef-ks": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect-failure "vanity landlord rejected (N1)" "landlord must be a principal account"
+  (free.property-lease.register-property "vanity-prop"
+    "landlord-vanity" (read-keyset 'landlord-ks)
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'benef-ks)
+    "x" 0 0 0))
+(expect-failure "vanity beneficiary rejected (N1)" "beneficiary must be a principal account"
+  (free.property-lease.register-property "vanity-prop"
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks)
+    "revenue-vanity" (read-keyset 'benef-ks)
+    "x" 0 0 0))
+(rollback-tx)
+
+;; ===========================================================================
+;; 2. Lease signing = mutual assent (both guards in one tx), scoped sigs
+;; ===========================================================================
+(begin-tx "sign LSE-1: 1000/30d, grace 5d, late fee 25, deposit 1500")
+(env-data { "tenant-ks": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222",   "caps": [] } ])
+(free.property-lease.create-lease "LSE-1" "casa-verde"
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'tenant-ks)
+  (hash "signed-lease-document-LSE-1-v1")
+  1000.0 30 5 25.0
+  1500.0
+  (time "2026-01-01T00:00:00Z") (time "2026-07-01T00:00:00Z")
+  30 14)
+(expect "paid-through initialized to start"
+  (time "2026-01-01T00:00:00Z") (at 'paid-through (free.property-lease.get-lease "LSE-1")))
+(expect "state awaits deposit" "AWAITING-DEPOSIT" (free.property-lease.lease-state "LSE-1"))
+(commit-tx)
+
+(begin-tx "REJECT lease with tenant signature only")
+(env-data { "tenant-ks": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect-failure "landlord must co-sign" "Keyset failure"
+  (free.property-lease.create-lease "LSE-X" "casa-verde" "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'tenant-ks)
+    "h" 1000.0 30 5 25.0 0.0
+    (time "2026-01-01T00:00:00Z") (time "2026-07-01T00:00:00Z") 30 14))
+(rollback-tx)
+
+(begin-tx "REJECT vanity (non-principal) tenant payout account (N1)")
+(env-data { "tenant-ks": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect-failure "vanity tenant rejected (bricks deposit refund)" "tenant must be a principal account"
+  (free.property-lease.create-lease "LSE-X" "casa-verde" "tenant-vanity" (read-keyset 'tenant-ks)
+    "h" 1000.0 30 5 25.0 0.0
+    (time "2026-01-01T00:00:00Z") (time "2026-07-01T00:00:00Z") 30 14))
+(rollback-tx)
+
+(begin-tx "REJECT start >= end")
+(env-data { "tenant-ks": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect-failure "degenerate term rejected" "start must precede end"
+  (free.property-lease.create-lease "LSE-X" "casa-verde" "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'tenant-ks)
+    "h" 1000.0 30 5 25.0 0.0
+    (time "2026-07-01T00:00:00Z") (time "2026-07-01T00:00:00Z") 30 14))
+(rollback-tx)
+
+(begin-tx "REJECT over-precise rent (13 decimals)")
+(env-data { "tenant-ks": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect-failure "precision > 12 rejected" "rent must be positive with precision <= 12"
+  (free.property-lease.create-lease "LSE-X" "casa-verde" "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'tenant-ks)
+    "h" 0.0000000000005 30 5 25.0 0.0
+    (time "2026-01-01T00:00:00Z") (time "2026-07-01T00:00:00Z") 30 14))
+(rollback-tx)
+
+(begin-tx "REJECT far-future end (add-time overflow guard)")
+(env-data { "tenant-ks": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect-failure "end past 2200 rejected" "end out of bounds"
+  (free.property-lease.create-lease "LSE-X" "casa-verde" "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'tenant-ks)
+    "h" 1000.0 30 5 25.0 0.0
+    (time "2026-01-01T00:00:00Z") (time "2300-01-01T00:00:00Z") 30 14))
+(rollback-tx)
+
+;; ===========================================================================
+;; 3. Deposit escrow gates rent
+;; ===========================================================================
+(begin-tx "REJECT rent before the deposit is escrowed")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222" free.property-lease.VAULT-ACCOUNT 1000.0)] } ])
+(expect-failure "deposit gate" "security deposit must be fully escrowed before rent"
+  (free.property-lease.pay-rent "LSE-1" "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(rollback-tx)
+
+(begin-tx "escrow the 1500 deposit")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222" free.property-lease.VAULT-ACCOUNT 1500.0)] } ])
+(free.property-lease.pay-deposit "LSE-1" "k:2222222222222222222222222222222222222222222222222222222222222222")
+(expect "deposit held" 1500.0 (at 'deposit-held (free.property-lease.get-lease "LSE-1")))
+(expect "vault holds the deposit" 1500.0 (coin.get-balance free.property-lease.VAULT-ACCOUNT))
+(expect "state now active" "ACTIVE" (free.property-lease.lease-state "LSE-1"))
+(commit-tx)
+
+(begin-tx "REJECT double deposit")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222" free.property-lease.VAULT-ACCOUNT 1500.0)] } ])
+(expect-failure "no second escrow" "deposit already fully escrowed"
+  (free.property-lease.pay-deposit "LSE-1" "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(rollback-tx)
+
+;; ===========================================================================
+;; 4. On-time rent: exact 8/7/5/80 split
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-03T00:00:00Z") })
+(env-events true) ; clear the event log
+(begin-tx "pay period 1 on time")
+(expect "due = plain rent, not late" 1000.0 (at 'amount (free.property-lease.rent-due "LSE-1")))
+(expect "not late" false (at 'late (free.property-lease.rent-due "LSE-1")))
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222" free.property-lease.VAULT-ACCOUNT 1000.0)] } ])
+(free.property-lease.pay-rent "LSE-1" "k:2222222222222222222222222222222222222222222222222222222222222222")
+(expect "TAX bucket 8%" 80.0 (free.property-lease.bucket-balance "casa-verde" "TAX"))
+(expect "REPAIRS bucket 7%" 70.0 (free.property-lease.bucket-balance "casa-verde" "REPAIRS"))
+(expect "BENEFICIARY bucket 5%" 50.0 (free.property-lease.bucket-balance "casa-verde" "BENEFICIARY"))
+(expect "LANDLORD residual 80%" 800.0 (free.property-lease.bucket-balance "casa-verde" "LANDLORD"))
+(expect "vault = deposit + rent" 2500.0 (coin.get-balance free.property-lease.VAULT-ACCOUNT))
+(expect "paid-through advanced 30d"
+  (time "2026-01-31T00:00:00Z") (at 'paid-through (free.property-lease.get-lease "LSE-1")))
+(expect "exactly one RENT-PAID event" 1
+  (length (filter (lambda (ev) (= "free.property-lease.RENT-PAID" (at 'name ev)))
+                  (env-events true))))
+(commit-tx)
+
+;; ===========================================================================
+;; 5. Late rent: past grace (due 2026-01-31 + 5d) => +25 fee to landlord
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-02-10T00:00:00Z") })
+(begin-tx "pay period 2 late")
+(expect "due includes late fee" 1025.0 (at 'amount (free.property-lease.rent-due "LSE-1")))
+(expect "flagged late" true (at 'late (free.property-lease.rent-due "LSE-1")))
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222" free.property-lease.VAULT-ACCOUNT 1025.0)] } ])
+(free.property-lease.pay-rent "LSE-1" "k:2222222222222222222222222222222222222222222222222222222222222222")
+(expect "TAX 160" 160.0 (free.property-lease.bucket-balance "casa-verde" "TAX"))
+(expect "REPAIRS 140" 140.0 (free.property-lease.bucket-balance "casa-verde" "REPAIRS"))
+(expect "BENEFICIARY 100" 100.0 (free.property-lease.bucket-balance "casa-verde" "BENEFICIARY"))
+(expect "LANDLORD 1600 + 25 fee" 1625.0 (free.property-lease.bucket-balance "casa-verde" "LANDLORD"))
+(expect "vault 3525" 3525.0 (coin.get-balance free.property-lease.VAULT-ACCOUNT))
+(commit-tx)
+
+;; ===========================================================================
+;; 6. Withdrawals (landlord scopes LANDLORD)
+;; ===========================================================================
+(begin-tx "landlord withdraws 100 TAX to the tax authority")
+(env-data { "taxman-ks": { "keys": ["taxman-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(free.property-lease.withdraw-bucket "casa-verde" "TAX" 100.0
+  "tax-authority-acct" (read-keyset 'taxman-ks) "2026 property tax prepayment")
+(expect "TAX bucket debited" 60.0 (free.property-lease.bucket-balance "casa-verde" "TAX"))
+(expect "tax authority paid" 100.0 (coin.get-balance "tax-authority-acct"))
+(commit-tx)
+
+(begin-tx "scoped signature does not authorize a DIFFERENT property")
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+          , "benef-ks": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(free.property-lease.register-property "casa-azul"
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks)
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'benef-ks) "second property" 0 0 0)
+(commit-tx)
+
+(begin-tx "REJECT withdrawal scoped to the WRONG property")
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+;; landlord signs but scopes the cap to casa-azul while acting on casa-verde
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-azul")] } ])
+(expect-failure "sig scoped to another property is rejected" "Keyset failure"
+  (free.property-lease.withdraw-bucket "casa-verde" "TAX" 10.0
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks) "wrong scope"))
+(rollback-tx)
+
+(begin-tx "REJECT withdrawal by a stranger")
+(env-data { "rando-ks": { "keys": ["rando-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "rando-key", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(expect-failure "stranger cannot withdraw" "Keyset failure"
+  (free.property-lease.withdraw-bucket "casa-verde" "TAX" 10.0
+    "rando-acct" (read-keyset 'rando-ks) "theft"))
+(rollback-tx)
+
+(begin-tx "REJECT overdraw of a bucket")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(expect-failure "bucket overdraw rejected" "insufficient bucket balance"
+  (free.property-lease.withdraw-bucket "casa-verde" "REPAIRS" 1000.0
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks) "drain"))
+(rollback-tx)
+
+(begin-tx "REJECT landlord pull of the BENEFICIARY bucket")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(expect-failure "beneficiary is push-only" "bucket not landlord-withdrawable"
+  (free.property-lease.withdraw-bucket "casa-verde" "BENEFICIARY" 10.0
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks) "grab"))
+(rollback-tx)
+
+(begin-tx "landlord pays a contractor 40 from REPAIRS")
+(env-data { "contractor-ks": { "keys": ["contractor-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(free.property-lease.withdraw-bucket "casa-verde" "REPAIRS" 40.0
+  "contractor-acct" (read-keyset 'contractor-ks) "water heater replacement")
+(expect "REPAIRS debited" 100.0 (free.property-lease.bucket-balance "casa-verde" "REPAIRS"))
+(expect "contractor paid" 40.0 (coin.get-balance "contractor-acct"))
+(commit-tx)
+
+(begin-tx "ANYONE pushes the beneficiary bucket (no signature at all)")
+(env-sigs [])
+(free.property-lease.push-beneficiary "casa-verde")
+(expect "beneficiary bucket emptied" 0.0 (free.property-lease.bucket-balance "casa-verde" "BENEFICIARY"))
+(expect "beneficiary account funded" 100.0 (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(commit-tx)
+
+(begin-tx "REJECT push of an empty beneficiary bucket")
+(env-sigs [])
+(expect-failure "nothing to push" "beneficiary bucket empty"
+  (free.property-lease.push-beneficiary "casa-verde"))
+(rollback-tx)
+
+(begin-tx "landlord takes their 1625 residual")
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(free.property-lease.withdraw-bucket "casa-verde" "LANDLORD" 1625.0
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks) "net rent distribution")
+(expect "LANDLORD bucket emptied" 0.0 (free.property-lease.bucket-balance "casa-verde" "LANDLORD"))
+(expect "landlord balance grew" 11625.0 (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(commit-tx)
+
+;; conservation: vault = Sum buckets + Sum deposits held
+(expect "conservation after withdrawals: 60+100+0+0 buckets + 1500 deposit"
+  1660.0 (coin.get-balance free.property-lease.VAULT-ACCOUNT))
+
+;; ===========================================================================
+;; 7. Second lease on the registry + guarantor payment
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-05T00:00:00Z") })
+(begin-tx "sign LSE-2: 500/30d, no deposit, grace 3d")
+(env-data { "tenant-ks": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(free.property-lease.create-lease "LSE-2" "casa-verde"
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'tenant-ks)
+  (hash "signed-lease-document-LSE-2-v1")
+  500.0 30 3 10.0
+  0.0
+  (time "2026-03-05T00:00:00Z") (time "2027-03-01T00:00:00Z")
+  30 7)
+(expect "zero-deposit lease immediately active" "ACTIVE" (free.property-lease.lease-state "LSE-2"))
+(commit-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-06T00:00:00Z") })
+(begin-tx "guarantor (rando) pays LSE-2 rent")
+(env-sigs [ { "key": "rando-key"
+            , "caps": [(coin.TRANSFER "rando-acct" free.property-lease.VAULT-ACCOUNT 500.0)] } ])
+(free.property-lease.pay-rent "LSE-2" "rando-acct")
+(expect "TAX 60+40" 100.0 (free.property-lease.bucket-balance "casa-verde" "TAX"))
+(expect "REPAIRS 100+35" 135.0 (free.property-lease.bucket-balance "casa-verde" "REPAIRS"))
+(expect "BENEFICIARY 0+25" 25.0 (free.property-lease.bucket-balance "casa-verde" "BENEFICIARY"))
+(expect "LANDLORD 0+400" 400.0 (free.property-lease.bucket-balance "casa-verde" "LANDLORD"))
+(expect "vault 2160" 2160.0 (coin.get-balance free.property-lease.VAULT-ACCOUNT))
+(commit-tx)
+
+;; ===========================================================================
+;; 8. Rounding dust: 33.33%/33.33%/33.33% of an odd rent conserves mass
+;; ===========================================================================
+(begin-tx "register dust-prop + sign LSE-D with rent 1.000000000001")
+(env-data { "landlord-ks": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+          , "benef-ks": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+          , "tenant-ks": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(free.property-lease.register-property "dust-prop"
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'landlord-ks)
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'benef-ks) "dust test" 3333 3333 3333)
+(commit-tx)
+
+(begin-tx "sign LSE-D")
+(env-data { "tenant-ks": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "dust-prop")] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(free.property-lease.create-lease "LSE-D" "dust-prop"
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'tenant-ks) "h"
+  1.000000000001 30 0 0.0
+  0.0
+  (time "2026-03-05T00:00:00Z") (time "2026-06-01T00:00:00Z")
+  0 0)
+(commit-tx)
+
+(begin-tx "dust split conserves exactly (landlord absorbs residual)")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222" free.property-lease.VAULT-ACCOUNT 1.000000000001)] } ])
+(free.property-lease.pay-rent "LSE-D" "k:2222222222222222222222222222222222222222222222222222222222222222")
+(expect "TAX floor(33.33%)" 0.3333 (free.property-lease.bucket-balance "dust-prop" "TAX"))
+(expect "REPAIRS floor(33.33%)" 0.3333 (free.property-lease.bucket-balance "dust-prop" "REPAIRS"))
+(expect "BENEFICIARY floor(33.33%)" 0.3333 (free.property-lease.bucket-balance "dust-prop" "BENEFICIARY"))
+(expect "LANDLORD residual carries the dust" 0.000100000001
+  (free.property-lease.bucket-balance "dust-prop" "LANDLORD"))
+(expect "vault gained exactly the rent" 2161.000000000001
+  (coin.get-balance free.property-lease.VAULT-ACCOUNT))
+(commit-tx)
+
+;; ===========================================================================
+;; 9. Renewal (mutual) and notice (unilateral, bounded)
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-08T00:00:00Z") })
+(begin-tx "renew LSE-2 to 2027-06-01 at 550")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.property-lease.TENANT "LSE-2")] } ])
+(free.property-lease.renew-lease "LSE-2" (time "2027-06-01T00:00:00Z") 550.0)
+(expect "end extended" (time "2027-06-01T00:00:00Z") (at 'end (free.property-lease.get-lease "LSE-2")))
+(expect "re-priced" 550.0 (at 'rent (free.property-lease.get-lease "LSE-2")))
+(commit-tx)
+
+(begin-tx "REJECT one-sided renewal")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(expect-failure "tenant must co-sign renewal" "Keyset failure"
+  (free.property-lease.renew-lease "LSE-2" (time "2028-01-01T00:00:00Z") 600.0))
+(rollback-tx)
+
+(begin-tx "REJECT renewal that shortens the term")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.property-lease.TENANT "LSE-2")] } ])
+(expect-failure "shortening is notice, not renewal" "renewal must extend the term"
+  (free.property-lease.renew-lease "LSE-2" (time "2026-05-01T00:00:00Z") 550.0))
+(rollback-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-10T00:00:00Z") })
+(begin-tx "REJECT notice shorter than notice-days (30)")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.property-lease.PARTY "LSE-2")] } ])
+(expect-failure "30-day notice enforced" "notice period too short"
+  (free.property-lease.give-notice "LSE-2" (time "2026-03-20T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "REJECT notice from a stranger")
+(env-sigs [ { "key": "rando-key", "caps": [] } ])
+(expect-failure "stranger cannot terminate" "landlord or tenant signature required"
+  (free.property-lease.give-notice "LSE-2" (time "2026-04-15T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "tenant gives valid notice: end -> 2026-04-15")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.property-lease.PARTY "LSE-2")] } ])
+(free.property-lease.give-notice "LSE-2" (time "2026-04-15T00:00:00Z"))
+(expect "term shortened" (time "2026-04-15T00:00:00Z") (at 'end (free.property-lease.get-lease "LSE-2")))
+(commit-tx)
+
+;; ===========================================================================
+;; 10. Deposit claim + settlement (LSE-1 ends 2026-07-01, window 14d)
+;; ===========================================================================
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-05-01T00:00:00Z") })
+(begin-tx "REJECT claim while the lease is running")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(expect-failure "no claim before end" "lease not ended yet"
+  (free.property-lease.claim-deposit "LSE-1" 400.0 "early grab"))
+(rollback-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-03T00:00:00Z") })
+(expect "state shows the claim window" "CLAIM-WINDOW" (free.property-lease.lease-state "LSE-1"))
+
+(begin-tx "REJECT settlement while the window is open")
+(env-sigs [])
+(expect-failure "window must close first" "claim window still open"
+  (free.property-lease.settle-deposit "LSE-1"))
+(rollback-tx)
+
+(begin-tx "REJECT claim above the escrowed deposit")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(expect-failure "claim capped at deposit" "claim exceeds escrowed deposit"
+  (free.property-lease.claim-deposit "LSE-1" 2000.0 "greedy"))
+(rollback-tx)
+
+(begin-tx "landlord files a 400 deduction claim")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(free.property-lease.claim-deposit "LSE-1" 400.0 "broken window + deep cleaning")
+(expect "claim recorded" 400.0 (at 'claim-amount (free.property-lease.get-lease "LSE-1")))
+(commit-tx)
+
+(begin-tx "REJECT a second claim")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-verde")] } ])
+(expect-failure "one claim only" "claim already filed"
+  (free.property-lease.claim-deposit "LSE-1" 100.0 "second bite"))
+(rollback-tx)
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-07-20T00:00:00Z") })
+(begin-tx "ANYONE settles after the window: 400 landlord / 1100 tenant")
+(env-sigs [])
+(free.property-lease.settle-deposit "LSE-1")
+;; tenant: 10000 - 1500 deposit - 1000 - 1025 - 1.000000000001 (LSE-D) + 1100 refund
+(expect "tenant refunded 1100" 7573.999999999999 (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "landlord got the 400 claim" 12025.0 (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "deposit ledger zeroed" 0.0 (at 'deposit-held (free.property-lease.get-lease "LSE-1")))
+(expect "state closed" "CLOSED" (free.property-lease.lease-state "LSE-1"))
+(commit-tx)
+
+(begin-tx "REJECT double settlement")
+(env-sigs [])
+(expect-failure "nothing left to settle" "no deposit to settle"
+  (free.property-lease.settle-deposit "LSE-1"))
+(rollback-tx)
+
+;; final conservation: vault = Sum all buckets, all deposits settled
+(expect "final conservation: 100+135+25+400 casa + 1.000000000001 dust"
+  661.000000000001 (coin.get-balance free.property-lease.VAULT-ACCOUNT))
+
+;; ===========================================================================
+;; 11. F2 regression: landlord == tenant settlement must NOT self-brick.
+;; Two identical (payee, amount) vault payouts in one settle tx would collide
+;; on the managed coin.TRANSFER install and permanently lock the deposit;
+;; settle-deposit coalesces same-account parties into a single full payout.
+;; ===========================================================================
+(begin-tx "register self-prop + self-lease (landlord IS the tenant)")
+(env-data { "self-ks": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+          , "benef-ks": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(coin.credit "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset 'self-ks) 5000.0)
+(env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444", "caps": [] } ])
+(free.property-lease.register-property "self-prop"
+  "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset 'self-ks)
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'benef-ks) "self lease" 0 0 0)
+(env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444", "caps": [(free.property-lease.LANDLORD "self-prop")] } ])
+(free.property-lease.create-lease "LSE-SELF" "self-prop"
+  "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset 'self-ks) "h"
+  100.0 30 0 0.0
+  800.0
+  (time "2026-08-01T00:00:00Z") (time "2026-08-15T00:00:00Z")
+  0 7)
+(env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444"
+            , "caps": [(coin.TRANSFER "k:4444444444444444444444444444444444444444444444444444444444444444" free.property-lease.VAULT-ACCOUNT 800.0)] } ])
+(free.property-lease.pay-deposit "LSE-SELF" "k:4444444444444444444444444444444444444444444444444444444444444444")
+(commit-tx)
+
+(begin-tx "self-landlord files a 400 claim (== held/2, the collision trigger)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-16T00:00:00Z") })
+(env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444", "caps": [(free.property-lease.LANDLORD "self-prop")] } ])
+(free.property-lease.claim-deposit "LSE-SELF" 400.0 "self claim")
+(commit-tx)
+
+(begin-tx "settle self-lease: coalesced single 800 payout, no install collision")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-23T00:00:00Z") })
+(env-sigs [])
+(let ((before (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444")))
+  (free.property-lease.settle-deposit "LSE-SELF")
+  (expect "self party made whole with the full 800 (no self-brick)"
+    (+ before 800.0) (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444")))
+(expect "self-lease deposit ledger zeroed" 0.0
+  (at 'deposit-held (free.property-lease.get-lease "LSE-SELF")))
+(expect "self-lease closed" "CLOSED" (free.property-lease.lease-state "LSE-SELF"))
+(commit-tx)
+
+;; ===========================================================================
+;; 12. F3 regression: set-property-active emits an audit event.
+;; ===========================================================================
+(begin-tx "deactivating a property emits PROPERTY-ACTIVE-SET")
+(env-events true)
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.property-lease.LANDLORD "casa-azul")] } ])
+(free.property-lease.set-property-active "casa-azul" false)
+(expect "PROPERTY-ACTIVE-SET emitted" true
+  (contains "free.property-lease.PROPERTY-ACTIVE-SET"
+    (map (at 'name) (env-events true))))
+(expect "new leases blocked while inactive" false
+  (at 'active (free.property-lease.get-property "casa-azul")))
+(commit-tx)
