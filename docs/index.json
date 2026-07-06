@@ -112,6 +112,37 @@
 }
 ,
 {
+  "name": "Token Vesting (cliff + linear)",
+  "slug": "vesting",
+  "version": "1.0.0",
+  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
+  "license": "Apache-2.0",
+  "authors": [
+    {
+      "name": "Pact Community Organization",
+      "email": "info@pact-community.org"
+    }
+  ],
+  "audit_status": "self-reviewed",
+  "tags": [
+    "vesting",
+    "escrow",
+    "timelock",
+    "template",
+    "library"
+  ],
+  "keywords": [
+    "pact",
+    "smart-contract",
+    "vesting",
+    "cliff",
+    "linear-release",
+    "escrow",
+    "capability-guard"
+  ]
+}
+,
+{
   "name": "free.cyberfly_node",
   "namespace": "free",
   "module": "cyberfly_node",

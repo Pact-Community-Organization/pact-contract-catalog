@@ -1,0 +1,359 @@
+;; vesting-test.repl — PCO library template test suite
+;;
+;; Self-contained: loads coin + interfaces from this repo's registry tree.
+;;
+;; Drives the full grant lifecycle on a controlled clock (env-chain-data
+;; block-time): escrow-at-creation, cliff, linear claims, revocation of the
+;; unvested portion, and every authorization attack: claiming with the wrong
+;; key, a signature scoped to another grant, revoking someone else's grant,
+;; revoking a non-revocable grant, draining the vault directly, squatting a
+;; beneficiary principal, and a clock-rollback revoke (the refund clamp).
+;; The suite ends with the vault at exactly 0.0 — every escrowed KDA is
+;; either claimed by its beneficiary or refunded to the funder.
+;;
+;; Timeline (grant g1: 365.0 KDA over 365 days = 1 KDA/day, 90-day cliff):
+;;   2026-01-01 start | 2026-04-01 cliff (90) | 2026-07-02 (182) | 2027-01-01 end
+
+;; ---------------------------------------------------------------------------
+;; Setup: coin, keysets, module, table; fund the funder.
+;; Beneficiary accounts are k: principals (create-grant enforces the binding).
+;; ---------------------------------------------------------------------------
+(begin-tx "setup")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(create-table coin-table)
+(env-data
+  { "vesting-gov": ["gov-key"]
+  , "funder": ["funder-key"]
+  , "ben1": ["b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"], "ben2": ["b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"], "ben3": ["b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3"]
+  , "dave": ["dave-key"] })
+(define-keyset "vesting-gov" (read-keyset "vesting-gov"))
+(load "../vesting.pact")
+(create-table grants)
+(coin.create-account "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1"))
+(coin.create-account "dave" (read-keyset "dave"))
+(test-capability (coin.CREDIT "funder"))
+(coin.credit "funder" (read-keyset "funder") 700.0)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; create-grant parameter validation (no funds move on any of these).
+;; ---------------------------------------------------------------------------
+(begin-tx "create-grant-validation")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-sigs [])
+(expect-failure "zero total rejected" "total must be positive"
+  (vesting.create-grant "bad" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 0.0
+    (time "2026-01-01T00:00:00Z") (time "2026-01-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+(expect-failure "sub-precision total rejected" "violates minimum precision"
+  (vesting.create-grant "bad" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 0.0000000000001
+    (time "2026-01-01T00:00:00Z") (time "2026-01-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+(expect-failure "end before start rejected" "end must be after start"
+  (vesting.create-grant "bad" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 10.0
+    (time "2027-01-01T00:00:00Z") (time "2027-01-01T00:00:00Z")
+    (time "2026-01-01T00:00:00Z") false))
+(expect-failure "cliff before start rejected" "cliff cannot precede start"
+  (vesting.create-grant "bad" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 10.0
+    (time "2026-01-01T00:00:00Z") (time "2025-01-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+(expect-failure "cliff after end rejected" "cliff cannot exceed end"
+  (vesting.create-grant "bad" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 10.0
+    (time "2026-01-01T00:00:00Z") (time "2027-06-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+(expect-failure "vault as beneficiary rejected" "beneficiary cannot be the vault"
+  (vesting.create-grant "bad" "funder" (vesting.get-vault-account)
+    (read-keyset "ben1") 10.0
+    (time "2026-01-01T00:00:00Z") (time "2026-01-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+(expect-failure "vanity beneficiary name rejected"
+  "beneficiary must be the principal of its guard"
+  (vesting.create-grant "bad" "funder" "ben3-vanity" (read-keyset "ben3") 10.0
+    (time "2026-01-01T00:00:00Z") (time "2026-01-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+;; a c: capability-guard principal is valid but unsatisfiable as a payout
+;; target (SPEND is never in scope when CLAIM-AUTH runs) — must be rejected,
+;; or the escrow would be locked forever
+(expect-failure "non-key-backed (c:) beneficiary principal rejected"
+  "beneficiary must be a key-backed principal"
+  (vesting.create-grant "bad" "funder"
+    (create-principal (create-capability-guard (vesting.SPEND)))
+    (create-capability-guard (vesting.SPEND)) 10.0
+    (time "2026-01-01T00:00:00Z") (time "2026-01-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Escrow authorization: without the funder's coin.TRANSFER signature the
+;; grant cannot be created (an unscoped signature does NOT install a managed
+;; capability — the funder must consent explicitly to the exact amount).
+;; ---------------------------------------------------------------------------
+(begin-tx "create-grant-no-transfer-sig")
+(env-sigs [{"key": "funder-key", "caps": []}])
+(expect-failure "create-grant without TRANSFER cap sig fails" "not installed"
+  (vesting.create-grant "g1" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 365.0
+    (time "2026-01-01T00:00:00Z") (time "2026-04-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; g1: 365 KDA / 365 days, 90-day cliff, NON-revocable. Escrowed upfront.
+;; ---------------------------------------------------------------------------
+(begin-tx "create-g1")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-sigs [{"key": "funder-key"
+          , "caps": [(coin.TRANSFER "funder" (vesting.get-vault-account) 365.0)]}])
+(expect "g1 created" "g1"
+  (vesting.create-grant "g1" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 365.0
+    (time "2026-01-01T00:00:00Z") (time "2026-04-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+(expect "GRANT_CREATED emitted" true
+  (contains "vesting.GRANT_CREATED" (map (at 'name) (env-events true))))
+(expect "escrow moved into the vault" 365.0 (vesting.vault-balance))
+(expect "funder debited upfront" 335.0 (coin.get-balance "funder"))
+(expect "nothing vested at start" 0.0 (vesting.claimable-amount "g1"))
+(commit-tx)
+
+(begin-tx "duplicate-grant-id")
+(env-sigs [{"key": "funder-key"
+          , "caps": [(coin.TRANSFER "funder" (vesting.get-vault-account) 365.0)]}])
+(expect-failure "reused grant id rejected" "already found while in Insert mode"
+  (vesting.create-grant "g1" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 365.0
+    (time "2026-01-01T00:00:00Z") (time "2026-04-01T00:00:00Z")
+    (time "2027-01-01T00:00:00Z") false))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; g2 (revocable, no cliff, 100/100d) and g3 (past schedule = fully vested).
+;; ---------------------------------------------------------------------------
+(begin-tx "create-g2-g3")
+(env-sigs [{"key": "funder-key"
+          , "caps": [(coin.TRANSFER "funder" (vesting.get-vault-account) 150.0)]}])
+(expect "g2 created (revocable)" "g2"
+  (vesting.create-grant "g2" "funder" "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2" (read-keyset "ben2") 100.0
+    (time "2026-01-01T00:00:00Z") (time "2026-01-01T00:00:00Z")
+    (time "2026-04-11T00:00:00Z") true))
+(expect "g3 created (past schedule = instantly vested)" "g3"
+  (vesting.create-grant "g3" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 50.0
+    (time "2025-01-01T00:00:00Z") (time "2025-01-01T00:00:00Z")
+    (time "2025-12-31T00:00:00Z") true))
+(expect "vault holds all escrows" 515.0 (vesting.vault-balance))
+(expect "funder debited for all grants" 185.0 (coin.get-balance "funder"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; A k: beneficiary principal cannot be squatted: coin itself rejects a
+;; foreign guard on a reserved single-key name, so the payout account can
+;; only ever exist with the enrolled guard.
+;; ---------------------------------------------------------------------------
+(begin-tx "squat-impossible")
+(expect-failure "k: principal cannot be squatted with a foreign guard"
+  "Single-key account protocol violation"
+  (coin.create-account "k:b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3" (read-keyset "dave")))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; g3 is past its end: fully claimable immediately.
+;; ---------------------------------------------------------------------------
+(begin-tx "claim-instant")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-sigs [{"key": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1", "caps": [(vesting.CLAIM-AUTH "g3")]}])
+(expect "g3 fully vested" 50.0 (vesting.claimable-amount "g3"))
+(expect "g3 claim succeeds" "g3" (vesting.claim "g3"))
+(expect "CLAIMED emitted" true
+  (contains "vesting.CLAIMED" (map (at 'name) (env-events true))))
+(expect "ben1 paid in full" 50.0 (coin.get-balance "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"))
+(expect "vault conservation after g3" 465.0 (vesting.vault-balance))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Before the cliff nothing is claimable.
+;; ---------------------------------------------------------------------------
+(begin-tx "claim-before-cliff")
+(env-chain-data { "block-time": (time "2026-02-01T00:00:00Z") })
+(env-sigs [{"key": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1", "caps": [(vesting.CLAIM-AUTH "g1")]}])
+(expect "pre-cliff claimable is zero" 0.0 (vesting.claimable-amount "g1"))
+(expect-failure "pre-cliff claim fails" "nothing claimable"
+  (vesting.claim "g1"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Claim authorization: only the enrolled beneficiary guard.
+;; ---------------------------------------------------------------------------
+(begin-tx "claim-wrong-key")
+(env-chain-data { "block-time": (time "2026-04-01T00:00:00Z") })
+(env-sigs [{"key": "dave-key", "caps": [(vesting.CLAIM-AUTH "g1")]}])
+(expect-failure "claim with a foreign key fails" "Keyset failure"
+  (vesting.claim "g1"))
+(rollback-tx)
+
+(begin-tx "claim-sig-scoped-to-other-grant")
+(env-chain-data { "block-time": (time "2026-04-01T00:00:00Z") })
+;; ben1's key, but scoped to g3 only — must not authorize a g1 claim
+(env-sigs [{"key": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1", "caps": [(vesting.CLAIM-AUTH "g3")]}])
+(expect-failure "sig scoped to another grant fails" "Keyset failure"
+  (vesting.claim "g1"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Revocation window (2026-02-10 = day 40 of g2's 100-day schedule).
+;; ---------------------------------------------------------------------------
+(begin-tx "revoke-wrong-key")
+(env-chain-data { "block-time": (time "2026-02-10T00:00:00Z") })
+(env-sigs [{"key": "dave-key", "caps": [(vesting.REVOKE-AUTH "g2")]}])
+(expect-failure "non-funder cannot revoke" "Keyset failure"
+  (vesting.revoke "g2"))
+(rollback-tx)
+
+(begin-tx "revoke-non-revocable")
+(env-chain-data { "block-time": (time "2026-02-10T00:00:00Z") })
+(env-sigs [{"key": "funder-key", "caps": [(vesting.REVOKE-AUTH "g1")]}])
+(expect-failure "non-revocable grant cannot be revoked" "grant is not revocable"
+  (vesting.revoke "g1"))
+(rollback-tx)
+
+(begin-tx "revoke-g2")
+(env-chain-data { "block-time": (time "2026-02-10T00:00:00Z") })
+(env-sigs [{"key": "funder-key", "caps": [(vesting.REVOKE-AUTH "g2")]}])
+(expect "g2 revoked" "g2" (vesting.revoke "g2"))
+(expect "REVOKED emitted" true
+  (contains "vesting.REVOKED" (map (at 'name) (env-events true))))
+(expect "unvested 60 refunded to funder" 245.0 (coin.get-balance "funder"))
+(expect "vault conservation after revoke" 405.0 (vesting.vault-balance))
+(expect "g2 frozen at vested amount" 40.0 (at 'total (vesting.get-grant "g2")))
+(expect "g2 status revoked" "revoked" (at 'status (vesting.get-grant "g2")))
+(commit-tx)
+
+(begin-tx "revoke-twice")
+(env-sigs [{"key": "funder-key", "caps": [(vesting.REVOKE-AUTH "g2")]}])
+(expect-failure "already-revoked grant cannot be revoked again" "grant is not active"
+  (vesting.revoke "g2"))
+(rollback-tx)
+
+(begin-tx "revoke-fully-vested")
+(env-chain-data { "block-time": (time "2026-02-10T00:00:00Z") })
+(env-sigs [{"key": "funder-key", "caps": [(vesting.REVOKE-AUTH "g3")]}])
+(expect-failure "fully vested grant has nothing to revoke"
+  "nothing to revoke; grant fully vested"
+  (vesting.revoke "g3"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; A revoked grant still owes its vested remainder — and nothing more.
+;; ben2 has NO coin account yet: the first claim creates it with the
+;; enrolled guard (transfer-create).
+;; ---------------------------------------------------------------------------
+(begin-tx "claim-after-revoke")
+(env-chain-data { "block-time": (time "2026-02-10T00:00:00Z") })
+(env-sigs [{"key": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", "caps": [(vesting.CLAIM-AUTH "g2")]}])
+(expect "revoked grant owes its vested part" 40.0 (vesting.claimable-amount "g2"))
+(expect "vested remainder claimable after revoke" "g2" (vesting.claim "g2"))
+(expect "ben2 account auto-created and paid" 40.0 (coin.get-balance "k:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"))
+(commit-tx)
+
+(begin-tx "revoked-grant-stops-vesting")
+;; months later: a revoked grant must NOT keep accruing
+(env-chain-data { "block-time": (time "2026-07-02T00:00:00Z") })
+(env-sigs [{"key": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", "caps": [(vesting.CLAIM-AUTH "g2")]}])
+(expect "no further accrual after revoke" 0.0 (vesting.claimable-amount "g2"))
+(expect-failure "nothing further to claim on a revoked grant" "nothing claimable"
+  (vesting.claim "g2"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; g1 linear schedule: claim at the cliff (day 90), mid-way (day 182), and
+;; after the end; a repeat claim at the same block yields nothing.
+;; ---------------------------------------------------------------------------
+(begin-tx "claim-at-cliff")
+(env-chain-data { "block-time": (time "2026-04-01T00:00:00Z") })
+(env-sigs [{"key": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1", "caps": [(vesting.CLAIM-AUTH "g1")]}])
+(expect "day-90 vesting = 90" 90.0 (vesting.claimable-amount "g1"))
+(expect "cliff claim succeeds" "g1" (vesting.claim "g1"))
+(expect "ben1 balance after cliff claim" 140.0 (coin.get-balance "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"))
+(expect-failure "double claim in the same block yields nothing" "nothing claimable"
+  (vesting.claim "g1"))
+(commit-tx)
+
+(begin-tx "claim-mid-schedule")
+(env-chain-data { "block-time": (time "2026-07-02T00:00:00Z") })
+(env-sigs [{"key": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1", "caps": [(vesting.CLAIM-AUTH "g1")]}])
+(expect "day-182 claimable = 92 (182 vested - 90 claimed)" 92.0
+  (vesting.claimable-amount "g1"))
+(expect "mid-schedule claim succeeds" "g1" (vesting.claim "g1"))
+(expect "ben1 balance after mid claim" 232.0 (coin.get-balance "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"))
+(commit-tx)
+
+(begin-tx "claim-after-end")
+(env-chain-data { "block-time": (time "2027-06-01T00:00:00Z") })
+(env-sigs [{"key": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1", "caps": [(vesting.CLAIM-AUTH "g1")]}])
+(expect "post-end claimable = full remainder" 183.0 (vesting.claimable-amount "g1"))
+(expect "final claim succeeds" "g1" (vesting.claim "g1"))
+(expect "ben1 received the full grant" 415.0 (coin.get-balance "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"))
+(expect-failure "exhausted grant yields nothing" "nothing claimable"
+  (vesting.claim "g1"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Vault cannot be drained outside claim/revoke.
+;; ---------------------------------------------------------------------------
+(begin-tx "vault-guard-denies")
+(env-sigs [{"key": "dave-key"
+          , "caps": [(coin.TRANSFER (vesting.get-vault-account) "dave" 10.0)]}])
+(expect-failure "direct vault debit denied (SPEND not in scope)"
+  "not granted: (vesting.SPEND)"
+  (coin.transfer (vesting.get-vault-account) "dave" 10.0))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Clock-rollback regression: block-time is the parent block's timestamp and
+;; is assumed monotonic, but the refund math must not depend on that. After
+;; the beneficiary has claimed 90, a revoke evaluated at an EARLIER
+;; block-time (vested-raw 40 < claimed 90) must clamp: refund is capped at
+;; the grant's own remaining escrow (10), never paid from other grants.
+;; ---------------------------------------------------------------------------
+(begin-tx "create-g6")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-sigs [{"key": "funder-key"
+          , "caps": [(coin.TRANSFER "funder" (vesting.get-vault-account) 100.0)]}])
+(expect "g6 created (revocable, 100/100d)" "g6"
+  (vesting.create-grant "g6" "funder" "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1" (read-keyset "ben1") 100.0
+    (time "2026-01-01T00:00:00Z") (time "2026-01-01T00:00:00Z")
+    (time "2026-04-11T00:00:00Z") true))
+(commit-tx)
+
+(begin-tx "claim-g6-day90")
+(env-chain-data { "block-time": (time "2026-04-01T00:00:00Z") })
+(env-sigs [{"key": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1", "caps": [(vesting.CLAIM-AUTH "g6")]}])
+(expect "g6 day-90 claim = 90" 90.0 (vesting.claimable-amount "g6"))
+(expect "g6 claim succeeds" "g6" (vesting.claim "g6"))
+(expect "ben1 balance after g6 claim" 505.0 (coin.get-balance "k:b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"))
+(commit-tx)
+
+(begin-tx "revoke-g6-clock-rollback")
+;; the clock REGRESSES to day 40: raw vested (40) < already claimed (90)
+(env-chain-data { "block-time": (time "2026-02-10T00:00:00Z") })
+(env-sigs [{"key": "funder-key", "caps": [(vesting.REVOKE-AUTH "g6")]}])
+(expect "claimable view clamped at zero under clock rollback" 0.0
+  (vesting.claimable-amount "g6"))
+(expect "rollback revoke succeeds" "g6" (vesting.revoke "g6"))
+(expect "refund clamped to g6's remaining escrow (10, not 60)" 155.0
+  (coin.get-balance "funder"))
+(expect "g6 frozen at claimed (clamp), not at raw vested" 90.0
+  (at 'total (vesting.get-grant "g6")))
+(expect "no negative claimable on the revoked grant" 0.0
+  (vesting.claimable-amount "g6"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Conservation: every escrowed KDA is accounted for. All grants settled;
+;; the vault ends EMPTY — nothing stranded, nothing over-paid.
+;; ---------------------------------------------------------------------------
+(begin-tx "final-conservation")
+(expect "vault fully settled" 0.0 (vesting.vault-balance))
+(expect "g1 fully claimed" 365.0 (at 'claimed (vesting.get-grant "g1")))
+(expect "g2 claimed equals frozen total" 40.0 (at 'claimed (vesting.get-grant "g2")))
+(expect "funder net = 700 - 365 (g1) - 40 (g2 vested) - 50 (g3) - 90 (g6 vested)" 155.0
+  (coin.get-balance "funder"))
+(commit-tx)

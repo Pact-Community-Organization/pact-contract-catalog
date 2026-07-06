@@ -13,6 +13,7 @@ _Generated from `contracts/**/metadata.yaml`._
 | Hello World | hello-world | 1.0.0 | self-reviewed | hello-world, tutorial, basic |
 | Multisig Treasury (M-of-N) | multisig-treasury | 1.0.0 | self-reviewed | treasury, multisig, governance, template, library |
 | Token (fungible-v2 + fungible-xchain-v1) | token-fungible | 0.2.0 | self-reviewed | token, fungible, template, library |
+| Token Vesting (cliff + linear) | vesting | 1.0.0 | self-reviewed | vesting, escrow, timelock, template, library |
 
 ## Registry — KIP Standards (`registry/kip/`)
 
