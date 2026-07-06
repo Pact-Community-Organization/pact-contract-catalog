@@ -121,6 +121,23 @@ tests, plus two independent `pact-auditor` passes (automated, fresh-context).
 (`community-reviewed`) or a third-party report with a matching source hash
 (`independently-audited`) — see `docs/CONTRACT_POLICIES.md` §3.1.
 
+## Devnet validation (on-node evidence)
+
+**Validated on a live KDA-CE devnet (recap-development) node, 2026-07-06.** The template was deployed under the
+`free` namespace (governance keyset namespaced, per the deployment checklist)
+and its critical paths were driven to mined confirmation with `@kadena/client`
+— the required evidence for the REPL-invisible read-in-enforce class.
+
+| | |
+|---|---|
+| Deployed module | `free.vesting` |
+| Source hash | `PamnZMYjJl6lrYLyzxGV8UL96UoOolUnjU5Dol3MK3Y` |
+| Confirmed transactions | 12 |
+
+Proven on-node: `CLAIM-AUTH` (grants-read bound before `enforce-guard`) and `REVOKE-AUTH` (funder's **live** coin guard via `coin.details`); a full escrow → claim → revoke → frozen-remainder cycle conserved the vault, with foreign-key claim and non-funder revoke rejected on-node.
+
+Reproduce: `scripts/devnet-validate` → `npm run vesting` (see that directory's README).
+
 ## Reproduce the review
 
 ```bash

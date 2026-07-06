@@ -61,6 +61,7 @@ cd contracts/library/oracle-feed/examples && pact oracle-feed-test.repl
 - **`min-answers 1` means single-publisher truth, and `2` means an average either publisher controls.** Legitimate for a feed you run yourself; understand what each value buys before pointing money at it. `≥ 3` is where the median guarantee starts.
 - **A quorum above the publisher count makes the feed unreadable** (fail closed) until enough publishers exist and post — by design.
 - **Publishers are per-module, not per-feed.** Every enrolled publisher may post to every feed. Segment by deploying separate instances if feeds need disjoint publisher sets.
+- **Publisher and feed names cannot contain `":"`** (the observation-key separator, banned for injectivity). A `k:` principal account name contains a colon, so publishers are named as plain accounts (e.g. `"oracle-node-1"`) guarded by their own key — not `k:` principals. Confirmed on devnet.
 - **State holds only each publisher's latest observation** per feed (bounded: publishers × feeds rows). History lives in the `POSTED` event stream — index it off-chain if you need TWAPs or archives.
 - Governance holds upgrade power. Pin the deployed module hash you audited; use a multi-sig governance keyset.
 

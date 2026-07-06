@@ -135,6 +135,23 @@ tests. **Not independent.** Promotion requires a second reviewer
 (`community-reviewed`) or a third-party report with a matching source hash
 (`independently-audited`) — see `docs/CONTRACT_POLICIES.md` §3.1.
 
+## Devnet validation (on-node evidence)
+
+**Validated on a live KDA-CE devnet (recap-development) node, 2026-07-06.** The template was deployed under the
+`free` namespace (governance keyset namespaced, per the deployment checklist)
+and its critical paths were driven to mined confirmation with `@kadena/client`
+— the required evidence for the REPL-invisible read-in-enforce class.
+
+| | |
+|---|---|
+| Deployed module | `free.treasury` |
+| Source hash | `8weL459fw-YOz-dDr_bI4Cvs2AQtvJRTY7L9DAeoAJ8` |
+| Confirmed transactions | 13 |
+
+Proven on-node: `SIGNER-AUTH` (config-read bound before `enforce`), the `account-exists` `try`-read against coin, and a vault debit through the capability-guarded `SPEND` after a threshold-approved `execute` — with the F1 negative cases (non-signer propose, below-threshold execute) rejected on-node.
+
+Reproduce: `scripts/devnet-validate` → `npm run treasury` (see that directory's README).
+
 ## Reproduce the review
 
 ```bash

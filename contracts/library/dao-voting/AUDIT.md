@@ -111,6 +111,23 @@ requires a second reviewer (`community-reviewed`) or a third-party report with
 a matching source hash (`independently-audited`) — see
 `docs/CONTRACT_POLICIES.md` §3.1.
 
+## Devnet validation (on-node evidence)
+
+**Validated on a live KDA-CE devnet (recap-development) node, 2026-07-06.** The template was deployed under the
+`free` namespace (governance keyset namespaced, per the deployment checklist)
+and its critical paths were driven to mined confirmation with `@kadena/client`
+— the required evidence for the REPL-invisible read-in-enforce class.
+
+| | |
+|---|---|
+| Deployed module | `free.dao-voting` |
+| Source hash | `V01qREMpESX4M8vEf-iplX-9CILUfUPvTmgPJTEjX9U` |
+| Confirmed transactions | 13 |
+
+Proven on-node: `MEMBER-AUTH` (config-read bound before `enforce`); propose → vote → **close after a real ~90-second deadline** (chain time polled, not slept), settling `passed` on-node, with non-member and double votes rejected.
+
+Reproduce: `scripts/devnet-validate` → `npm run dao-voting` (see that directory's README).
+
 ## Reproduce the review
 
 ```bash

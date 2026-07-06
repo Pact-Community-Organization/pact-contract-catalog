@@ -30,7 +30,7 @@ All entries currently carry `audit_status: self-reviewed` — a defined claim, n
 2. Copy the template directory into your project; adapt the namespace, keysets, and business rules.
 3. Read the entry's `README.md` (usage, deployment checklist, known limits) and `AUDIT.md` (threat model, findings history) — they are short and written to be read.
 4. Run and extend the co-located test suite (below).
-5. **Validate on devnet before mainnet.** Every entry's README says this because it is load-bearing: one class of KDA-CE bug (table reads inside `enforce` conditions) is invisible in the REPL. The templates are written to the node-safe pattern, but your adaptations need the same proof.
+5. **Validate on devnet before mainnet.** Every entry's README says this because it is load-bearing: one class of KDA-CE bug (table reads inside `enforce` conditions) is invisible in the REPL. The templates are written to the node-safe pattern — and all six deployable ones have been [driven on a live devnet](docs/DEVNET-VALIDATION.md) to prove it — but your adaptations need the same proof.
 
 ### Testing
 
