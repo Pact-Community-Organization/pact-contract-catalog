@@ -9,6 +9,7 @@ _Generated from `contracts/**/metadata.yaml`._
 
 | Name | Slug | Version | Audit Status | Tags |
 |------|------|---------|--------------|------|
+| Gas Station (drain-defended) | gas-station | 1.0.0 | self-reviewed | gas-station, gas-payer-v1, gasless, template, library |
 | Hello World | hello-world | 1.0.0 | self-reviewed | hello-world, tutorial, basic |
 | Token (fungible-v2 + fungible-xchain-v1) | token-fungible | 0.2.0 | self-reviewed | token, fungible, template, library |
 

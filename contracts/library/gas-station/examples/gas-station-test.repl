@@ -1,0 +1,240 @@
+;; gas-station-test.repl — PCO library template test suite
+;;
+;; Self-contained: loads coin + interfaces from this repo's registry tree.
+;;
+;; CRITICAL TEST DISCIPLINE: the station bounds and accounts against the
+;; transaction's ACTUAL gas — (chain-data) 'gas-price / 'gas-limit — NOT the
+;; GAS_PAYER capability arguments (which the signer controls). Every funding
+;; test therefore sets the real gas context via (env-chain-data ...) and passes
+;; DELIBERATELY MISLEADING cap args, proving the policy ignores the args for the
+;; money math. This is the test the drain-vulnerable earlier design lacked.
+
+;; ---------------------------------------------------------------------------
+;; Setup
+;; ---------------------------------------------------------------------------
+(begin-tx "setup")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/kip/gas-payer-v1/gas-payer-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(create-table coin-table)
+(env-data {"gas-station-gov": ["gov-key"]})
+(define-keyset "gas-station-gov" (read-keyset "gas-station-gov"))
+(load "../gas-station.pact")
+(create-table allowlist)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Lifecycle: init is governance-gated; fund the station.
+;; ---------------------------------------------------------------------------
+(begin-tx "init-requires-gov")
+(env-sigs [])
+(expect-failure "init without governance fails" "Keyset failure"
+  (gas-station.init))
+(rollback-tx)
+
+(begin-tx "init-and-fund")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(gas-station.init)
+(expect "station account created with 0 balance" 0.0
+  (coin.get-balance (gas-station.get-station-account)))
+(test-capability (coin.CREDIT (gas-station.get-station-account)))
+(coin.credit (gas-station.get-station-account)
+  (gas-station.create-gas-payer-guard) 10.0)
+(expect "station funded" 10.0
+  (coin.get-balance (gas-station.get-station-account)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Enrollment is governance-gated and stores a per-user guard.
+;; ---------------------------------------------------------------------------
+(begin-tx "enroll-requires-gov")
+(env-data {"alice": ["alice-key"]})
+(env-sigs [])
+(expect-failure "enroll without governance fails" "Keyset failure"
+  (gas-station.enroll-user "alice" (read-keyset "alice") 1.0))
+(rollback-tx)
+
+(begin-tx "enroll")
+(env-data {"alice": ["alice-key"]})
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect "enroll alice" "enrolled"
+  (gas-station.enroll-user "alice" (read-keyset "alice") 1.0))
+(expect "ENROLL event emitted" true
+  (contains "gas-station.ENROLL" (map (at 'name) (env-events true))))
+(expect "alice enrolled: enabled, cap 1.0, spent 0"
+  {"guard": (read-keyset "alice"), "enabled": true, "cap": 1.0, "spent": 0.0}
+  (gas-station.get-user "alice"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; APPROVED path: enrolled + authenticated + actual gas within bounds.
+;; ---------------------------------------------------------------------------
+(begin-tx "approved")
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 1000})  ;; actual cost 0.0005
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect "GAS_PAYER funds an authenticated enrolled user within bounds" "()"
+  (format "{}" [(test-capability (gas-station.GAS_PAYER "alice" 1000 0.0000005))]))
+(expect "spent accounts ACTUAL gas cost (limit*price)" 0.0005
+  (at "spent" (gas-station.get-user "alice")))
+(expect "FUNDED event emitted" true
+  (contains "gas-station.FUNDED" (map (at 'name) (env-events true))))
+(commit-tx)
+
+;; the real wallet flow: the user's signature is SCOPED to GAS_PAYER (not
+;; unscoped). enforce-guard on the stored guard must still be satisfied.
+(begin-tx "approved-scoped-sig")
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 1000})
+(env-sigs [{"key": "alice-key"
+          , "caps": [(gas-station.GAS_PAYER "alice" 1000 0.0000005)]}])
+(expect "GAS_PAYER funds under a scoped signature (real wallet flow)" "()"
+  (format "{}" [(test-capability (gas-station.GAS_PAYER "alice" 1000 0.0000005))]))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; F1 REGRESSION — the drain the second audit found. An attacker passes tiny
+;; cap args to dodge the bounds/cap, but sets HIGH actual gas. The station must
+;; bound and account against the ACTUAL gas and REJECT.
+;; ---------------------------------------------------------------------------
+(begin-tx "F1-drain-actual-gas-over-bound")
+;; actual gas is huge; cap args are a decoy that would pass the old design
+(env-chain-data {"gas-price": 0.00001, "gas-limit": 150000})  ;; actual cost 1.5 KDA
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect-failure "high actual gas price rejected despite tiny cap args"
+  "actual gas price"
+  (test-capability (gas-station.GAS_PAYER "alice" 1 0.0000001)))
+(rollback-tx)
+
+(begin-tx "F1-drain-actual-limit-over-bound")
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 150000})  ;; over MAX_GAS_LIMIT
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect-failure "high actual gas limit rejected despite tiny cap args"
+  "actual gas limit"
+  (test-capability (gas-station.GAS_PAYER "alice" 1 0.0000001)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; F2 REGRESSION — authentication. An attacker who merely KNOWS an enrolled
+;; user's name, without controlling its guard, must be rejected.
+;; ---------------------------------------------------------------------------
+(begin-tx "F2-unauthenticated-user")
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 1000})
+(env-sigs [{"key": "attacker-key", "caps": []}])   ;; not alice's key
+(expect-failure "naming an enrolled user without its guard is rejected"
+  "Keyset failure"
+  (test-capability (gas-station.GAS_PAYER "alice" 1000 0.0000005)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Allowlist authorization
+;; ---------------------------------------------------------------------------
+(begin-tx "reject-non-enrolled")
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 1000})
+(env-sigs [{"key": "bob-key", "caps": []}])
+(expect-failure "non-enrolled user rejected" "No value found in table"
+  (test-capability (gas-station.GAS_PAYER "bob" 1000 0.0000005)))
+(rollback-tx)
+
+(begin-tx "reject-disabled")
+(env-data {"alice": ["alice-key"]})
+(env-sigs [{"key": "gov-key", "caps": []}])
+(gas-station.disable-user "alice")
+(expect "DISABLE event emitted" true
+  (contains "gas-station.DISABLE" (map (at 'name) (env-events true))))
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 1000})
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect-failure "disabled user rejected" "user is not enrolled"
+  (test-capability (gas-station.GAS_PAYER "alice" 1000 0.0000005)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Canonical gas-payer-v1 invariants on the declared args
+;; ---------------------------------------------------------------------------
+(begin-tx "reject-nonpositive-args")
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 1000})
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect-failure "zero declared limit rejected" "gas limit must be positive"
+  (test-capability (gas-station.GAS_PAYER "alice" 0 0.0000005)))
+(expect-failure "zero declared price rejected" "gas price must be positive"
+  (test-capability (gas-station.GAS_PAYER "alice" 1000 0.0)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Per-user cumulative cap (accounted from ACTUAL gas), across txs.
+;; ---------------------------------------------------------------------------
+(begin-tx "enroll-carol")
+(env-data {"carol": ["carol-key"]})
+(env-sigs [{"key": "gov-key", "caps": []}])
+(gas-station.enroll-user "carol" (read-keyset "carol") 0.0006)
+(commit-tx)
+
+(begin-tx "carol-first-fund")
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 1000})   ;; actual cost 0.0005
+(env-sigs [{"key": "carol-key", "caps": []}])
+(test-capability (gas-station.GAS_PAYER "carol" 1000 0.0000005))
+(commit-tx)
+
+(begin-tx "carol-second-fund-over-cap")
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 1000})
+(env-sigs [{"key": "carol-key", "caps": []}])
+(expect "carol spent 0.0005 after first fund" 0.0005
+  (at "spent" (gas-station.get-user "carol")))
+(expect-failure "second funding exceeding cumulative cap rejected" "funding cap"
+  (test-capability (gas-station.GAS_PAYER "carol" 1000 0.0000005)))  ;; total 0.001 > 0.0006
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; reset-user-spent: governance clears the cumulative counter (new period).
+;; ---------------------------------------------------------------------------
+(begin-tx "reset-spent")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect "carol has non-zero spent before reset" 0.0005
+  (at "spent" (gas-station.get-user "carol")))
+(gas-station.reset-user-spent "carol")
+(expect "RESET event emitted" true
+  (contains "gas-station.RESET" (map (at 'name) (env-events true))))
+(expect "carol spent reset to 0" 0.0
+  (at "spent" (gas-station.get-user "carol")))
+;; after reset, carol can be funded again
+(env-chain-data {"gas-price": 0.0000005, "gas-limit": 1000})
+(env-sigs [{"key": "carol-key", "caps": []}])
+(expect "funding resumes after reset" "()"
+  (format "{}" [(test-capability (gas-station.GAS_PAYER "carol" 1000 0.0000005))]))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Guard predicate denies station spend with no authorization in scope
+;; ---------------------------------------------------------------------------
+(begin-tx "guard-denies")
+(env-sigs [])
+(expect-failure "station guard denies spend with no auth in scope"
+  "station spend not authorized"
+  (gas-station.gas-payer-guard-pred))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Governance withdrawal of residual funds
+;; ---------------------------------------------------------------------------
+(begin-tx "withdraw")
+(env-data {"rk": ["r-key"]})
+(coin.create-account "treasury" (read-keyset "rk"))
+(env-sigs [{"key": "gov-key"
+          , "caps": [(coin.TRANSFER (gas-station.get-station-account) "treasury" 4.0)]}])
+(gas-station.withdraw "treasury" 4.0)
+(expect "treasury received withdrawal" 4.0 (coin.get-balance "treasury"))
+(expect "station balance reduced" 6.0
+  (coin.get-balance (gas-station.get-station-account)))
+(expect "WITHDRAW event emitted" true
+  (contains "gas-station.WITHDRAW" (map (at 'name) (env-events true))))
+(commit-tx)
+
+(begin-tx "withdraw-requires-gov")
+(env-data {"attacker": ["attacker-key"]})
+(coin.create-account "attacker-acct" (read-keyset "attacker"))
+(env-sigs [{"key": "attacker-key"
+          , "caps": [(coin.TRANSFER (gas-station.get-station-account) "attacker-acct" 6.0)]}])
+(expect-failure "non-governance cannot withdraw" "station spend not authorized"
+  (gas-station.withdraw "attacker-acct" 6.0))
+(rollback-tx)
+
+"All gas-station template tests passed"
