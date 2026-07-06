@@ -1,0 +1,299 @@
+;; treasury-test.repl — PCO library template test suite
+;;
+;; Self-contained: loads coin + interfaces from this repo's registry tree.
+;;
+;; Exercises the full 2-of-3 multisig flow — init, propose, approve, execute —
+;; plus every authorization and threshold attack: non-signer propose/approve,
+;; double approval, under-threshold execute, re-execution, self-dealing to the
+;; vault, and the vault guard denying a direct debit.
+
+;; ---------------------------------------------------------------------------
+;; Setup: coin, gov keyset, module, tables. Three signers (alice/bob/carol).
+;; ---------------------------------------------------------------------------
+(begin-tx "setup")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(create-table coin-table)
+(env-data
+  { "treasury-gov": ["gov-key"]
+  , "alice": ["alice-key"], "bob": ["bob-key"]
+  , "carol": ["carol-key"], "dave": ["dave-key"]
+  , "recipient": ["rcpt-key"] })
+(define-keyset "treasury-gov" (read-keyset "treasury-gov"))
+(load "../treasury.pact")
+(create-table config)
+(create-table proposals)
+(create-table signer-guards)
+;; recipient + a non-signer (dave) coin accounts
+(coin.create-account "recipient" (read-keyset "recipient"))
+(coin.create-account "dave" (read-keyset "dave"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; init is governance-gated; sets a 2-of-3 signer set and funds the vault.
+;; ---------------------------------------------------------------------------
+(begin-tx "init-requires-gov")
+(env-sigs [])
+(expect-failure "init without governance fails" "Keyset failure"
+  (treasury.init ["alice" "bob" "carol"] 2
+    [(read-keyset "alice") (read-keyset "bob") (read-keyset "carol")]))
+(rollback-tx)
+
+(begin-tx "init-bad-threshold")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "threshold above signer count rejected" "threshold exceeds signer count"
+  (treasury.init ["alice" "bob"] 3
+    [(read-keyset "alice") (read-keyset "bob")]))
+(rollback-tx)
+
+;; F2 regression: a front-runner pre-creates the vault account before init.
+;; init must tolerate it (create-account is skipped) rather than aborting.
+(begin-tx "front-run-vault")
+(env-sigs [])
+(coin.create-account (treasury.get-vault-account) (treasury.create-vault-guard))
+(commit-tx)
+
+(begin-tx "init")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect "init 2-of-3 succeeds despite pre-created vault" "initialized"
+  (treasury.init ["alice" "bob" "carol"] 2
+    [(read-keyset "alice") (read-keyset "bob") (read-keyset "carol")]))
+(expect "init emits SIGNERS_ROTATED event" true
+  (contains "treasury.SIGNERS_ROTATED" (map (at 'name) (env-events true))))
+;; fund the vault
+(test-capability (coin.CREDIT (treasury.get-vault-account)))
+(coin.credit (treasury.get-vault-account) (treasury.create-vault-guard) 100.0)
+(expect "vault funded" 100.0 (treasury.vault-balance))
+(commit-tx)
+
+(begin-tx "init-once")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "init cannot be run twice (config insert)" "already found while in Insert mode"
+  (treasury.init ["alice" "bob"] 2 [(read-keyset "alice") (read-keyset "bob")]))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; propose — only a signer, authenticated by their guard.
+;; ---------------------------------------------------------------------------
+(begin-tx "propose-non-signer")
+(env-sigs [{"key": "dave-key", "caps": []}])
+(expect-failure "non-signer cannot propose" "not an authorized signer"
+  (treasury.propose "p1" "dave" "recipient" 30.0))
+(rollback-tx)
+
+(begin-tx "propose-unauthenticated")
+;; alice IS a signer, but the caller does not hold alice's key
+(env-sigs [{"key": "dave-key", "caps": []}])
+(expect-failure "proposing as a signer without its guard fails" "Keyset failure"
+  (treasury.propose "p1" "alice" "recipient" 30.0))
+(rollback-tx)
+
+(begin-tx "propose-to-vault")
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect-failure "cannot propose a spend to the vault itself" "recipient cannot be the vault"
+  (treasury.propose "p1" "alice" (treasury.get-vault-account) 30.0))
+(rollback-tx)
+
+(begin-tx "propose-nonexistent-recipient")
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect-failure "cannot propose to a non-existent recipient" "recipient account does not exist"
+  (treasury.propose "p1" "alice" "ghost-account" 30.0))
+(rollback-tx)
+
+(begin-tx "propose-over-precision")
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect-failure "over-precision amount rejected at propose" "precision"
+  (treasury.propose "p1" "alice" "recipient" 0.0000000000001))
+(rollback-tx)
+
+(begin-tx "propose")
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect "alice proposes p1" "p1"
+  (treasury.propose "p1" "alice" "recipient" 30.0))
+(expect "proposal recorded pending with alice as first approval"
+  { "proposer": "alice", "recipient": "recipient", "amount": 30.0
+  , "approvals": ["alice"], "status": "pending" }
+  (treasury.get-proposal "p1"))
+(expect "PROPOSED + APPROVED events emitted" true
+  (let ((names (map (at 'name) (env-events true))))
+    (and (contains "treasury.PROPOSED" names) (contains "treasury.APPROVED" names))))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; execute below threshold must fail (only 1 of 2 approvals).
+;; ---------------------------------------------------------------------------
+(begin-tx "execute-under-threshold")
+(expect-failure "cannot execute below threshold" "below threshold"
+  (treasury.execute "p1"))
+(expect "vault untouched" 100.0 (treasury.vault-balance))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; approve — dedup + signer auth.
+;; ---------------------------------------------------------------------------
+(begin-tx "approve-double")
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect-failure "a signer cannot approve twice" "already approved"
+  (treasury.approve "p1" "alice"))
+(rollback-tx)
+
+(begin-tx "approve-non-signer")
+(env-sigs [{"key": "dave-key", "caps": []}])
+(expect-failure "non-signer cannot approve" "not an authorized signer"
+  (treasury.approve "p1" "dave"))
+(rollback-tx)
+
+(begin-tx "approve")
+(env-sigs [{"key": "bob-key", "caps": []}])
+(expect "bob approves p1" "p1" (treasury.approve "p1" "bob"))
+(expect "p1 now has 2 approvals"
+  ["alice" "bob"] (at 'approvals (treasury.get-proposal "p1")))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; execute at threshold — vault debits recipient exactly once.
+;; ---------------------------------------------------------------------------
+(begin-tx "execute")
+(expect "anyone can execute once threshold met" "p1" (treasury.execute "p1"))
+(expect "recipient received 30" 30.0 (coin.get-balance "recipient"))
+(expect "vault reduced to 70" 70.0 (treasury.vault-balance))
+(expect "proposal marked executed" "executed" (at 'status (treasury.get-proposal "p1")))
+(expect "EXECUTED event emitted" true
+  (contains "treasury.EXECUTED" (map (at 'name) (env-events true))))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; re-execution must fail (no double spend).
+;; ---------------------------------------------------------------------------
+(begin-tx "re-execute")
+(expect-failure "cannot re-execute a settled proposal" "not pending"
+  (treasury.execute "p1"))
+(expect "vault unchanged at 70" 70.0 (treasury.vault-balance))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; governance cancel prevents execution of a pending proposal.
+;; ---------------------------------------------------------------------------
+(begin-tx "cancel")
+(env-sigs [{"key": "carol-key", "caps": []}])
+(treasury.propose "p2" "carol" "recipient" 10.0)
+(commit-tx)
+
+(begin-tx "cancel-requires-gov")
+(env-sigs [{"key": "carol-key", "caps": []}])
+(expect-failure "non-governance cannot cancel" "Keyset failure"
+  (treasury.cancel "p2"))
+(rollback-tx)
+
+(begin-tx "cancel-gov")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect "governance cancels p2" "p2" (treasury.cancel "p2"))
+(commit-tx)
+
+(begin-tx "approve-cancelled")
+(env-sigs [{"key": "bob-key", "caps": []}])
+(expect-failure "cannot approve a cancelled proposal" "not pending"
+  (treasury.approve "p2" "bob"))
+(rollback-tx)
+
+(begin-tx "execute-cancelled")
+(expect-failure "cannot execute a cancelled proposal" "not pending"
+  (treasury.execute "p2"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; vault guard denies a direct debit outside an approved execute.
+;; ---------------------------------------------------------------------------
+(begin-tx "vault-guard-denies")
+(env-sigs [{"key": "dave-key"
+          , "caps": [(coin.TRANSFER (treasury.get-vault-account) "dave" 70.0)]}])
+(expect-failure "direct vault debit denied (SPEND not in scope)"
+  "not granted: (treasury.SPEND)"
+  (coin.transfer (treasury.get-vault-account) "dave" 70.0))
+(expect "vault still 70" 70.0 (treasury.vault-balance))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; governance signer rotation.
+;; ---------------------------------------------------------------------------
+(begin-tx "rotate-dup-signers")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "duplicate signers rejected" "duplicate signers"
+  (treasury.rotate-signers ["alice" "alice"] 2
+    [(read-keyset "alice") (read-keyset "alice")]))
+(rollback-tx)
+
+(begin-tx "rotate")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect "rotate to alice+dave, 2-of-2" "rotated"
+  (treasury.rotate-signers ["alice" "dave"] 2
+    [(read-keyset "alice") (read-keyset "dave")]))
+(expect "dave is now a signer" true (treasury.is-signer "dave"))
+(expect "carol is no longer a signer" false (treasury.is-signer "carol"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; MEDIUM regression: a rotated-out signer's stale approval must NOT count
+;; toward the threshold at execute time.
+;; ---------------------------------------------------------------------------
+(begin-tx "stale-approval-setup")
+;; fresh signer set alice+bob+carol, 2-of-3
+(env-sigs [{"key": "gov-key", "caps": []}])
+(treasury.rotate-signers ["alice" "bob" "carol"] 2
+  [(read-keyset "alice") (read-keyset "bob") (read-keyset "carol")])
+(commit-tx)
+
+(begin-tx "stale-propose")
+;; bob (now considered compromised) proposes -> counts as approval #1
+(env-sigs [{"key": "bob-key", "caps": []}])
+(treasury.propose "p-stale" "bob" "recipient" 5.0)
+(commit-tx)
+
+(begin-tx "stale-approve")
+;; carol adds approval #2 -> 2 approvals, would meet threshold
+(env-sigs [{"key": "carol-key", "caps": []}])
+(treasury.approve "p-stale" "carol")
+(commit-tx)
+
+(begin-tx "rotate-out-bob")
+;; governance responds to bob's compromise: rotate bob out (alice+carol, 2-of-2)
+(env-sigs [{"key": "gov-key", "caps": []}])
+(treasury.rotate-signers ["alice" "carol"] 2
+  [(read-keyset "alice") (read-keyset "carol")])
+(commit-tx)
+
+(begin-tx "stale-execute-blocked")
+;; p-stale has [bob carol]; bob is no longer a signer, so only 1 VALID
+;; approval remains -> below the 2-of-2 threshold -> must NOT execute.
+(expect-failure "rotated-out signer's approval does not count" "below threshold"
+  (treasury.execute "p-stale"))
+(expect "vault unchanged" 70.0 (treasury.vault-balance))
+;; alice (a current signer) approves -> now 2 valid -> executes
+(env-sigs [{"key": "alice-key", "caps": []}])
+(treasury.approve "p-stale" "alice")
+(commit-tx)
+
+(begin-tx "stale-execute-ok")
+(expect "executes once threshold met by current signers" "p-stale"
+  (treasury.execute "p-stale"))
+(expect "recipient received the 5" 35.0 (coin.get-balance "recipient"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; LOW regression: a signer can approve with a SCOPED signature (scoped to
+;; SIGNER-AUTH), i.e. their approval signature need not be unscoped.
+;; ---------------------------------------------------------------------------
+(begin-tx "scoped-sig-propose")
+(env-sigs [{"key": "alice-key", "caps": [(treasury.SIGNER-AUTH "alice")]}])
+(expect "propose works under a scoped SIGNER-AUTH signature" "p-scoped"
+  (treasury.propose "p-scoped" "alice" "recipient" 1.0))
+(commit-tx)
+
+(begin-tx "scoped-sig-approve")
+(env-sigs [{"key": "carol-key", "caps": [(treasury.SIGNER-AUTH "carol")]}])
+(expect "approve works under a scoped SIGNER-AUTH signature" "p-scoped"
+  (treasury.approve "p-scoped" "carol"))
+(commit-tx)
+
+"All multisig-treasury template tests passed"
