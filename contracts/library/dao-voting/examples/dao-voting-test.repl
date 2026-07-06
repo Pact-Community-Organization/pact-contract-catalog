@@ -1,0 +1,457 @@
+;; dao-voting-test.repl — PCO library template test suite
+;;
+;; Fully standalone: this module custodies no funds and depends on no other
+;; module (not even coin), so nothing else is loaded.
+;;
+;; Drives the full proposal lifecycle on a controlled clock (env-chain-data
+;; block-time) with a 4-member set (alice/bob/carol/dan), quorum 50%,
+;; threshold 60%: pass, quorum-fail, threshold-fail, and all-abstain
+;; outcomes; deadline boundaries (vote strictly before, close at-or-after);
+;; every authorization attack (non-member, wrong key, sig scoped to another
+;; member, governance bypass); counts-once voting; and the rotation
+;; regression: rotating a member out revokes their in-flight votes at close.
+
+;; ---------------------------------------------------------------------------
+;; Setup: keyset, module, tables.
+;; ---------------------------------------------------------------------------
+(begin-tx "setup")
+(env-data
+  { "dao-voting-gov": ["gov-key"]
+  , "alice": ["alice-key"], "bob": ["bob-key"], "carol": ["carol-key"]
+  , "dan": ["dan-key"], "eve": ["eve-key"], "carol2": ["carol2-key"] })
+(define-keyset "dao-voting-gov" (read-keyset "dao-voting-gov"))
+(load "../dao-voting.pact")
+(create-table config)
+(create-table member-guards)
+(create-table proposals)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; init: governance-gated, validated config.
+;; ---------------------------------------------------------------------------
+(begin-tx "init-requires-gov")
+(env-sigs [])
+(expect-failure "init without governance fails" "Keyset failure"
+  (dao-voting.init ["alice"] [(read-keyset "alice")] 50 60))
+(rollback-tx)
+
+(begin-tx "init-validation")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "empty member set rejected" "at least one member required"
+  (dao-voting.init [] [] 50 60))
+(expect-failure "members/guards mismatch rejected" "members/guards length mismatch"
+  (dao-voting.init ["alice" "bob"] [(read-keyset "alice")] 50 60))
+(expect-failure "duplicate members rejected" "duplicate members"
+  (dao-voting.init ["alice" "alice"]
+    [(read-keyset "alice") (read-keyset "alice")] 50 60))
+(expect-failure "zero quorum rejected" "quorum-pct must be in [1,100]"
+  (dao-voting.init ["alice"] [(read-keyset "alice")] 0 60))
+(expect-failure "quorum above 100 rejected" "quorum-pct must be in [1,100]"
+  (dao-voting.init ["alice"] [(read-keyset "alice")] 101 60))
+(expect-failure "zero threshold rejected" "threshold-pct must be in [1,100]"
+  (dao-voting.init ["alice"] [(read-keyset "alice")] 50 0))
+(expect-failure "threshold above 100 rejected" "threshold-pct must be in [1,100]"
+  (dao-voting.init ["alice"] [(read-keyset "alice")] 50 101))
+(rollback-tx)
+
+(begin-tx "init")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect "init 4 members, quorum 50, threshold 60" "initialized"
+  (dao-voting.init ["alice" "bob" "carol" "dan"]
+    [(read-keyset "alice") (read-keyset "bob")
+     (read-keyset "carol") (read-keyset "dan")] 50 60))
+(expect "init emits MEMBERS_ROTATED" true
+  (contains "dao-voting.MEMBERS_ROTATED" (map (at 'name) (env-events true))))
+(commit-tx)
+
+(begin-tx "init-once")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "init cannot run twice" "already found while in Insert mode"
+  (dao-voting.init ["alice"] [(read-keyset "alice")] 50 60))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; propose: members only, authenticated, future deadline.
+;; ---------------------------------------------------------------------------
+(begin-tx "propose-non-member")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-sigs [{"key": "eve-key", "caps": [(dao-voting.MEMBER-AUTH "eve")]}])
+(expect-failure "non-member cannot propose" "not a member"
+  (dao-voting.propose "p1" "eve" "Fund the grants program"
+    (time "2026-01-10T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "propose-wrong-key")
+(env-sigs [{"key": "eve-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect-failure "proposing as a member without their key fails" "Keyset failure"
+  (dao-voting.propose "p1" "alice" "Fund the grants program"
+    (time "2026-01-10T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "propose-past-deadline")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect-failure "past deadline rejected" "deadline must be in the future"
+  (dao-voting.propose "p1" "alice" "Fund the grants program"
+    (time "2025-12-31T00:00:00Z")))
+(expect-failure "empty title rejected" "title required"
+  (dao-voting.propose "p1" "alice" "" (time "2026-01-10T00:00:00Z")))
+(rollback-tx)
+
+(begin-tx "propose-p1")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect "p1 proposed" "p1"
+  (dao-voting.propose "p1" "alice" "Fund the grants program"
+    (time "2026-01-10T00:00:00Z")))
+(expect "PROPOSED emitted" true
+  (contains "dao-voting.PROPOSED" (map (at 'name) (env-events true))))
+(expect "proposer did not auto-vote" false (dao-voting.has-voted "p1" "alice"))
+(commit-tx)
+
+(begin-tx "propose-duplicate-id")
+(env-sigs [{"key": "bob-key", "caps": [(dao-voting.MEMBER-AUTH "bob")]}])
+(expect-failure "reused proposal id rejected" "already found while in Insert mode"
+  (dao-voting.propose "p1" "bob" "Something else" (time "2026-01-10T00:00:00Z")))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; vote: members only, one immutable vote each, strictly before the deadline.
+;; ---------------------------------------------------------------------------
+(begin-tx "vote-non-member")
+(env-chain-data { "block-time": (time "2026-01-05T00:00:00Z") })
+(env-sigs [{"key": "eve-key", "caps": [(dao-voting.MEMBER-AUTH "eve")]}])
+(expect-failure "non-member cannot vote" "not a member"
+  (dao-voting.vote "p1" "eve" "yes"))
+(rollback-tx)
+
+(begin-tx "vote-wrong-key")
+(env-sigs [{"key": "eve-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect-failure "voting as a member without their key fails" "Keyset failure"
+  (dao-voting.vote "p1" "alice" "yes"))
+(rollback-tx)
+
+(begin-tx "vote-bad-choice")
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect-failure "invalid choice rejected" "choice must be yes, no, or abstain"
+  (dao-voting.vote "p1" "alice" "maybe"))
+(rollback-tx)
+
+(begin-tx "vote-p1")
+(env-chain-data { "block-time": (time "2026-01-05T00:00:00Z") })
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect "alice votes yes" "p1" (dao-voting.vote "p1" "alice" "yes"))
+(expect "VOTED emitted" true
+  (contains "dao-voting.VOTED" (map (at 'name) (env-events true))))
+(expect "has-voted view reflects the vote" true (dao-voting.has-voted "p1" "alice"))
+(expect-failure "double vote rejected (even with a new choice)" "member already voted"
+  (dao-voting.vote "p1" "alice" "no"))
+(commit-tx)
+
+(begin-tx "vote-p1-rest")
+(env-chain-data { "block-time": (time "2026-01-05T00:00:00Z") })
+(env-sigs [{"key": "bob-key", "caps": [(dao-voting.MEMBER-AUTH "bob")]}
+          ,{"key": "carol-key", "caps": [(dao-voting.MEMBER-AUTH "carol")]}
+          ,{"key": "dan-key", "caps": [(dao-voting.MEMBER-AUTH "dan")]}])
+(expect "bob votes yes" "p1" (dao-voting.vote "p1" "bob" "yes"))
+(expect "carol votes no" "p1" (dao-voting.vote "p1" "carol" "no"))
+(expect "dan abstains" "p1" (dao-voting.vote "p1" "dan" "abstain"))
+(commit-tx)
+
+(begin-tx "vote-at-deadline")
+;; the deadline itself is NOT votable (strictly before)
+(env-chain-data { "block-time": (time "2026-01-10T00:00:00Z") })
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect-failure "vote at the deadline rejected" "voting deadline has passed"
+  (dao-voting.vote "p1" "alice" "yes"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; close: at-or-after the deadline, anyone; abstain counts toward quorum but
+;; not the threshold. p1: 2 yes, 1 no, 1 abstain of 4 members —
+;; participation 4/4 >= 50%; yes 2/3 = 66% >= 60% → PASSED.
+;; ---------------------------------------------------------------------------
+(begin-tx "close-before-deadline")
+(env-chain-data { "block-time": (time "2026-01-09T23:59:59Z") })
+(env-sigs [])
+(expect-failure "close before the deadline rejected" "voting deadline has not passed"
+  (dao-voting.close "p1"))
+(rollback-tx)
+
+(begin-tx "close-p1")
+;; close AT the deadline is allowed (>=); no signature required
+(env-chain-data { "block-time": (time "2026-01-10T00:00:00Z") })
+(env-sigs [])
+(expect "p1 passes (66% yes of yes+no, full participation)" "passed"
+  (dao-voting.close "p1"))
+(expect "CLOSED emitted" true
+  (contains "dao-voting.CLOSED" (map (at 'name) (env-events true))))
+(expect "final tallies recorded" [2 1 1]
+  (let ((p (dao-voting.get-proposal "p1")))
+    [(at 'final-yes p) (at 'final-no p) (at 'final-abstain p)]))
+(commit-tx)
+
+(begin-tx "close-settled")
+(env-chain-data { "block-time": (time "2026-01-11T00:00:00Z") })
+(expect-failure "re-close rejected" "proposal is not open"
+  (dao-voting.close "p1"))
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect-failure "vote on a settled proposal rejected" "proposal is not open"
+  (dao-voting.vote "p1" "alice" "yes"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Outcome matrix on fresh proposals (same 4-member config).
+;; p2 quorum-fail: only alice votes (1/4 = 25% < 50%) despite 100% yes.
+;; p3 threshold-fail: 1 yes, 2 no (33% < 60%) with quorum met.
+;; p4 all-abstain: quorum met (2/4 = 50%) but zero yes → rejected.
+;; ---------------------------------------------------------------------------
+(begin-tx "outcome-matrix")
+(env-chain-data { "block-time": (time "2026-02-01T00:00:00Z") })
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}
+          ,{"key": "bob-key", "caps": [(dao-voting.MEMBER-AUTH "bob")]}
+          ,{"key": "carol-key", "caps": [(dao-voting.MEMBER-AUTH "carol")]}])
+(dao-voting.propose "p2" "alice" "Quorum fail" (time "2026-02-10T00:00:00Z"))
+(dao-voting.propose "p3" "alice" "Threshold fail" (time "2026-02-10T00:00:00Z"))
+(dao-voting.propose "p4" "alice" "All abstain" (time "2026-02-10T00:00:00Z"))
+(dao-voting.vote "p2" "alice" "yes")
+(dao-voting.vote "p3" "alice" "yes")
+(dao-voting.vote "p3" "bob" "no")
+(dao-voting.vote "p3" "carol" "no")
+(dao-voting.vote "p4" "alice" "abstain")
+(dao-voting.vote "p4" "bob" "abstain")
+(commit-tx)
+
+(begin-tx "close-outcome-matrix")
+(env-chain-data { "block-time": (time "2026-02-10T00:00:00Z") })
+(env-sigs [])
+(expect "p2 rejected: 100% yes but quorum missed" "rejected"
+  (dao-voting.close "p2"))
+(expect "p3 rejected: quorum met, threshold missed" "rejected"
+  (dao-voting.close "p3"))
+(expect "p4 rejected: abstains meet quorum but zero yes" "rejected"
+  (dao-voting.close "p4"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; cancel: governance only, open proposals only.
+;; ---------------------------------------------------------------------------
+(begin-tx "cancel")
+(env-chain-data { "block-time": (time "2026-02-01T00:00:00Z") })
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(dao-voting.propose "p5" "alice" "To be cancelled" (time "2026-02-10T00:00:00Z"))
+(env-sigs [])
+(expect-failure "cancel without governance fails" "Keyset failure"
+  (dao-voting.cancel "p5"))
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect "governance cancels p5" "p5" (dao-voting.cancel "p5"))
+(expect "CANCELLED emitted" true
+  (contains "dao-voting.CANCELLED" (map (at 'name) (env-events true))))
+(expect-failure "cancel a settled proposal rejected" "proposal is not open"
+  (dao-voting.cancel "p1"))
+(commit-tx)
+
+(begin-tx "cancelled-is-dead")
+(env-chain-data { "block-time": (time "2026-02-05T00:00:00Z") })
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect-failure "vote on a cancelled proposal rejected" "proposal is not open"
+  (dao-voting.vote "p5" "alice" "yes"))
+(env-chain-data { "block-time": (time "2026-02-10T00:00:00Z") })
+(expect-failure "close a cancelled proposal rejected" "proposal is not open"
+  (dao-voting.close "p5"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Rotation regression: rotating a member out revokes their in-flight votes.
+;; p6 collects alice yes + bob yes + carol no (would pass: 66% >= 60%).
+;; Alice is then rotated OUT (compromise response). At close only current
+;; members count: 1 yes, 1 no → 50% < 60% → REJECTED. The revocation
+;; flips the outcome — exactly what rotation is for.
+;; ---------------------------------------------------------------------------
+(begin-tx "propose-and-vote-p6")
+(env-chain-data { "block-time": (time "2026-03-01T00:00:00Z") })
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}
+          ,{"key": "bob-key", "caps": [(dao-voting.MEMBER-AUTH "bob")]}
+          ,{"key": "carol-key", "caps": [(dao-voting.MEMBER-AUTH "carol")]}])
+(dao-voting.propose "p6" "bob" "Rotation regression" (time "2026-03-10T00:00:00Z"))
+(dao-voting.vote "p6" "alice" "yes")
+(dao-voting.vote "p6" "bob" "yes")
+(dao-voting.vote "p6" "carol" "no")
+(commit-tx)
+
+(begin-tx "rotate-alice-out")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "rotate with duplicate members rejected" "duplicate members"
+  (dao-voting.rotate-members ["bob" "bob"]
+    [(read-keyset "bob") (read-keyset "bob")] 50 60))
+(expect "alice rotated out (3 members remain)" "rotated"
+  (dao-voting.rotate-members ["bob" "carol" "dan"]
+    [(read-keyset "bob") (read-keyset "carol") (read-keyset "dan")] 50 60))
+(commit-tx)
+
+(begin-tx "rotated-out-member-cannot-vote")
+(env-chain-data { "block-time": (time "2026-03-05T00:00:00Z") })
+(env-sigs [{"key": "alice-key", "caps": [(dao-voting.MEMBER-AUTH "alice")]}])
+(expect-failure "rotated-out member cannot vote" "not a member"
+  (dao-voting.vote "p6" "alice" "yes"))
+(rollback-tx)
+
+(begin-tx "close-p6-stale-vote-dropped")
+(env-chain-data { "block-time": (time "2026-03-10T00:00:00Z") })
+(env-sigs [])
+(expect "p6 rejected: alice's stale yes no longer counts" "rejected"
+  (dao-voting.close "p6"))
+(expect "final tallies exclude the rotated-out member" [1 1 0]
+  (let ((p (dao-voting.get-proposal "p6")))
+    [(at 'final-yes p) (at 'final-no p) (at 'final-abstain p)]))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; A rotated-IN member can vote on a still-open proposal immediately.
+;; ---------------------------------------------------------------------------
+(begin-tx "rotate-eve-in")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(dao-voting.rotate-members ["bob" "carol" "dan" "eve"]
+  [(read-keyset "bob") (read-keyset "carol")
+   (read-keyset "dan") (read-keyset "eve")] 50 60)
+(commit-tx)
+
+(begin-tx "new-member-votes")
+(env-chain-data { "block-time": (time "2026-03-01T00:00:00Z") })
+(env-sigs [{"key": "bob-key", "caps": [(dao-voting.MEMBER-AUTH "bob")]}])
+(dao-voting.propose "p7" "bob" "New member participates" (time "2026-03-10T00:00:00Z"))
+(env-sigs [{"key": "eve-key", "caps": [(dao-voting.MEMBER-AUTH "eve")]}])
+(expect "newly enrolled member votes" "p7" (dao-voting.vote "p7" "eve" "yes"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Snapshot regression: quorum/threshold are locked at propose time.
+;; p8 (1 yes, 2 no under threshold 60) must stay REJECTED even after
+;; governance drops the percentages to 1/1 — the bar cannot be moved on an
+;; open proposal. New proposals (p9) use the new percentages.
+;; ---------------------------------------------------------------------------
+(begin-tx "propose-and-vote-p8")
+(env-chain-data { "block-time": (time "2026-04-01T00:00:00Z") })
+(env-sigs [{"key": "bob-key", "caps": [(dao-voting.MEMBER-AUTH "bob")]}
+          ,{"key": "carol-key", "caps": [(dao-voting.MEMBER-AUTH "carol")]}
+          ,{"key": "dan-key", "caps": [(dao-voting.MEMBER-AUTH "dan")]}])
+(dao-voting.propose "p8" "bob" "Snapshot regression" (time "2026-04-10T00:00:00Z"))
+(dao-voting.vote "p8" "bob" "yes")
+(dao-voting.vote "p8" "carol" "no")
+(dao-voting.vote "p8" "dan" "no")
+(commit-tx)
+
+(begin-tx "gov-lowers-bar")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(dao-voting.rotate-members ["bob" "carol" "dan" "eve"]
+  [(read-keyset "bob") (read-keyset "carol")
+   (read-keyset "dan") (read-keyset "eve")] 1 1)
+(commit-tx)
+
+(begin-tx "close-p8-snapshot-holds")
+(env-chain-data { "block-time": (time "2026-04-10T00:00:00Z") })
+(env-sigs [])
+(expect "p8 keeps its snapshotted threshold (60)" 60
+  (at 'threshold-pct (dao-voting.get-proposal "p8")))
+(expect "p8 rejected: governance cannot move the bar on an open proposal"
+  "rejected" (dao-voting.close "p8"))
+(commit-tx)
+
+(begin-tx "new-proposal-uses-new-bar")
+(env-chain-data { "block-time": (time "2026-04-11T00:00:00Z") })
+(env-sigs [{"key": "eve-key", "caps": [(dao-voting.MEMBER-AUTH "eve")]}])
+(dao-voting.propose "p9" "eve" "Post-rotation bar" (time "2026-04-20T00:00:00Z"))
+(dao-voting.vote "p9" "eve" "yes")
+(env-chain-data { "block-time": (time "2026-04-20T00:00:00Z") })
+(expect "p9 (proposed after rotation) passes under the 1/1 bar" "passed"
+  (dao-voting.close "p9"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Documented sharp edge: re-keying a member IN PLACE (same name, new guard)
+;; revives votes the old key cast on still-open proposals — this is WHY the
+;; compromise response is to REMOVE the name, never to re-key it.
+;; ---------------------------------------------------------------------------
+(begin-tx "restore-bar-and-propose-p10")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(dao-voting.rotate-members ["bob" "carol" "dan" "eve"]
+  [(read-keyset "bob") (read-keyset "carol")
+   (read-keyset "dan") (read-keyset "eve")] 50 60)
+(env-chain-data { "block-time": (time "2026-05-01T00:00:00Z") })
+(env-sigs [{"key": "bob-key", "caps": [(dao-voting.MEMBER-AUTH "bob")]}
+          ,{"key": "carol-key", "caps": [(dao-voting.MEMBER-AUTH "carol")]}
+          ,{"key": "dan-key", "caps": [(dao-voting.MEMBER-AUTH "dan")]}])
+(dao-voting.propose "p10" "bob" "Re-key sharp edge" (time "2026-05-10T00:00:00Z"))
+(dao-voting.vote "p10" "bob" "yes")
+(dao-voting.vote "p10" "carol" "yes")
+(dao-voting.vote "p10" "dan" "no")
+(commit-tx)
+
+(begin-tx "rekey-carol-in-place")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(dao-voting.rotate-members ["bob" "carol" "dan" "eve"]
+  [(read-keyset "bob") (read-keyset "carol2")
+   (read-keyset "dan") (read-keyset "eve")] 50 60)
+(commit-tx)
+
+(begin-tx "close-p10-rekey-revives")
+(env-chain-data { "block-time": (time "2026-05-10T00:00:00Z") })
+(env-sigs [])
+;; carol's OLD-key vote still counts because the NAME is still a member:
+;; 2 yes / 1 no = 66% >= 60 → passed. Removal (not re-key) would have
+;; dropped it (see close-p6-stale-vote-dropped).
+(expect "in-place re-key revives the old key's vote (documented)" "passed"
+  (dao-voting.close "p10"))
+(expect "revived vote is in the final tally" [2 1 0]
+  (let ((p (dao-voting.get-proposal "p10")))
+    [(at 'final-yes p) (at 'final-no p) (at 'final-abstain p)]))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Math edges: inclusive boundaries and the single-member set.
+;; ---------------------------------------------------------------------------
+(begin-tx "exact-boundaries")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(dao-voting.rotate-members ["bob" "carol" "dan" "eve"]
+  [(read-keyset "bob") (read-keyset "carol2")
+   (read-keyset "dan") (read-keyset "eve")] 50 50)
+(env-chain-data { "block-time": (time "2026-06-01T00:00:00Z") })
+(env-sigs [{"key": "bob-key", "caps": [(dao-voting.MEMBER-AUTH "bob")]}
+          ,{"key": "dan-key", "caps": [(dao-voting.MEMBER-AUTH "dan")]}])
+(dao-voting.propose "p11" "bob" "Exact boundaries" (time "2026-06-10T00:00:00Z"))
+(dao-voting.vote "p11" "bob" "yes")
+(dao-voting.vote "p11" "dan" "no")
+(env-chain-data { "block-time": (time "2026-06-10T00:00:00Z") })
+(env-sigs [])
+;; participation 2/4 = exactly 50% quorum; yes 1/2 = exactly 50% threshold:
+;; both boundaries are inclusive — strict majority needs threshold 51.
+(expect "exactly-at-quorum and exactly-at-threshold pass (inclusive)" "passed"
+  (dao-voting.close "p11"))
+(commit-tx)
+
+(begin-tx "single-member-dao")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(dao-voting.rotate-members ["bob"] [(read-keyset "bob")] 100 100)
+(env-chain-data { "block-time": (time "2026-07-01T00:00:00Z") })
+(env-sigs [{"key": "bob-key", "caps": [(dao-voting.MEMBER-AUTH "bob")]}])
+(dao-voting.propose "p12" "bob" "Sole member votes" (time "2026-07-10T00:00:00Z"))
+(dao-voting.vote "p12" "bob" "yes")
+(dao-voting.propose "p13" "bob" "Sole member silent" (time "2026-07-10T00:00:00Z"))
+(env-chain-data { "block-time": (time "2026-07-10T00:00:00Z") })
+(env-sigs [])
+(expect "1-member 100/100: sole yes passes" "passed" (dao-voting.close "p12"))
+(expect "1-member 100/100: no votes fails quorum" "rejected"
+  (dao-voting.close "p13"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Member-count ceiling (gas bound for close's O(members x voters) filter).
+;; ---------------------------------------------------------------------------
+(begin-tx "member-cap")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "member set above MAX_MEMBERS rejected"
+  "member count exceeds maximum of 200"
+  (dao-voting.rotate-members
+    (map (lambda (i:integer) (format "m{}" [i])) (enumerate 1 201))
+    (make-list 201 (read-keyset "bob")) 50 60))
+(rollback-tx)

@@ -9,6 +9,7 @@ _Generated from `contracts/**/metadata.yaml`._
 
 | Name | Slug | Version | Audit Status | Tags |
 |------|------|---------|--------------|------|
+| DAO Voting (membership, quorum + threshold) | dao-voting | 1.0.0 | self-reviewed | dao, voting, governance, template, library |
 | Gas Station (drain-defended) | gas-station | 1.0.0 | self-reviewed | gas-station, gas-payer-v1, gasless, template, library |
 | Hello World | hello-world | 1.0.0 | self-reviewed | hello-world, tutorial, basic |
 | Multisig Treasury (M-of-N) | multisig-treasury | 1.0.0 | self-reviewed | treasury, multisig, governance, template, library |
