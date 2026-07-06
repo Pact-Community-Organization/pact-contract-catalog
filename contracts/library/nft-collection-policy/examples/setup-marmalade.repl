@@ -1,0 +1,47 @@
+;; setup-marmalade.repl — loads the REAL marmalade-v2 stack from this repo's
+;; registry tree (verbatim chain snapshots), plus one test-support interface
+;; stub (support/kip-account-protocols-v1.pact — see its header).
+;;
+;; Loaded by vesting-style suites via (load "setup-marmalade.repl").
+
+(begin-tx "namespaces-and-keysets")
+(env-data { "ns-admin": ["ns-admin-key"] })
+(env-sigs [{"key": "ns-admin-key", "caps": []}])
+(define-namespace 'kip (read-keyset "ns-admin") (read-keyset "ns-admin"))
+(define-namespace 'util (read-keyset "ns-admin") (read-keyset "ns-admin"))
+(define-namespace 'marmalade-v2 (read-keyset "ns-admin") (read-keyset "ns-admin"))
+(define-keyset "util-ns-admin" (read-keyset "ns-admin"))
+(namespace 'marmalade-v2)
+(define-keyset "marmalade-v2.marmalade-contract-admin" (read-keyset "ns-admin"))
+(commit-tx)
+
+(begin-tx "load-kip")
+(env-data { "ns": "kip" })
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/token-manifest/kip-token-manifest.pact")
+(load "../../../registry/kip/token-manifest/kip-poly-fungible-v3.pact")
+(load "../../../registry/kip/token-policy-v2/kip-token-policy-v2.pact")
+(load "support/kip-account-protocols-v1.pact")
+(load "support/kip-updatable-uri-policy-v1.pact")
+(commit-tx)
+
+(begin-tx "load-util")
+(env-sigs [{"key": "ns-admin-key", "caps": []}])
+;; the verbatim snapshot has no namespace directive; enter it here
+(namespace 'util)
+(load "../../../registry/core/fungible-util/fungible-util.pact")
+(commit-tx)
+
+(begin-tx "load-marmalade")
+(env-data { "ns": "marmalade-v2", "upgrade": false, "upgrade_version_1": false })
+(env-sigs [{"key": "ns-admin-key", "caps": []}])
+(load "../../../registry/marmalade/ledger/ledger-interface.pact")
+(load "../../../registry/marmalade/ledger/ledger-v2-interface.pact")
+(load "../../../registry/marmalade/policy-manager/sale-interface.pact")
+(load "../../../registry/marmalade/policy-manager/policy-manager.pact")
+(load "../../../registry/marmalade/ledger/marmalade-v2-ledger.pact")
+;; the verbatim snapshot's fresh-deploy branch predates the `versions` table
+;; (added on-chain in the version-1 upgrade); create it explicitly
+(create-table marmalade-v2.ledger.versions)
+(marmalade-v2.policy-manager.init marmalade-v2.ledger)
+(commit-tx)

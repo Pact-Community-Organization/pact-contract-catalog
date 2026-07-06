@@ -115,6 +115,38 @@
 }
 ,
 {
+  "name": "NFT Collection Policy (marmalade-v2)",
+  "slug": "nft-collection-policy",
+  "version": "1.0.0",
+  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
+  "license": "Apache-2.0",
+  "authors": [
+    {
+      "name": "Pact Community Organization",
+      "email": "info@pact-community.org"
+    }
+  ],
+  "audit_status": "self-reviewed",
+  "tags": [
+    "nft",
+    "marmalade",
+    "collection",
+    "token-policy",
+    "template",
+    "library"
+  ],
+  "keywords": [
+    "pact",
+    "smart-contract",
+    "nft",
+    "marmalade-v2",
+    "token-policy-v2",
+    "collection",
+    "mint"
+  ]
+}
+,
+{
   "name": "Token (fungible-v2 + fungible-xchain-v1)",
   "slug": "token-fungible",
   "version": "0.2.0",
