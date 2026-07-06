@@ -124,6 +124,23 @@ is the remaining evidence gate before any production claim. `independently-audit
 additionally requires a third-party report with a matching source hash
 (`docs/CONTRACT_POLICIES.md` §3.1).
 
+## Devnet validation (on-node evidence)
+
+**Validated on a live KDA-CE devnet (recap-development) node, 2026-07-06.** The template was deployed under the
+`free` namespace (governance keyset namespaced, per the deployment checklist)
+and its critical paths were driven to mined confirmation with `@kadena/client`
+— the required evidence for the REPL-invisible read-in-enforce class.
+
+| | |
+|---|---|
+| Deployed module | `free.gas-station` |
+| Source hash | `xPqKXWx8GSKf8JKQBgJNT2NoybE0VGBnyPIMH9Zu9zw` |
+| Confirmed transactions | 7 |
+
+Proven on-node: the full `GAS_PAYER` path: a **user holding 0 KDA** ran a real mined transaction the **station paid for**; the allowlist read is bound before `enforce-guard`, spend was bounded/accounted against `(chain-data)` actual gas (station debited, user's `spent` counter advanced), and a non-enrolled user was denied sponsorship.
+
+Reproduce: `scripts/devnet-validate` → `npm run gas-station` (see that directory's README).
+
 ## Reproduce the review
 
 ```bash

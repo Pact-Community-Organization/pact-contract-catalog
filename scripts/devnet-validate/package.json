@@ -1,0 +1,26 @@
+{
+  "name": "pco-devnet-validate",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Devnet validation campaign for the PCO library templates: deploys each template to a KDA-CE devnet and drives its critical on-chain paths - the evidence class the REPL cannot produce (read-in-enforce, try-read, managed-cap and SPV behavior are node-only).",
+  "scripts": {
+    "treasury": "tsx src/treasury.ts",
+    "vesting": "tsx src/vesting.ts",
+    "dao-voting": "tsx src/dao-voting.ts",
+    "oracle-feed": "tsx src/oracle-feed.ts",
+    "gas-station": "tsx src/gas-station.ts",
+    "token-fungible": "tsx src/token-fungible.ts",
+    "hello-world": "tsx src/hello-world.ts",
+    "all": "tsx src/treasury.ts && tsx src/vesting.ts && tsx src/dao-voting.ts && tsx src/oracle-feed.ts && tsx src/gas-station.ts && tsx src/token-fungible.ts && tsx src/hello-world.ts"
+  },
+  "dependencies": {
+    "@kadena/client": "^1.18.3",
+    "@kadena/cryptography-utils": "^0.4.4",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0"
+  }
+}

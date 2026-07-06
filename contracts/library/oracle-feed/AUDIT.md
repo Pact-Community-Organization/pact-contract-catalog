@@ -113,6 +113,23 @@ implemented. **Not independent human review.** Promotion requires a second
 reviewer (`community-reviewed`) or a third-party report with a matching source
 hash (`independently-audited`) — see `docs/CONTRACT_POLICIES.md` §3.1.
 
+## Devnet validation (on-node evidence)
+
+**Validated on a live KDA-CE devnet (recap-development) node, 2026-07-06.** The template was deployed under the
+`free` namespace (governance keyset namespaced, per the deployment checklist)
+and its critical paths were driven to mined confirmation with `@kadena/client`
+— the required evidence for the REPL-invisible read-in-enforce class.
+
+| | |
+|---|---|
+| Deployed module | `free.oracle-feed-v2` |
+| Source hash | `rp1fc5wsax1zxQvkf-bCT4ajtdn0wOkBn6LAMJQITLQ` |
+| Confirmed transactions | 13 |
+
+Proven on-node: `PUBLISH-AUTH` (config-read bound before `enforce`); the `get-price` median pipeline ran both via `/local` and **inside a mined consumer transaction**; staleness failed closed against real block timestamps, and publisher rotation revoked the outlier's standing observation on-node.
+
+Reproduce: `scripts/devnet-validate` → `npm run oracle-feed` (see that directory's README).
+
 ## Reproduce the review
 
 ```bash

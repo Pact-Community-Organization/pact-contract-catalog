@@ -116,6 +116,23 @@ yet snapshotted; the auditor confirmed both are pure interfaces (no state, no
 executable bodies) whose signatures match the registry sources' usage — they
 cannot alter behavior under test.
 
+## Devnet validation status
+
+Unlike the other library templates, this one is **not** part of the on-node
+devnet validation campaign (`scripts/devnet-validate`): a concrete policy is
+inert without a live marmalade-v2 deployment (ledger + policy-manager + kip
+interfaces), which the shared campaign devnet does not carry. Two points make
+this acceptable, not a gap:
+
+1. This template's REPL suite already loads the **real** marmalade-v2 sources
+   from the registry tree and drives the policy through the genuine ledger —
+   stronger evidence than any mock, and it exercises the same node-safety
+   pattern (every table read is bound before its `enforce`).
+2. The template's own outstanding devnet mandate is specific and narrower than
+   the read-in-enforce class: an on-chain **buy** through the sale defpact
+   (the quote/escrow path the REPL cannot cover). That is a follow-on for a
+   marmalade-provisioned devnet — see "Known limits" in the README.
+
 ## What self-reviewed means here
 
 Reviewed by the template's maintainers against the PCO checklist, driven
