@@ -1,0 +1,11 @@
+name: 'Gas Station (drain-defended)'
+slug: 'gas-station'
+version: '1.0.0'
+repository: 'https://github.com/Pact-Community-Organization/pact-contract-catalog'
+license: 'Apache-2.0'
+authors:
+  - name: 'Pact Community Organization'
+    email: 'info@pact-community.org'
+audit_status: 'self-reviewed'
+tags: ['gas-station', 'gas-payer-v1', 'gasless', 'template', 'library']
+keywords: ['pact', 'smart-contract', 'gas-payer-v1', 'gas-station', 'capability-guard']
