@@ -147,6 +147,37 @@
 }
 ,
 {
+  "name": "Oracle Feed (median, staleness-guarded)",
+  "slug": "oracle-feed",
+  "version": "1.0.0",
+  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
+  "license": "Apache-2.0",
+  "authors": [
+    {
+      "name": "Pact Community Organization",
+      "email": "info@pact-community.org"
+    }
+  ],
+  "audit_status": "self-reviewed",
+  "tags": [
+    "oracle",
+    "price-feed",
+    "median",
+    "template",
+    "library"
+  ],
+  "keywords": [
+    "pact",
+    "smart-contract",
+    "oracle",
+    "price-feed",
+    "median",
+    "staleness",
+    "publisher"
+  ]
+}
+,
+{
   "name": "Token (fungible-v2 + fungible-xchain-v1)",
   "slug": "token-fungible",
   "version": "0.2.0",

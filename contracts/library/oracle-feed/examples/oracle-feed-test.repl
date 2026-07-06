@@ -1,0 +1,306 @@
+;; oracle-feed-test.repl — PCO library template test suite
+;;
+;; Fully standalone (no dependencies). Drives the feed on a controlled clock:
+;; publisher authorization attacks, chain-assigned timestamps, median
+;; aggregation (odd count swallows an outlier; even count averages),
+;; staleness exclusion at the caller's max-age, the min-answers fail-closed
+;; quorum, the rotation regression (a rotated-out publisher's standing
+;; observation stops counting immediately), and a consumer module showing
+;; the deviation-guard consumption pattern.
+;;
+;; Actors: node1/node2/node3 publishers (node4 rotated in later); eve attacker.
+
+;; ---------------------------------------------------------------------------
+;; Setup: keyset, module, tables.
+;; ---------------------------------------------------------------------------
+(begin-tx "setup")
+(env-data
+  { "oracle-feed-gov": ["gov-key"]
+  , "node1": ["node1-key"], "node2": ["node2-key"], "node3": ["node3-key"]
+  , "node4": ["node4-key"], "eve": ["eve-key"] })
+(define-keyset "oracle-feed-gov" (read-keyset "oracle-feed-gov"))
+(load "../oracle-feed.pact")
+(create-table config)
+(create-table publisher-guards)
+(create-table feeds)
+(create-table observations)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; init: governance-gated, validated publisher set.
+;; ---------------------------------------------------------------------------
+(begin-tx "init-requires-gov")
+(env-sigs [])
+(expect-failure "init without governance fails" "Keyset failure"
+  (oracle-feed.init ["node1"] [(read-keyset "node1")]))
+(rollback-tx)
+
+(begin-tx "init-validation")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "empty publisher set rejected" "at least one publisher required"
+  (oracle-feed.init [] []))
+(expect-failure "publishers/guards mismatch rejected" "publishers/guards length mismatch"
+  (oracle-feed.init ["node1" "node2"] [(read-keyset "node1")]))
+(expect-failure "duplicate publishers rejected" "duplicate publishers"
+  (oracle-feed.init ["node1" "node1"]
+    [(read-keyset "node1") (read-keyset "node1")]))
+(expect-failure "publisher name with ':' rejected (obs-key injectivity)"
+  "must not contain ':'"
+  (oracle-feed.init ["node:1"] [(read-keyset "node1")]))
+(expect-failure "publisher set above MAX_PUBLISHERS rejected"
+  "publisher count exceeds maximum of 20"
+  (oracle-feed.init
+    (map (lambda (i:integer) (format "n{}" [i])) (enumerate 1 21))
+    (make-list 21 (read-keyset "node1"))))
+(rollback-tx)
+
+(begin-tx "init")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect "init 3 publishers" "initialized"
+  (oracle-feed.init ["node1" "node2" "node3"]
+    [(read-keyset "node1") (read-keyset "node2") (read-keyset "node3")]))
+(expect "init emits PUBLISHERS_ROTATED" true
+  (contains "oracle-feed.PUBLISHERS_ROTATED" (map (at 'name) (env-events true))))
+(commit-tx)
+
+(begin-tx "init-once")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "init cannot run twice" "already found while in Insert mode"
+  (oracle-feed.init ["node1"] [(read-keyset "node1")]))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; create-feed: governance only, validated, unique.
+;; ---------------------------------------------------------------------------
+(begin-tx "create-feed-requires-gov")
+(env-sigs [{"key": "eve-key", "caps": []}])
+(expect-failure "non-governance cannot create a feed" "Keyset failure"
+  (oracle-feed.create-feed "KDA/USD" "KDA spot price in USD" 2))
+(rollback-tx)
+
+(begin-tx "create-feed")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect-failure "empty feed id rejected" "feed id required"
+  (oracle-feed.create-feed "" "x" 2))
+(expect-failure "zero min-answers rejected" "min-answers must be >= 1"
+  (oracle-feed.create-feed "KDA/USD" "x" 0))
+(expect-failure "feed id with ':' rejected (obs-key injectivity)"
+  "feed id must not contain ':'"
+  (oracle-feed.create-feed "KDA:USD" "x" 2))
+(expect "KDA/USD feed created (quorum 2)" "KDA/USD"
+  (oracle-feed.create-feed "KDA/USD" "KDA spot price in USD" 2))
+(expect "FEED_CREATED emitted" true
+  (contains "oracle-feed.FEED_CREATED" (map (at 'name) (env-events true))))
+(expect-failure "duplicate feed id rejected" "already found while in Insert mode"
+  (oracle-feed.create-feed "KDA/USD" "again" 2))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; post: enrolled publishers only, authenticated, positive values, real feed,
+;; chain-assigned timestamps.
+;; ---------------------------------------------------------------------------
+(begin-tx "post-non-publisher")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-sigs [{"key": "eve-key", "caps": [(oracle-feed.PUBLISH-AUTH "eve")]}])
+(expect-failure "non-publisher cannot post" "not an enrolled publisher"
+  (oracle-feed.post "KDA/USD" "eve" 1.0))
+(rollback-tx)
+
+(begin-tx "post-wrong-key")
+(env-sigs [{"key": "eve-key", "caps": [(oracle-feed.PUBLISH-AUTH "node1")]}])
+(expect-failure "posting as a publisher without their key fails" "Keyset failure"
+  (oracle-feed.post "KDA/USD" "node1" 1.0))
+(rollback-tx)
+
+(begin-tx "post-validation")
+(env-sigs [{"key": "node1-key", "caps": [(oracle-feed.PUBLISH-AUTH "node1")]}])
+(expect-failure "zero value rejected" "value must be positive"
+  (oracle-feed.post "KDA/USD" "node1" 0.0))
+(expect-failure "negative value rejected" "value must be positive"
+  (oracle-feed.post "KDA/USD" "node1" -1.0))
+(expect-failure "unknown feed rejected" "KDA/EUR"
+  (oracle-feed.post "KDA/EUR" "node1" 1.0))
+(rollback-tx)
+
+(begin-tx "post-node1-node2")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-sigs [{"key": "node1-key", "caps": [(oracle-feed.PUBLISH-AUTH "node1")]}
+          ,{"key": "node2-key", "caps": [(oracle-feed.PUBLISH-AUTH "node2")]}])
+(expect "node1 posts 1.00" "KDA/USD" (oracle-feed.post "KDA/USD" "node1" 1.00))
+(expect "POSTED emitted" true
+  (contains "oracle-feed.POSTED" (map (at 'name) (env-events true))))
+(expect "node2 posts 1.10" "KDA/USD" (oracle-feed.post "KDA/USD" "node2" 1.10))
+(expect "timestamp is chain-assigned" (time "2026-01-01T00:00:00Z")
+  (at 'updated (oracle-feed.get-observation "KDA/USD" "node1")))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; get-price: quorum fail-closed, even-count median.
+;; ---------------------------------------------------------------------------
+(begin-tx "read-basics")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(expect-failure "non-positive max-age rejected" "max-age must be positive"
+  (oracle-feed.get-price "KDA/USD" 0.0))
+(expect-failure "unknown feed read rejected" "KDA/EUR"
+  (oracle-feed.get-price "KDA/EUR" 60.0))
+(expect "two fresh answers" 2 (oracle-feed.answer-count "KDA/USD" 60.0))
+(expect "even-count median averages the middle pair" 1.05
+  (oracle-feed.get-price "KDA/USD" 60.0))
+(commit-tx)
+
+(begin-tx "quorum-fail-closed")
+;; a second feed with quorum 2 and only one post: read must abort
+(env-sigs [{"key": "gov-key", "caps": []}])
+(oracle-feed.create-feed "BTC/USD" "BTC spot" 2)
+(env-sigs [{"key": "node1-key", "caps": [(oracle-feed.PUBLISH-AUTH "node1")]}])
+(oracle-feed.post "BTC/USD" "node1" 100000.0)
+(expect-failure "below-quorum read fails closed" "insufficient fresh answers"
+  (oracle-feed.get-price "BTC/USD" 60.0))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Odd-count median swallows an outlier: node3 posts a wild value 30s later.
+;; ---------------------------------------------------------------------------
+(begin-tx "outlier-resistance")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:30Z") })
+(env-sigs [{"key": "node3-key", "caps": [(oracle-feed.PUBLISH-AUTH "node3")]}])
+(oracle-feed.post "KDA/USD" "node3" 99.9)
+(expect "three fresh answers" 3 (oracle-feed.answer-count "KDA/USD" 60.0))
+(expect "median ignores the high outlier" 1.10
+  (oracle-feed.get-price "KDA/USD" 60.0))
+(commit-tx)
+
+(begin-tx "low-outlier-resistance")
+;; the outlier direction must not matter: node3 repoints far BELOW
+(env-chain-data { "block-time": (time "2026-01-01T00:00:30Z") })
+(env-sigs [{"key": "node3-key", "caps": [(oracle-feed.PUBLISH-AUTH "node3")]}])
+(oracle-feed.post "KDA/USD" "node3" 0.0001)
+(expect "median ignores the low outlier" 1.00
+  (oracle-feed.get-price "KDA/USD" 60.0))
+;; restore the high outlier for the staleness/rotation scenes below
+(oracle-feed.post "KDA/USD" "node3" 99.9)
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Staleness: at T0+100s, a 60s max-age excludes everything; 90s keeps only
+;; node3 (1 < quorum 2); 120s keeps all three.
+;; ---------------------------------------------------------------------------
+(begin-tx "staleness")
+(env-chain-data { "block-time": (time "2026-01-01T00:01:40Z") })
+(expect "no answers within 60s" 0 (oracle-feed.answer-count "KDA/USD" 60.0))
+(expect-failure "all-stale read fails closed" "insufficient fresh answers"
+  (oracle-feed.get-price "KDA/USD" 60.0))
+(expect "only node3 within 90s" 1 (oracle-feed.answer-count "KDA/USD" 90.0))
+(expect-failure "below-quorum (stale-thinned) read fails closed"
+  "insufficient fresh answers"
+  (oracle-feed.get-price "KDA/USD" 90.0))
+(expect "all three within 120s" 3 (oracle-feed.answer-count "KDA/USD" 120.0))
+(expect "median over the full window" 1.10
+  (oracle-feed.get-price "KDA/USD" 120.0))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Rotation regression: rotating node3 out revokes its standing observation
+;; IMMEDIATELY — the price flips back to the two-answer median. A rotated-out
+;; publisher can no longer post; a rotated-in one counts at once.
+;; ---------------------------------------------------------------------------
+(begin-tx "rotate-out-revokes-observation")
+(env-chain-data { "block-time": (time "2026-01-01T00:01:40Z") })
+(env-sigs [{"key": "gov-key", "caps": []}])
+(expect "node3 rotated out" "rotated"
+  (oracle-feed.rotate-publishers ["node1" "node2"]
+    [(read-keyset "node1") (read-keyset "node2")]))
+(expect "outlier's observation no longer counts" 2
+  (oracle-feed.answer-count "KDA/USD" 120.0))
+(expect "median without the rotated-out publisher" 1.05
+  (oracle-feed.get-price "KDA/USD" 120.0))
+(env-sigs [{"key": "node3-key", "caps": [(oracle-feed.PUBLISH-AUTH "node3")]}])
+(expect-failure "rotated-out publisher cannot post" "not an enrolled publisher"
+  (oracle-feed.post "KDA/USD" "node3" 1.0))
+(commit-tx)
+
+(begin-tx "rotate-in-counts-at-once")
+(env-chain-data { "block-time": (time "2026-01-01T00:01:40Z") })
+(env-sigs [{"key": "gov-key", "caps": []}])
+(oracle-feed.rotate-publishers ["node1" "node2" "node4"]
+  [(read-keyset "node1") (read-keyset "node2") (read-keyset "node4")])
+(env-sigs [{"key": "node4-key", "caps": [(oracle-feed.PUBLISH-AUTH "node4")]}])
+(oracle-feed.post "KDA/USD" "node4" 1.20)
+(expect "new publisher's answer counts immediately" 3
+  (oracle-feed.answer-count "KDA/USD" 120.0))
+(expect "odd median over the new set" 1.10
+  (oracle-feed.get-price "KDA/USD" 120.0))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Consumer pattern: staleness via max-age + a deviation circuit-breaker
+;; against the last accepted price. This is how a contract should consume a
+;; feed: fail closed on thin/stale data (the feed does that) AND on sudden
+;; moves (the consumer does this).
+;; ---------------------------------------------------------------------------
+(begin-tx "consumer-module")
+(env-sigs [{"key": "gov-key", "caps": []}])
+(module price-consumer CONSUMER-GOV
+  (defcap CONSUMER-GOV () (enforce-guard (keyset-ref-guard "oracle-feed-gov")))
+  (defschema state last:decimal)
+  (deftable st:{state})
+  (defun accept-price:decimal (max-age:decimal max-dev:decimal)
+    @doc "Read the feed, but reject a price that moved more than MAX-DEV \
+         \(relative) from the last accepted one."
+    (let* ((p (oracle-feed.get-price "KDA/USD" max-age))
+           (prev (with-default-read st "s" { 'last: 0.0 } { 'last := l } l))
+           (dev-ok (or (= prev 0.0)
+                       (<= (abs (- p prev)) (* prev max-dev)))))
+      (enforce dev-ok "price deviates too far from last accepted")
+      (write st "s" { 'last: p })
+      p)))
+(create-table st)
+(commit-tx)
+
+(begin-tx "consumer-accepts-first")
+(env-chain-data { "block-time": (time "2026-01-01T00:01:40Z") })
+(expect "first read accepted (no baseline)" 1.10
+  (price-consumer.accept-price 120.0 0.10))
+(commit-tx)
+
+(begin-tx "consumer-rejects-jump")
+;; the whole publisher set repoints ~2x higher — quorum and freshness pass,
+;; but the consumer's deviation breaker trips
+(env-chain-data { "block-time": (time "2026-01-01T00:02:00Z") })
+(env-sigs [{"key": "node1-key", "caps": [(oracle-feed.PUBLISH-AUTH "node1")]}
+          ,{"key": "node2-key", "caps": [(oracle-feed.PUBLISH-AUTH "node2")]}
+          ,{"key": "node4-key", "caps": [(oracle-feed.PUBLISH-AUTH "node4")]}])
+(oracle-feed.post "KDA/USD" "node1" 2.00)
+(oracle-feed.post "KDA/USD" "node2" 2.10)
+(oracle-feed.post "KDA/USD" "node4" 2.20)
+(expect "feed itself reads fine" 2.10 (oracle-feed.get-price "KDA/USD" 60.0))
+(expect-failure "consumer rejects a >10% jump"
+  "price deviates too far from last accepted"
+  (price-consumer.accept-price 60.0 0.10))
+(rollback-tx)
+
+(begin-tx "consumer-accepts-drift")
+(env-chain-data { "block-time": (time "2026-01-01T00:02:00Z") })
+(env-sigs [{"key": "node1-key", "caps": [(oracle-feed.PUBLISH-AUTH "node1")]}
+          ,{"key": "node2-key", "caps": [(oracle-feed.PUBLISH-AUTH "node2")]}
+          ,{"key": "node4-key", "caps": [(oracle-feed.PUBLISH-AUTH "node4")]}])
+(oracle-feed.post "KDA/USD" "node1" 1.15)
+(oracle-feed.post "KDA/USD" "node2" 1.16)
+(oracle-feed.post "KDA/USD" "node4" 1.17)
+(expect "consumer accepts a within-band move" 1.16
+  (price-consumer.accept-price 60.0 0.10))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Re-post upserts: a publisher's newer value replaces the old one (no
+;; history accumulation in state; the POSTED event stream is the history).
+;; ---------------------------------------------------------------------------
+(begin-tx "repost-upserts")
+(env-chain-data { "block-time": (time "2026-01-01T00:02:30Z") })
+(env-sigs [{"key": "node1-key", "caps": [(oracle-feed.PUBLISH-AUTH "node1")]}])
+(oracle-feed.post "KDA/USD" "node1" 1.18)
+(expect "latest value replaces the previous" 1.18
+  (at 'value (oracle-feed.get-observation "KDA/USD" "node1")))
+(expect "timestamp advanced" (time "2026-01-01T00:02:30Z")
+  (at 'updated (oracle-feed.get-observation "KDA/USD" "node1")))
+(commit-tx)
