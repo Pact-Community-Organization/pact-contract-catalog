@@ -14,7 +14,7 @@ This guide outlines the process for onboarding a new Pact smart contract to the 
 1. **Fork the Repository**: Fork the pact-contract-catalog repository.
 
 2. **Create Contract Structure**:
-   - Deployable templates go to `contracts/library/<contract-name>/`; observed on-chain modules go to `contracts/registry/ecosystem/` or `contracts/registry/community/` with deployment evidence (see [ARCHITECTURE.md](../ARCHITECTURE.md) and [ADR-001](adr/ADR-001-registry-library-split.md))
+   - Deployable templates go to `contracts/library/<contract-name>/`; observed on-chain modules go to `contracts/registry/ecosystem/` or `contracts/registry/community/` with deployment evidence (see [ARCHITECTURE.md](../ARCHITECTURE.md))
    - Create metadata at `<contract-dir>/metadata.yaml` (co-located YAML, not JSON)
    - Add a `README.md` and `AUDIT.md` in the same directory
    - Library entries: add tests to `<contract-dir>/examples/` using the `.repl` extension (mandatory)
