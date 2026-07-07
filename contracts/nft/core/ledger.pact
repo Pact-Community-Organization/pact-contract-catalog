@@ -65,6 +65,9 @@
   (defcap TOKEN:bool (id:string precision:integer policies:[module{token-policy}] uri:string creation-guard:guard)
     @doc "Emitted once, when a token id is created."
     @event true)
+  (defcap URI-UPDATED:bool (id:string uri:string)
+    @doc "Emitted when a token's uri changes (policy-authorized)."
+    @event true)
   (defcap SUPPLY:bool (id:string supply:decimal)
     @doc "Emitted when the supply of ID changes."
     @event true)
@@ -274,6 +277,19 @@
         (emit-event (TOKEN id precision canon uri creation-guard))
         true)))
 
+  ;; --- update-uri (fail closed: policy-mediated, immutable by default) --------
+  (defun update-uri:bool (id:string new-uri:string)
+    @doc "Update a token's uri. There is NO direct authorization here by \
+         \design: the manager rejects unless an attached updatable-uri policy \
+         \permits the update (and a non-updatable-uri veto is final), so a \
+         \token without such a policy has an immutable uri."
+    (enforce-uri-reserved new-uri)
+    (with-capability (UPDATE-URI-CALL id new-uri)
+      (policy-manager.enforce-update-uri (get-token-info id) new-uri))
+    (update tokens id { 'uri: new-uri })
+    (emit-event (URI-UPDATED id new-uri))
+    true)
+
   ;; --- accounts ----------------------------------------------------------------
   (defun create-account:bool (id:string account:string guard:guard)
     (util.enforce-valid-account account)
@@ -374,6 +390,11 @@
   ;; An offer that has not been withdrawn remains BUYABLE — also after t. A
   ;; seller who no longer wants the quoted price must withdraw; a policy may
   ;; impose stricter offer-expiry semantics via enforce-buy.
+  ;;
+  ;; For a QUOTED sale (auction), this timeout is a SEPARATE clock from the
+  ;; sale contract's own schedule, and the contract must also consent to
+  ;; withdrawal — set timeout 0 (or >= the auction's end) and let the sale
+  ;; contract's rules govern.
 
   (defpact sale:string (id:string seller:string amount:decimal timeout:integer)
     (step-with-rollback

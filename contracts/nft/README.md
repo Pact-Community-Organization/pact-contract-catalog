@@ -44,9 +44,28 @@ proving-ground record.
 | Path | Contents |
 |---|---|
 | `interfaces/` | `token-policy` (the hook surface + payout schema), `poly-fungible` (the multi-token accounting standard), `ledger-iface` (the `-CALL` handshake), `sale` (price-discovery sale contracts), `updatable-uri-policy`, `account-protocols` |
-| `core/` | `ledger` (identity + balances + the offer/withdraw/buy sale defpact), `policy-manager` (dispatch + the single conservation-asserted settlement), `util` (account protocols) |
-| `policies/` | `royalty-policy`, `guard-policy`, `non-fungible-policy` (strict 1/1, minted once ever), `collection-policy`, `non-updatable-uri-policy` (unconditional uri veto) |
-| `test/` | one adversarial suite per policy + `identity`, `settlement`, and `composition` (a royalty+guard+1/1 stack settled and reconciled to 12 dp) |
+| `core/` | `ledger` (identity + balances + the offer/withdraw/buy sale defpact + policy-mediated `update-uri`), `policy-manager` (dispatch, the single conservation-asserted settlement, the governance-registered sale-contract whitelist, the updatable-uri handler registry) |
+| `policies/` | `royalty-policy`, `guard-policy`, `non-fungible-policy` (strict 1/1, minted once ever), `collection-policy`, `guarded-uri-policy` (guard-bound uri updates), `non-updatable-uri-policy` (unconditional uri veto) |
+| `sale/` | `conventional-auction` (escrowed ascending bids, increment-enforced outbidding with full refunds, winner-only settlement, grace-windowed withdrawal), `dutch-auction` (interval-stepped declining curve) |
+| `test/` | one adversarial suite per policy and per sale contract + `identity`, `settlement`, `composition` (a royalty+guard+1/1 stack settled and reconciled to 12 dp) and `update-uri` (incl. the veto composition case) |
+
+## Price-discovery sales (auctions)
+
+A quote may name a **governance-registered** sale contract instead of a fixed price (the quote then
+carries the 0 discovery price). At settlement the buy transaction supplies only a CANDIDATE price;
+the manager dispatches it to the sale contract, which must validate it against its own on-chain
+state — the recorded winning bid, or the declining-price curve — before the manager binds it into
+the quote and runs the same conservation-asserted settlement. Royalties and the marketplace fee are
+carved from the discovered price: an auction is not a royalty bypass. A conventional auction's bid
+escrow is per-sale and capability-guarded; every outbid refunds the previous bidder in full, and no
+withdrawal path can strand a bid.
+
+## URI updates (fail closed)
+
+A token's uri is immutable unless its policy set includes a REGISTERED `updatable-uri-policy`
+implementation that permits the update (registration is permissionless but type-verified against
+the interface, keyed by the module's own name). Every attached handler must pass, so stacking
+`non-updatable-uri-policy` vetoes updates finally, whatever else is attached.
 
 ## Relationship to the rest of the catalog
 

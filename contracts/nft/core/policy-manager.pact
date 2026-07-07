@@ -64,18 +64,74 @@
   (defun retrieve-ledger:module{ledger-iface} ()
     (at 'ledger (read ledgers LEDGER-KEY)))
 
+  ;; --- registered sale contracts (price-discovery sales; gov-gated) -----------
+  ;; A quote may name a sale contract (auction, timed sale, ...) that finalizes
+  ;; the price at settlement from ITS OWN on-chain state. Only governance-
+  ;; registered contracts participate — a seller cannot route settlement
+  ;; through arbitrary code.
+  (defschema sale-ref
+    contract:module{sale}
+    enabled:bool)
+  (deftable sale-contracts:{sale-ref})
+
+  (defun register-sale-contract:bool (contract:module{sale})
+    @doc "Register a sale contract under its own fully-qualified name (the key \
+         \is derived from the modref — a name cannot be claimed for foreign \
+         \code). Gov-gated; insert makes registration one-time."
+    (with-capability (GOVERNANCE)
+      (insert sale-contracts (format "{}" [contract])
+        { 'contract: contract, 'enabled: true }))
+    true)
+
+  (defun set-sale-contract-enabled:bool (name:string enabled:bool)
+    @doc "Gov kill-switch for a registered sale contract. Disabling blocks NEW \
+         \offers and settlements through it; withdrawal (the escape hatch) \
+         \still consults the contract."
+    (with-capability (GOVERNANCE)
+      (update sale-contracts name { 'enabled: enabled }))
+    true)
+
+  (defun get-sale-contract:object{sale-ref} (name:string)
+    (read sale-contracts name))
+
+  ;; --- registered updatable-uri handlers (permissionless, type-verified) ------
+  ;; Pact has no on-chain interface introspection, so an updatable-uri policy
+  ;; REGISTERS itself: the parameter type makes the runtime verify the module
+  ;; implements BOTH token-policy and updatable-uri-policy, and the key is
+  ;; derived from the modref itself — registration cannot lie about identity.
+  ;; An updatable-uri implementation only participates in update-uri routing
+  ;; once registered (the framework's own uri policies are registered at
+  ;; deploy; third-party policies self-register with one call).
+  (defschema uri-handler-ref
+    handler-name:string   ;; mirrors the row key; "" is the never-stored sentinel
+    handler:module{updatable-uri-policy})
+  (deftable uri-handlers:{uri-handler-ref})
+
+  (defun register-uri-handler:bool (handler:module{token-policy,updatable-uri-policy})
+    @doc "Self-registration for a policy that gates uri updates. Permissionless \
+         \and safe: the type check proves the implementation, the derived key \
+         \proves the identity."
+    (let ((k:string (format "{}" [handler])))
+      (enforce (!= "" k) "handler name required")
+      (insert uri-handlers k { 'handler-name: k, 'handler: handler }))
+    true)
+
   ;; --- the quote: sale economics, bound at OFFER, read at BUY -----------------
   (defschema quote-spec
     @doc "What the seller signs at offer. All economics live HERE (state), never \
          \in the buy tx. fee-account/fee-guard/fee-bps are the marketplace fee \
-         \the seller agreed to by signing the offer."
+         \the seller agreed to by signing the offer. sale-contract is \"\" for a \
+         \fixed-price sale (price > 0), or the fully-qualified name of a \
+         \REGISTERED sale contract that finalizes the price at settlement from \
+         \its own state (then price MUST be 0 — discovered, never pre-set)."
     fungible:module{fungible-v2}
     price:decimal
     seller-account:string
     seller-guard:guard
     fee-account:string
     fee-guard:guard
-    fee-bps:integer)
+    fee-bps:integer
+    sale-contract:string)
 
   (defschema quote-schema
     token-id:string
@@ -87,15 +143,21 @@
     seller-guard:guard
     fee-account:string
     fee-guard:guard
-    fee-bps:integer)
+    fee-bps:integer
+    sale-contract:string)
   (deftable quotes:{quote-schema})
 
   (defconst QUOTE-MSG-KEY:string "quote"
     @doc "Offer-tx payload key carrying the quote-spec (SELLER's tx — safe).")
   (defconst BUYER-ACCT-KEY:string "buyer_fungible_account"
     @doc "Buy-tx payload key: the buyer's OWN paying account (not economics).")
+  (defconst QUOTED-PRICE-MSG-KEY:string "quoted_price"
+    @doc "Buy-tx payload key for a quoted sale: the CANDIDATE final price. It \
+         \is only a carrier — the sale contract must validate it against its \
+         \own on-chain state (recorded bids / the price curve) before the \
+         \manager binds and settles it.")
 
-  (defcap QUOTE:bool (sale-id:string token-id:string price:decimal fee-bps:integer) @event true)
+  (defcap QUOTE:bool (sale-id:string token-id:string price:decimal fee-bps:integer sale-contract:string) @event true)
   (defcap SETTLED:bool (sale-id:string price:decimal fee:decimal proceeds:decimal) @event true)
 
   ;; --- the fungible escrow (one per sale-id, capability-guarded) --------------
@@ -103,6 +165,20 @@
     @doc "Spend authority over the sale's fungible escrow. Acquired ONLY inside \
          \this manager's single settlement routine."
     true)
+
+  ;; --- sale-contract handshake caps (weak bodies by design) -------------------
+  ;; Acquired only by this manager at the exact points below; a sale contract
+  ;; require-capability's them so its hooks and its bid escrow are unreachable
+  ;; outside the manager's settlement/withdrawal path.
+  (defcap FUNDING-CALL:bool (sale-id:string)
+    @doc "In scope exactly while the manager pulls the sale price into the \
+         \sale escrow (a bid-escrow's guard requires it)." true)
+  (defcap QUOTE-CALL:bool (sale-id:string price:decimal)
+    @doc "Scopes a sale contract's enforce-quote-update to this manager's \
+         \settlement." true)
+  (defcap WITHDRAWAL-CALL:bool (sale-id:string)
+    @doc "Scopes a sale contract's enforce-withdrawal to this manager's \
+         \withdraw path." true)
   (defun escrow-guard:guard (sale-id:string) (create-capability-guard (ESCROW sale-id)))
   (defun escrow-account:string (sale-id:string) (create-principal (escrow-guard sale-id)))
 
@@ -131,6 +207,28 @@
     (map (lambda (p:module{token-policy}) (p::enforce-transfer token sender guard receiver amount)) (at 'policies token))
     true)
 
+  ;; --- UPDATE-URI: fail closed — immutable unless a registered handler permits
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
+    @doc "Dispatches the uri update to every attached policy that is a \
+         \REGISTERED updatable-uri handler. No handler attached -> the uri is \
+         \immutable (reject). Every dispatched handler must pass, so one veto \
+         \(e.g. non-updatable-uri-policy) is final regardless of the stack."
+    (let ((l:module{ledger-iface} (retrieve-ledger)))
+      (require-capability (l::UPDATE-URI-CALL (at 'id token) new-uri)))
+    (let ((handled:integer
+            (fold (lambda (n:integer p:module{token-policy})
+                    (let ((k:string (format "{}" [p])))
+                      (with-default-read uri-handlers k
+                        { 'handler-name: "" } { 'handler-name := hn }
+                        (if (= "" hn)
+                          n
+                          (with-read uri-handlers k { 'handler := h:module{updatable-uri-policy} }
+                            (h::enforce-update-uri token new-uri)
+                            (+ n 1))))))
+                  0 (at 'policies token))))
+      (enforce (> handled 0) "the token uri is immutable (no updatable-uri policy attached)"))
+    true)
+
   ;; --- OFFER: bind the quote in state --------------------------------------
   ;; The fungible escrow account is NOT pre-created here: its principal + guard
   ;; are publicly computable from the mempool-visible offer, so a pre-create
@@ -148,8 +246,8 @@
         , 'fungible: (at 'fungible q), 'price: (at 'price q)
         , 'seller-account: (at 'seller-account q), 'seller-guard: (at 'seller-guard q)
         , 'fee-account: (at 'fee-account q), 'fee-guard: (at 'fee-guard q)
-        , 'fee-bps: (at 'fee-bps q) })
-      (emit-event (QUOTE sale-id (at 'id token) (at 'price q) (at 'fee-bps q))))
+        , 'fee-bps: (at 'fee-bps q), 'sale-contract: (at 'sale-contract q) })
+      (emit-event (QUOTE sale-id (at 'id token) (at 'price q) (at 'fee-bps q) (at 'sale-contract q))))
     ;; run policy enforce-offer hooks
     (map (lambda (p:module{token-policy}) (p::enforce-offer token seller amount timeout sale-id)) (at 'policies token))
     true)
@@ -157,8 +255,16 @@
   (defun validate-quote:bool (q:object{quote-spec})
     (let ((fungible:module{fungible-v2} (at 'fungible q))
           (price:decimal (at 'price q))
-          (fee-bps:integer (at 'fee-bps q)))
-      (enforce (> price 0.0) "price must be positive")
+          (fee-bps:integer (at 'fee-bps q))
+          (sale-contract:string (at 'sale-contract q)))
+      (if (= "" sale-contract)
+        ;; fixed price: bound now, forever
+        (enforce (> price 0.0) "price must be positive")
+        ;; quoted sale: the price is DISCOVERED at settlement — it must start 0
+        ;; and the named contract must be governance-registered and enabled
+        (let ((sc (get-sale-contract sale-contract)))
+          (enforce (at 'enabled sc) "sale contract is disabled")
+          (enforce (= price 0.0) "a quoted sale's price must start at 0")))
       (fungible::enforce-unit price)
       (enforce (and (>= fee-bps 0) (<= fee-bps MAX-FEE-BPS))
         (format "fee-bps must be in [0, {}]" [MAX-FEE-BPS]))
@@ -169,10 +275,20 @@
           "fee-account must be a principal when a fee is charged")
         true)))
 
-  ;; --- WITHDRAW: no fungible moved (the NFT returns via the ledger) -----------
+  ;; --- WITHDRAW: no manager fungible moved (the NFT returns via the ledger) ---
+  ;; A quoted sale's contract must CONSENT (e.g. an auction refuses while live,
+  ;; and refunds its bid escrow when it permits a post-deadline withdrawal).
+  ;; The consent hook runs regardless of the contract's enabled flag —
+  ;; withdrawal is the escape hatch.
   (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string)
     (let ((l:module{ledger-iface} (retrieve-ledger)))
       (require-capability (l::WITHDRAW-CALL (at 'id token) seller amount timeout sale-id)))
+    (with-read quotes sale-id { 'sale-contract := sale-contract }
+      (if (= "" sale-contract)
+        true
+        (let ((s:module{sale} (at 'contract (get-sale-contract sale-contract))))
+          (with-capability (WITHDRAWAL-CALL sale-id)
+            (s::enforce-withdrawal sale-id)))))
     (map (lambda (p:module{token-policy}) (p::enforce-withdraw token seller amount timeout sale-id)) (at 'policies token))
     true)
 
@@ -181,14 +297,35 @@
     (let ((l:module{ledger-iface} (retrieve-ledger)))
       (require-capability (l::BUY-CALL (at 'id token) seller buyer amount sale-id)))
     (with-read quotes sale-id
-      { 'fungible := fungible:module{fungible-v2}, 'price := price
+      { 'fungible := fungible:module{fungible-v2}, 'price := stored-price
       , 'seller-account := seller-account, 'seller-guard := seller-guard
-      , 'fee-account := fee-account, 'fee-guard := fee-guard, 'fee-bps := fee-bps }
+      , 'fee-account := fee-account, 'fee-guard := fee-guard, 'fee-bps := fee-bps
+      , 'sale-contract := sale-contract }
       (let ((prec (fungible::precision))
             (escrow (escrow-account sale-id))
-            (buyer-account:string (read-msg BUYER-ACCT-KEY)))  ;; buyer's OWN account
-        ;; INTERACTION 1: buyer funds the escrow with EXACTLY the state price.
-        (fungible::transfer-create buyer-account escrow (escrow-guard sale-id) price)
+            (buyer-account:string (read-msg BUYER-ACCT-KEY))  ;; buyer's OWN account
+            ;; a quoted sale finalizes its price NOW: the buy tx carries only a
+            ;; CANDIDATE; the registered sale contract must validate it against
+            ;; its own on-chain state (recorded bids / the price curve), then
+            ;; the manager binds it into the quote before any money moves.
+            (price:decimal
+              (if (= "" sale-contract)
+                stored-price
+                (let ((sc (get-sale-contract sale-contract)))
+                  (enforce (at 'enabled sc) "sale contract is disabled")
+                  (let ((s:module{sale} (at 'contract sc))
+                        (candidate:decimal (read-msg QUOTED-PRICE-MSG-KEY)))
+                    (enforce (> candidate 0.0) "quoted price must be positive")
+                    (fungible::enforce-unit candidate)
+                    (with-capability (QUOTE-CALL sale-id candidate)
+                      (s::enforce-quote-update sale-id candidate))
+                    (update quotes sale-id { 'price: candidate })
+                    candidate)))))
+        ;; INTERACTION 1: the escrow is funded with EXACTLY the state price —
+        ;; from the buyer's account, or from a sale contract's bid escrow
+        ;; (whose guard requires FUNDING-CALL for this sale).
+        (with-capability (FUNDING-CALL sale-id)
+          (fungible::transfer-create buyer-account escrow (escrow-guard sale-id) price))
         (let ((funded (fungible::get-balance escrow)))
           ;; policies DECLARE their cuts (computed from their own state); they
           ;; move no money. (Phase 3's royalty policy returns the creator's cut.)

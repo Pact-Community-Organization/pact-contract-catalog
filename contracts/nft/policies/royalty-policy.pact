@@ -112,11 +112,16 @@
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::OFFER-CALL (at 'id token) seller amount timeout sale-id)))
     ;; dust guard: a price whose floored royalty is zero would evade the
-    ;; royalty — reject it at offer (only when a royalty is actually set)
+    ;; royalty — reject it at offer (only when a royalty is actually set).
+    ;; A QUOTED sale's price is 0 at offer (discovered at settlement); its
+    ;; dust guard fires in enforce-buy against the finalized price instead.
     (with-read royalties (at 'id token) { 'bps := bps }
       (if (> bps 0)
-        (let ((cut:decimal (royalty-cut sale-id bps)))
-          (enforce (> cut 0.0) "price too low: the royalty would floor to zero"))
+        (let ((price:decimal (policy-manager.get-quote-price sale-id)))
+          (if (> price 0.0)
+            (let ((cut:decimal (royalty-cut sale-id bps)))
+              (enforce (> cut 0.0) "price too low: the royalty would floor to zero"))
+            true))
         true))
     true)
 
@@ -131,6 +136,11 @@
     (with-read royalties (at 'id token)
       { 'creator := creator, 'creator-guard := creator-guard, 'bps := bps }
       (let ((cut:decimal (royalty-cut sale-id bps)))
+        ;; settlement-time dust guard: for a quoted sale (price finalized at
+        ;; buy) this is where round-to-zero evasion is caught
+        (if (> bps 0)
+          (enforce (> cut 0.0) "price too low: the royalty would floor to zero")
+          true)
         (if (> cut 0.0)
           [{ 'account: creator, 'guard: creator-guard, 'amount: cut }]
           []))))

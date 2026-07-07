@@ -39,6 +39,8 @@
 (load "../core/policy-manager.pact")
 (create-table nft.policy-manager.ledgers)
 (create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.uri-handlers)
 (load "../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
@@ -248,7 +250,7 @@
     , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "fee-bps": 0 } })
+    , "fee-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
             (read-keyset 'alice))))
