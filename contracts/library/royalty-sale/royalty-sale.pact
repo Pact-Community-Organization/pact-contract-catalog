@@ -37,6 +37,13 @@
   \  2. Deploy and create-table (tokens, listings).                             \
   \  3. Validate on devnet before mainnet."
 
+  ;; Conforms to the Kadena NFT standard (contracts/standards/): the asset
+  ;; surface (token, ownership, royalty, event vocabulary) and the fixed-price
+  ;; market surface. No cross-chain (single-chain template) — nft-xchain-v1 is
+  ;; not implemented. See contracts/standards/SPEC.md.
+  (implements nft-asset-v1)
+  (implements nft-market-v1)
+
   ;; -----------------------------
   ;; Governance (upgrade-only; no fund paths)
   ;; -----------------------------
@@ -114,11 +121,16 @@
   ;; Guards & events
   ;; -----------------------------
 
-  (defcap MINTED (id:string creator:string royalty-bps:integer transferable:bool) @event true)
-  (defcap LISTED (id:string seller:string price:decimal marketplace-bps:integer) @event true)
-  (defcap DELISTED (id:string) @event true)
-  (defcap SOLD (id:string seller:string buyer:string price:decimal royalty:decimal fee:decimal) @event true)
-  (defcap TRANSFERRED (id:string from:string to:string) @event true)
+  ;; Event vocabulary — signatures match nft-asset-v1 / nft-market-v1 so one
+  ;; indexer reads this module and any other conforming marketplace uniformly.
+  ;; MINTED carries the initial owner (asset standard S: ownership history is
+  ;; fully event-derivable). LISTED's fee-bps is the platform/marketplace fee
+  ;; rate (here the seller-named marketplace-bps); routing stays private.
+  (defcap MINTED:bool (id:string owner:string creator:string royalty-bps:integer transferable:bool) @event true)
+  (defcap LISTED:bool (id:string seller:string price:decimal fee-bps:integer) @event true)
+  (defcap DELISTED:bool (id:string) @event true)
+  (defcap SOLD:bool (id:string seller:string buyer:string price:decimal royalty:decimal fee:decimal) @event true)
+  (defcap TRANSFERRED:bool (id:string from:string to:string) @event true)
 
   (defcap MINT-AUTH (owner-guard:guard)
     @doc "Scopes the minter's signature to the mint: they prove control of the \
@@ -182,7 +194,7 @@
         , 'royalty-bps: royalty-bps
         , 'transferable: transferable
         , 'uri: uri })
-      (emit-event (MINTED id creator royalty-bps transferable))
+      (emit-event (MINTED id owner creator royalty-bps transferable))
       id))
 
   ;; -----------------------------
@@ -212,20 +224,44 @@
   ;; Listing
   ;; -----------------------------
 
-  (defun list-token:string
+  (defconst NO-MARKETPLACE-GUARD:guard
+    (create-capability-guard (GOV))
+    @doc "Sentinel guard stored on a fee-free listing's unused marketplace \
+         \columns. Never enforced (marketplace-bps 0 => the fee leg is dropped \
+         \by merge-payout), so it can be an inert placeholder.")
+
+  (defun list-token:string (id:string price:decimal currency:module{fungible-v2})
+    @doc "nft-market-v1: list an owned token at a fixed PRICE in CURRENCY with \
+         \NO marketplace fee. For a seller-named marketplace fee, use \
+         \list-token-with-fee (a royalty-sale extension beyond the standard \
+         \surface). Owner-authenticated. Emits LISTED."
+    (list-token-with-fee id price currency "" NO-MARKETPLACE-GUARD 0))
+
+  (defun list-token-with-fee:string
     ( id:string
       price:decimal
       currency:module{fungible-v2}
       marketplace:string marketplace-guard:guard marketplace-bps:integer )
-    @doc "List an owned token at a fixed PRICE in CURRENCY. The marketplace fee \
-         \rate and payee are fixed HERE, by the seller - buy reads them from \
-         \state, so a buyer cannot zero the fee. MARKETPLACE-BPS 0 means no \
-         \fee (pass \"\" / a sentinel guard). A non-zero fee requires a \
-         \principal marketplace account. Owner-authenticated."
+    @doc "royalty-sale extension (beyond nft-market-v1): list at a fixed PRICE \
+         \in CURRENCY with a seller-named marketplace fee. The fee rate and \
+         \payee are fixed HERE, by the seller - buy reads them from state, so a \
+         \buyer cannot zero the fee. MARKETPLACE-BPS 0 means no fee (pass \"\" / \
+         \a sentinel guard). A non-zero fee requires a principal marketplace \
+         \account. Owner-authenticated."
     (enforce (> price 0.0) "price must be positive")
     (enforce-unit currency price)
     (enforce (and (>= marketplace-bps 0) (<= marketplace-bps MAX-FEE-BPS))
       (format "marketplace-bps must be in [0, {}]" [MAX-FEE-BPS]))
+    ; standard S2: a royalty-bearing token must not be listable at a price whose
+    ; floored royalty is zero (a dust price would otherwise be a royalty-free
+    ; ownership change through buy). Bind royalty-bps + precision first, then
+    ; enforce (node-safe ordering — no table read inside the enforce condition).
+    (with-read tokens id { 'royalty-bps := royalty-bps }
+      (if (> royalty-bps 0)
+        (let ((prec (currency::precision)))
+          (enforce (> (floor (/ (* price (dec royalty-bps)) (dec BPS-DENOM)) prec) 0.0)
+            "price too low: royalty rounds to zero"))
+        true))
     ; fail closed: if there is a fee, its payee must be a real principal account
     (if (> marketplace-bps 0)
       (enforce (validate-principal marketplace-guard marketplace)
@@ -340,8 +376,20 @@
   ;; Views
   ;; -----------------------------
 
-  (defun get-token:object{token} (id:string) (read tokens id))
-  (defun get-listing:object{listing} (id:string) (read listings id))
+  ;; nft-asset-v1.token is exactly this module's 7 token columns, so get-token
+  ;; returns the interface schema directly.
+  (defun get-token:object{nft-asset-v1.token} (id:string) (read tokens id))
+
+  ;; nft-market-v1.listing is the currency-agnostic 5-field public projection;
+  ;; the seller-named marketplace payee/guard stay private to this module.
+  ;; fee-bps is the marketplace rate (0 for a standard fee-free listing).
+  (defun get-listing:object{nft-market-v1.listing} (id:string)
+    (with-read listings id
+      { 'seller := seller, 'price := price, 'currency := currency:module{fungible-v2}
+      , 'marketplace-bps := mk-bps, 'active := active }
+      { 'seller: seller, 'price: price, 'currency: currency
+      , 'fee-bps: mk-bps, 'active: active }))
+
   (defun owner-of:string (id:string) (at 'owner (read tokens id)))
 
   (defun is-listed:bool (id:string)
