@@ -207,6 +207,30 @@
     (map (lambda (p:module{token-policy}) (p::enforce-transfer token sender guard receiver amount)) (at 'policies token))
     true)
 
+  ;; --- CROSS-CHAIN: collect + re-bind the policy passports ---------------------
+  (defun enforce-xchain-send:[object] (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    @doc "Source chain: every policy validates the relocation and returns its \
+         \passport. The result rides the ledger's yield to the target chain."
+    (let ((l:module{ledger-iface} (retrieve-ledger)))
+      (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
+    (map (lambda (p:module{token-policy})
+           { 'policy: (format "{}" [p])
+           , 'state: (p::enforce-xchain-send token sender receiver receiver-guard target-chain amount) })
+         (at 'policies token)))
+
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal passports:[object])
+    @doc "Target chain: every attached policy gets ITS OWN passport back and \
+         \re-binds it. A missing or duplicated passport fails closed."
+    (let ((l:module{ledger-iface} (retrieve-ledger)))
+      (require-capability (l::XCHAIN-RECEIVE-CALL (at 'id token) receiver amount)))
+    (map (lambda (p:module{token-policy})
+           (let* ((k:string (format "{}" [p]))
+                  (matches:[object] (filter (lambda (pp:object) (= k (at 'policy pp))) passports)))
+             (enforce (= 1 (length matches)) (format "passport missing for policy {}" [k]))
+             (p::enforce-xchain-receive token receiver receiver-guard amount (at 'state (at 0 matches)))))
+         (at 'policies token))
+    true)
+
   ;; --- UPDATE-URI: fail closed — immutable unless a registered handler permits
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     @doc "Dispatches the uri update to every attached policy that is a \

@@ -39,8 +39,18 @@
     @doc "Create-token-tx payload key carrying the four operation guards. \
          \ALL fields are required — a partial object aborts creation.")
 
+  (defschema operation-guards-spec
+    @doc "The create-token-tx payload shape: ALL four guards, no defaults."
+    mint-guard:guard
+    burn-guard:guard
+    sale-guard:guard
+    transfer-guard:guard)
+
   (defschema operation-guards
-    @doc "The per-operation guards, bound once at token creation."
+    @doc "The per-operation guards, bound once at token creation. token-id \
+         \mirrors the row key (\"\" is the never-stored sentinel used by the \
+         \cross-chain receive to detect absence)."
+    token-id:string
     mint-guard:guard
     burn-guard:guard
     sale-guard:guard
@@ -65,8 +75,11 @@
       (require-capability (l::INIT-CALL (at 'id token) (at 'precision token) (at 'uri token))))
     ;; ALL four guards are REQUIRED (typed read: absent or partial -> abort,
     ;; fail closed — a missing guard never defaults to "anyone can")
-    (let ((gs:object{operation-guards} (read-msg GUARDS-MSG-KEY)))
-      (insert op-guards (at 'id token) gs)
+    (let ((gs:object{operation-guards-spec} (read-msg GUARDS-MSG-KEY)))
+      (insert op-guards (at 'id token)
+        { 'token-id: (at 'id token)
+        , 'mint-guard: (at 'mint-guard gs), 'burn-guard: (at 'burn-guard gs)
+        , 'sale-guard: (at 'sale-guard gs), 'transfer-guard: (at 'transfer-guard gs) })
       (emit-event (GUARDS (at 'id token))))
     true)
 
@@ -111,5 +124,25 @@
       (require-capability (l::TRANSFER-CALL (at 'id token) sender receiver amount)))
     (with-read op-guards (at 'id token) { 'transfer-guard := g }
       (enforce-guard g))
+    true)
+  ;; --- cross-chain passport (policy state travels with the token) ---------------
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
+    (read op-guards (at 'id token)))
+
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-RECEIVE-CALL (at 'id token) receiver amount)))
+    (let ((gs:object{operation-guards}
+            { 'token-id: (at 'id token)
+            , 'mint-guard: (at 'mint-guard state), 'burn-guard: (at 'burn-guard state)
+            , 'sale-guard: (at 'sale-guard state), 'transfer-guard: (at 'transfer-guard state) }))
+      (with-default-read op-guards (at 'id token) { 'token-id: "" } { 'token-id := existing }
+        (if (= "" existing)
+          (insert op-guards (at 'id token) gs)
+          ;; a RETURNING token: the immutable guard set must be identical
+          (let ((local (read op-guards (at 'id token))))
+            (enforce (= local gs) "operation-guards passport mismatch")))))
     true)
 )

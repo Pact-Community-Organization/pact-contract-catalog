@@ -68,4 +68,16 @@
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::TRANSFER-CALL (at 'id token) sender receiver amount)))
     true)
+  ;; --- cross-chain passport (policy state travels with the token) ---------------
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
+    ;; stateless marker: the veto is the module itself, not per-token state
+    {})
+
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-RECEIVE-CALL (at 'id token) receiver amount)))
+    true)
+
 )

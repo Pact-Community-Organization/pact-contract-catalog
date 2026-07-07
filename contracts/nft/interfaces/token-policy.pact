@@ -69,4 +69,24 @@
     @doc "Run on a free (no-sale) transfer SENDER -> RECEIVER. A sale-only \
          \policy rejects this. (Account guards are immutable in this ledger: \
          \there is no rotate path for a policy to govern.)")
+
+  ;; --- cross-chain relocation (the policy passport) ---------------------------
+  (defun enforce-xchain-send:object
+    ( token:object{token-info} sender:string receiver:string receiver-guard:guard
+      target-chain:string amount:decimal )
+    @doc "Run on the SOURCE chain when SENDER relocates AMOUNT of TOKEN to \
+         \RECEIVER on TARGET-CHAIN. The policy validates the move against its \
+         \rules (e.g. sale-only permits only self-relocation) and RETURNS its \
+         \serialized per-token state — the PASSPORT — which the ledger yields \
+         \with the token so the policy can re-bind it on the target chain. \
+         \Return {} if the policy keeps no per-token state.")
+
+  (defun enforce-xchain-receive:bool
+    ( token:object{token-info} receiver:string receiver-guard:guard
+      amount:decimal state:object )
+    @doc "Run on the TARGET chain when the relocation completes (SPV-continued \
+         \defpact step). STATE is this policy's own passport from the source \
+         \chain: bind it into local state exactly once (insert if absent; if \
+         \the token has been on this chain before, verify the immutable parts \
+         \match instead). Fail closed on anything malformed.")
 )

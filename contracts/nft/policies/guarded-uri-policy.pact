@@ -34,7 +34,10 @@
          \for any token carrying this policy — fail closed.")
 
   (defschema uri-guard-schema
-    @doc "Who may update the token's uri, bound once at token creation."
+    @doc "Who may update the token's uri, bound once at token creation. \
+         \token-id mirrors the row key (\"\" = the never-stored sentinel the \
+         \cross-chain receive uses to detect absence)."
+    token-id:string
     guard:guard)
   (deftable uri-guards:{uri-guard-schema})
 
@@ -60,7 +63,7 @@
       (require-capability (l::INIT-CALL (at 'id token) (at 'precision token) (at 'uri token))))
     ;; the guard is REQUIRED (typed read: absent -> abort, fail closed)
     (let ((g:guard (read-msg URI-GUARD-MSG-KEY)))
-      (insert uri-guards (at 'id token) { 'guard: g })
+      (insert uri-guards (at 'id token) { 'token-id: (at 'id token), 'guard: g })
       (emit-event (URI-GUARD (at 'id token))))
     true)
 
@@ -93,4 +96,21 @@
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::TRANSFER-CALL (at 'id token) sender receiver amount)))
     true)
+  ;; --- cross-chain passport (policy state travels with the token) ---------------
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
+    { 'guard: (get-uri-guard (at 'id token)) })
+
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-RECEIVE-CALL (at 'id token) receiver amount)))
+    (let ((g:guard (at 'guard state)))
+      (with-default-read uri-guards (at 'id token) { 'token-id: "" } { 'token-id := existing }
+        (if (= "" existing)
+          (insert uri-guards (at 'id token) { 'token-id: (at 'id token), 'guard: g })
+          ;; a RETURNING token: the immutable uri guard must be identical
+          (enforce (= g (get-uri-guard (at 'id token))) "uri-guard passport mismatch"))))
+    true)
+
 )

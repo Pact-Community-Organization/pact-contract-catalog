@@ -32,4 +32,10 @@
 
   (defcap UPDATE-URI-CALL:bool (id:string new-uri:string)
     @doc "Secures the modref call to a policy's enforce-update-uri.")
+
+  (defcap XCHAIN-SEND-CALL:bool (id:string sender:string receiver:string target-chain:string amount:decimal)
+    @doc "Secures the modref call to a policy's enforce-xchain-send (source chain).")
+
+  (defcap XCHAIN-RECEIVE-CALL:bool (id:string receiver:string amount:decimal)
+    @doc "Secures the modref call to a policy's enforce-xchain-receive (target chain).")
 )

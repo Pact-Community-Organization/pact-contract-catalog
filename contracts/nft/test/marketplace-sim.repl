@@ -1,0 +1,311 @@
+;; nft framework — Phase 5: the FULL MARKETPLACE-HOP SCENARIO.
+;;
+;;   alice CREATES an NFT on chain 0 (10% royalty, strict 1/1)
+;;     -> lists it on MARKETPLACE A ("the gallery", 2.5% fee, fixed price 100)
+;;     -> bob BUYS it
+;;     -> bob RELOCATES it to chain 1 (policy passport)
+;;     -> bob auctions it on MARKETPLACE B ("the bazaar", 5% fee,
+;;        ascending-bid auction) -> carol WINS at 200
+;;   The creator's royalty is paid on BOTH sales, on BOTH chains, through
+;;   BOTH marketplaces; every fungible leg reconciles to 12 dp and global
+;;   coin is conserved.
+;;
+;; A marketplace here is what the shared-ledger architecture makes it: a fee
+;; identity bound in the seller's signed quote (plus, for the bazaar, its
+;; auction sale contract). Neither marketplace ever custodies the token.
+;;
+;; REPL TIER: one repl database plays both chains (env-chain-data switches the
+;; chain id; the defpact yield crosses with provenance checked). SPV and the
+;; first-arrival materialization of the token row on a fresh chain are DEVNET
+;; evidence — the Phase-5 devnet campaign runs this same scenario on real
+;; chains. Coin balances are one table here, which is exactly what makes the
+;; global conservation check possible.
+;;
+;; Run: pact contracts/nft/test/marketplace-sim.repl
+
+;; --- coin (payment fungible) ------------------------------------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- the nft framework ----------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../interfaces/updatable-uri-policy.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.uri-handlers)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(load "../policies/non-fungible-policy.pact")
+(create-table nft.non-fungible-policy.minted-table)
+(load "../sale/conventional-auction.pact")
+(create-table nft.conventional-auction.auctions)
+(nft.policy-manager.register-sale-contract nft.conventional-auction)
+(commit-tx)
+
+;; --- the cast -------------------------------------------------------------------
+;; alice   1111 = the creator (and first seller)
+;; bob     2222 = buyer 1, relocates + re-sells
+;; carol   5555 = buyer 2 (auction winner)
+;; gallery 6666 = MARKETPLACE A's fee account (2.5%)
+;; bazaar  7777 = MARKETPLACE B's fee account (5%) + the auction contract
+(begin-tx "fund the buyers")
+(env-data
+  { "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(test-capability (coin.CREDIT "k:5555555555555555555555555555555555555555555555555555555555555555"))
+(coin.credit "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset 'carol) 1000.0)
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 1 — chain 0: alice creates the painting (10% royalty, strict 1/1)
+;; ===========================================================================
+(begin-tx "alice creates + mints on chain 0")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 1000, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://the-painting"
+    [nft.non-fungible-policy nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect "alice holds her painting on chain 0" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 2 — chain 0, MARKETPLACE A ("the gallery"): fixed price 100, fee 2.5%
+;; ===========================================================================
+(begin-tx "alice lists on the gallery")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-hash (hash "sim-sale-1"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "k:6666666666666666666666666666666666666666666666666666666666666666"
+    , "fee-guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+    , "fee-bps": 250, "sale-contract": "" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+(begin-tx "bob buys on the gallery — royalty + gallery fee carved from 100")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "sim-sale-1"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "sim-sale-1")) 100.0) ] } ])
+  (continue-pact 1 false (hash "sim-sale-1"))
+  (expect "bob holds the painting" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+;; sale 1 split: royalty 10 + gallery fee 2.5 + proceeds 87.5 = 100
+(expect "alice netted 97.5 (creator + seller merged)" 97.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "the gallery earned its 2.5% fee" 2.5
+  (coin.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666"))
+(expect "bob paid exactly 100" 900.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "sale-1 escrow empty (conservation)" 0.0
+  (coin.get-balance (nft.policy-manager.escrow-account (hash "sim-sale-1"))))
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 3 — bob relocates the painting to chain 1 (policy passport)
+;; ===========================================================================
+(begin-tx "bob sends the painting off chain 0")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-hash (hash "sim-hop"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.XTRANSFER id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" "1" 1.0) ] } ])
+  (nft.ledger.transfer-crosschain id
+    "k:2222222222222222222222222222222222222222222222222222222222222222"
+    "k:2222222222222222222222222222222222222222222222222222222222222222"
+    (read-keyset 'bob) "1" 1.0)
+  (expect "the painting left chain 0" 0.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+(begin-tx "the painting arrives on chain 1 with its rules intact")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(continue-pact 1 false (hash "sim-hop"))
+(env-chain-data { "chain-id": "0" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-chain-data { "chain-id": "1" })
+  (expect "bob holds the painting on chain 1" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (expect "the royalty terms traveled with it" 1000
+    (at 'bps (nft.royalty-policy.get-royalty id)))
+  (expect "the 1/1 marker traveled with it" true
+    (nft.non-fungible-policy.is-minted id)))
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 4 — chain 1, MARKETPLACE B ("the bazaar"): ascending auction, fee 5%
+;; ===========================================================================
+(begin-tx "bob lists on the bazaar's auction")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-hash (hash "sim-sale-2"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-account": "k:7777777777777777777777777777777777777777777777777777777777777777"
+    , "fee-guard": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+    , "fee-bps": 500, "sale-contract": "nft.conventional-auction" } })
+(env-chain-data { "chain-id": "0" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-chain-data { "chain-id": "1", "block-time": (time "2026-01-01T00:00:00Z") })
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0)
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (nft.conventional-auction.create-auction (hash "sim-sale-2") id
+    1767225700 1767225900 50.0 10.0 100))
+(commit-tx)
+
+(begin-tx "carol bids 200 on the bazaar")
+(env-chain-data { "chain-id": "1", "block-time": (add-time (time "2026-01-01T00:00:00Z") 150) })
+(env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+            , "caps": [ (coin.TRANSFER "k:5555555555555555555555555555555555555555555555555555555555555555"
+                          (nft.conventional-auction.bid-escrow-account (hash "sim-sale-2")) 200.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'carol)) ] } ])
+(nft.conventional-auction.place-bid (hash "sim-sale-2")
+  "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset 'carol) 200.0)
+(expect "carol's bid escrowed by the bazaar's auction" 200.0
+  (coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "sim-sale-2"))))
+(commit-tx)
+
+(begin-tx "the auction settles — the creator is paid on chain 1 too")
+(env-chain-data { "chain-id": "1", "block-time": (add-time (time "2026-01-01T00:00:00Z") 400) })
+(env-data
+  (let ((escrow (nft.conventional-auction.bid-escrow-account (hash "sim-sale-2"))))
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "buyer": "k:5555555555555555555555555555555555555555555555555555555555555555"
+    , "buyer-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+    , "buyer_fungible_account": escrow
+    , "quoted_price": 200.0 }))
+(env-chain-data { "chain-id": "0" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-chain-data { "chain-id": "1", "block-time": (add-time (time "2026-01-01T00:00:00Z") 400) })
+  ;; a third party (the bazaar's crank) executes the settlement
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0
+                            (hash "sim-sale-2"))
+                        , (coin.TRANSFER (nft.conventional-auction.bid-escrow-account (hash "sim-sale-2"))
+                            (nft.policy-manager.escrow-account (hash "sim-sale-2")) 200.0) ] } ])
+  (continue-pact 1 false (hash "sim-sale-2"))
+  (expect "carol holds the painting on chain 1" 1.0
+    (nft.ledger.get-balance id "k:5555555555555555555555555555555555555555555555555555555555555555"))
+  (expect "the supply is still exactly 1" 1.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+;; ===========================================================================
+;; THE LEDGER OF THE WHOLE STORY — every leg, both chains, both marketplaces
+;; ===========================================================================
+(begin-tx "final reconciliation")
+;; sale 1 (gallery, 100):  royalty 10 + fee 2.5  + proceeds 87.5  -> alice 97.5
+;; sale 2 (bazaar,  200):  royalty 20 + fee 10.0 + proceeds 170.0
+(expect "alice: 97.5 from sale 1 + 20 royalty from the chain-1 resale = 117.5" 117.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "bob: paid 100, earned 170 proceeds = 1070" 1070.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "carol: paid her 200 winning bid = 800" 800.0
+  (coin.get-balance "k:5555555555555555555555555555555555555555555555555555555555555555"))
+(expect "the gallery earned 2.5" 2.5
+  (coin.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666"))
+(expect "the bazaar earned 10" 10.0
+  (coin.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777"))
+;; global conservation: 117.5 + 1070 + 800 + 2.5 + 10 = 2000 (the two funded buyers)
+(expect "global coin conserved across the whole story" 2000.0
+  (fold (+) 0.0
+    [ (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")
+    , (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222")
+    , (coin.get-balance "k:5555555555555555555555555555555555555555555555555555555555555555")
+    , (coin.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666")
+    , (coin.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777") ]))
+(commit-tx)
+
+(print "")
+(print "=== NFT FRAMEWORK PHASE 5 — MARKETPLACE-HOP SCENARIO: ALL GREEN ===")
+(print "  created on chain 0 -> sold on marketplace A (gallery, 2.5%) -> bought")
+(print "  -> relocated to chain 1 (policy passport) -> auctioned on marketplace B")
+(print "  (bazaar, 5%) -> sold at 200. Creator royalty paid on BOTH sales on BOTH")
+(print "  chains; every leg reconciled at 12 dp; global coin conserved (2000).")
+(print "  SPV + fresh-chain materialization = the devnet campaign's evidence.")

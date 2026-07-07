@@ -167,7 +167,9 @@
   (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
   (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) [])
   (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
-  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true))
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal) {})
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object) true))
 (module fixture-pol-a GOV
   (defcap GOV () (enforce-keyset "nft.admin"))
   (implements token-policy)
@@ -178,7 +180,9 @@
   (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
   (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) [])
   (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
-  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true))
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal) {})
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object) true))
 
 (expect "the id is order-independent (canonical policy order)"
   (nft.ledger.create-token-id
