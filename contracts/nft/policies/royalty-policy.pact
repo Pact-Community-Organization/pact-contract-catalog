@@ -18,6 +18,14 @@
 ;; dust-price guard at offer rejects a price whose floored royalty would be
 ;; zero, closing the round-to-zero evasion path.
 ;;
+;; CURRENCY: the royalty is denominated in the QUOTE's fungible — the seller
+;; picks the sale currency per listing (multi-currency by design, matching the
+;; catalog's marketplace standard). A creator who wants royalties in one fixed
+;; currency can stack a currency-pinning policy; note that no on-chain rule can
+;; stop economically-equivalent evasion (e.g. under-priced quotes settled
+;; off-chain), so the guarantees here are: the rate binds at create, the cut is
+;; computed from state, and every on-pact sale pays it.
+;;
 ;; Every hook requires the ledger's matching -CALL capability in scope, so no
 ;; hook is reachable outside the real ledger lifecycle path.
 

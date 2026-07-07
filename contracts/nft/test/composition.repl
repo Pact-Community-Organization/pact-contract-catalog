@@ -66,8 +66,9 @@
 (coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
 (commit-tx)
 
-;; NOTE: the policy list order is fixed throughout — Pact 5 `sort` is a no-op
-;; on modrefs, so the order the creator passes is part of the derived id.
+;; NOTE: the ledger canonicalizes the policy list (name-sorted) — the same
+;; policy SET derives the same token id no matter the order passed, and hooks
+;; dispatch in canonical order (identity.repl proves this end-to-end).
 
 ;; ===========================================================================
 ;; CREATION — every policy's required input must be present
