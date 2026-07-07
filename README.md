@@ -2,10 +2,11 @@
 
 Reusable, trusted Pact smart contracts, maintained by the Pact Community Organization (PCO) in service of one mission: **make it easy and safe for businesses to start building with smart contracts.**
 
-The catalog ships two clearly separated products:
+The catalog ships three clearly separated products:
 
 - **[`contracts/library/`](contracts/library/) — the Library**: PCO-authored, deployable templates. Start here.
 - **[`contracts/registry/`](contracts/registry/) — the Registry**: an observatory of contracts that already exist on-chain, catalogued verbatim for reference.
+- **[`contracts/standards/`](contracts/standards/) — the Standards**: the Kadena NFT interface standard v1 — a normative [SPEC](contracts/standards/SPEC.md), three un-upgradeable interfaces, and a runnable conformance suite that independent marketplaces implement to stay compatible.
 
 ## The Library
 

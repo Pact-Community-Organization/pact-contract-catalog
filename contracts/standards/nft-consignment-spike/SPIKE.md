@@ -1,10 +1,19 @@
 # NFT consignment spike — the painting model, proven
 
-**Result: the architecture works.** An NFT deployed as its own module in an artist's namespace can
-be consigned to a marketplace in a *different* namespace, sold there with the creator royalty paid by
-the asset, then re-consigned by the new owner to a *third* namespace's marketplace and sold again —
+> **OUTCOME (2026-07-07): mechanics proven; identity model not adopted.** The production NFT build
+> went a different way — a **shared-ledger framework** (the `nft` namespace series) — because token
+> identity is the one property a self-sovereign per-NFT module can never anchor: anyone can deploy a
+> lookalike module claiming any provenance, so forgery/double-mint impossibility requires an id
+> derived and enforced in one shared ledger. What this spike proved **stands as reference**:
+> cross-namespace sale authorization via a recorded consignment guard (`enforce-guard` on state, not
+> a foreign capability), frozen-after-mint economics, and a marketplace that sells what it does not
+> own. Read it as a proving-ground record, not the adopted architecture.
+
+**Result: the consignment mechanics work.** An NFT deployed as its own module in an artist's namespace
+can be consigned to a marketplace in a *different* namespace, sold there with the creator royalty paid
+by the asset, then re-consigned by the new owner to a *third* namespace's marketplace and sold again —
 the same painting, gallery to gallery, royalty to the original creator every time, and no marketplace
-able to skim it. This demonstrates the asset/marketplace-separation design before any production build.
+able to skim it.
 
 ## What the spike contains
 
@@ -92,8 +101,8 @@ guard, atomically superseding the prior one.
 
 ## Verdict
 
-The asset/marketplace separation with self-sovereign per-NFT modules and consignment-via-guard is
-**sound and buildable on Kadena today**. The real-world model the founder described — created in a
-studio, consignable to any gallery, held in a wallet or moved gallery to gallery by the owner, royalty
-to the creator on every sale — is realized. Recommended next step: build the production standard (the
-interfaces + reference template) and the first marketplace.
+The consignment-via-guard mechanics — cross-namespace sale authorization, frozen terms, royalty paid
+by the asset, one marketplace at a time — are **sound and buildable on Kadena today**, and the spike
+demonstrates them end-to-end with conservation asserted. The **per-NFT-module identity model was not
+carried into production** (see the outcome note at the top): the production build anchors identity in
+a shared ledger, where the guard-based authorization patterns proven here continue to apply.
