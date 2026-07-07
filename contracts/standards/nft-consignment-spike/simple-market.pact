@@ -1,11 +1,11 @@
-;; simple-market — a reference nft-marketplace (ADR-019 spike)
+;; simple-market — a reference nft-marketplace
 ;;
 ;; A permissionless sale contract that owns NO tokens. It sells any nft-asset
 ;; consigned to its guard. Deployed into ITS OWN namespace (the spike deploys two
 ;; copies in two namespaces to prove "gallery to gallery"). Its fee account and
 ;; rate are its own policy; the asset caps the fee it will accept.
 ;;
-;; The Pact-5 pattern (ADR-019 §2.4): execute-sale is PUBLIC and acquires SELL
+;; The Pact-5 pattern (design note): execute-sale is PUBLIC and acquires SELL
 ;; internally, then calls nft::buy — a caller cannot acquire SELL from outside.
 ;; The NFT is a modref parameter, so one market sells any conforming NFT.
 

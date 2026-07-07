@@ -1,4 +1,4 @@
-;; ADR-019 spike — the painting model, proven end to end.
+;; NFT consignment spike — the painting model, proven end to end.
 ;;
 ;; An NFT is created in the ARTIST's namespace, consigned to a marketplace in
 ;; ITS OWN namespace, sold there (creator royalty paid BY THE ASSET, market fee
@@ -11,7 +11,7 @@
 ;; cap); one-marketplace-at-a-time consignment; fee cap; conservation; and that a
 ;; NON-consigned marketplace cannot sell.
 ;;
-;; Run: pact contracts/standards/spike-adr019/spike.repl
+;; Run: pact contracts/standards/nft-consignment-spike/spike.repl
 
 ;; ---------------------------------------------------------------------------
 ;; coin environment
@@ -250,7 +250,7 @@
 (commit-tx)
 
 (print "")
-(print "=== ADR-019 SPIKE — the painting model, PROVEN ===")
+(print "=== NFT CONSIGNMENT SPIKE — the painting model, PROVEN ===")
 (print "  NFT self-custody in the artist ns; frozen at mint (upgrade rejected);")
 (print "  consigned to gallery A (ns gala), sold cross-namespace via modref;")
 (print "  re-consigned to gallery B (ns galb), resold; royalty to the ORIGINAL")

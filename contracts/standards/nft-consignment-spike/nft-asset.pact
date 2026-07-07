@@ -1,13 +1,13 @@
-;; nft-asset — self-custody NFT standard (ADR-019 spike)
+;; nft-asset — self-custody NFT standard
 ;;
-;; The asset half of the asset/marketplace SEPARATION. Unlike nft-asset-v1
-;; (ADR-018), where the token is a row inside a marketplace, an nft-asset module
-;; OWNS ITSELF: it records its own owner, its immutable creator royalty, and the
+;; The asset half of the asset/marketplace SEPARATION. Unlike a marketplace-owned
+;; token (a row inside a marketplace ledger), an nft-asset module OWNS ITSELF: it
+;; records its own owner, its immutable creator royalty, and the
 ;; single active CONSIGNMENT (which marketplace guard may currently sell it).
 ;; This is what lets the same NFT be sold by any marketplace, in any namespace —
 ;; "the painting moves gallery to gallery."
 ;;
-;; Two Pact-5 facts drive the shape (ADR-019 §2.4):
+;; Two Pact-5 facts drive the shape (design note):
 ;;   * A foreign marketplace cannot acquire this module's capabilities, so a sale
 ;;     is authorized by an enforce-guard on the RECORDED consignment guard, not a
 ;;     cap the caller acquires. `buy` is public; its guard check passes only for

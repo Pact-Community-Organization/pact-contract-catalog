@@ -1,4 +1,4 @@
-;; nft-single — a self-sovereign, frozen-at-mint NFT (ADR-019 spike reference template)
+;; nft-single — a self-sovereign, frozen-at-mint NFT (spike reference template)
 ;;
 ;; ONE NFT = ONE MODULE, deployed in the ARTIST's namespace. The artist governs
 ;; deployment, but the module FREEZES ITSELF at mint: GOVERNANCE refuses every
@@ -14,7 +14,7 @@
 (module nft-single GOVERNANCE
   @doc "A single self-custody NFT: immutable creator royalty, one active \
        \marketplace consignment, own escrow, pays its own royalty. Implements \
-       \the ADR-019 nft-asset standard. Frozen at mint."
+       \the nft-asset standard. Frozen at mint."
 
   (implements std.nft-asset)
 

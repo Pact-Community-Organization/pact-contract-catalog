@@ -1,10 +1,10 @@
-# ADR-019 spike — the painting model, proven
+# NFT consignment spike — the painting model, proven
 
 **Result: the architecture works.** An NFT deployed as its own module in an artist's namespace can
 be consigned to a marketplace in a *different* namespace, sold there with the creator royalty paid by
 the asset, then re-consigned by the new owner to a *third* namespace's marketplace and sold again —
 the same painting, gallery to gallery, royalty to the original creator every time, and no marketplace
-able to skim it. This turns ADR-019 from argued to demonstrated, before any production build.
+able to skim it. This demonstrates the asset/marketplace-separation design before any production build.
 
 ## What the spike contains
 
@@ -72,20 +72,20 @@ guard, atomically superseding the prior one.
 - `spike.repl`: **Load successful, 0 FAILURE**.
 - Static gate: 0 VIOLATIONs on the modules; **1 dispositioned WARN** — `nft-marketplace.pact` fails a
   *bare* `pact <file>` load because it references `std.nft-asset` (a dependency the `.repl` harness
-  loads first). Same benign dependency-load class as the ADR-018 interfaces; the file loads and runs
-  correctly in the harness. These are spike files (a proving ground), not published production
-  standard files.
+  loads first). Same benign dependency-load class as any interface with a cross-namespace dependency;
+  the file loads and runs correctly in the harness. These are spike files (a proving ground), not
+  published production standard files.
 
-## What the spike deliberately did NOT cover (for the production build / next ADR)
+## What the spike deliberately did NOT cover (for the production build)
 
-- **Cross-chain** for self-sovereign per-NFT modules (SPV move of an nft-single). ADR-019 §4 defers
-  this to the implementation ADR; it is the main open design question.
+- **Cross-chain** for self-sovereign per-NFT modules (SPV move of an nft-single) — deferred to the
+  implementation phase; it is the main open design question.
 - **Devnet** (root namespace is locked on KDA-CE, so on a real node the interfaces + NFT + markets
   deploy into real namespaces exactly as the spike does in-REPL; a devnet campaign is the next
   evidence tier, as for every prior module).
-- **The Gallery refactor** (ADR-019 §6: `smartpacts-gallery` becomes a marketplace, stops owning
-  tokens) and the **fee-account-guard UX** (here the fee guard is captured at deploy; production wants
-  the marketplace's live coin guard).
+- **The marketplace refactor** (an existing token-owning marketplace becomes a sale contract that
+  stops owning tokens) and the **fee-account-guard UX** (here the fee guard is captured at deploy;
+  production wants the marketplace's live coin guard).
 - Production interface **signature freeze** — these spike signatures are provisional; the published
   interface is finalized only after the production build + testnet validation (interfaces are
   `CannotUpgradeInterface`).
@@ -95,5 +95,5 @@ guard, atomically superseding the prior one.
 The asset/marketplace separation with self-sovereign per-NFT modules and consignment-via-guard is
 **sound and buildable on Kadena today**. The real-world model the founder described — created in a
 studio, consignable to any gallery, held in a wallet or moved gallery to gallery by the owner, royalty
-to the creator on every sale — is realized. Recommend proceeding to accept ADR-019 and build the
-production standard (in the PCO catalog) + the first marketplace (the Gallery refactor).
+to the creator on every sale — is realized. Recommended next step: build the production standard (the
+interfaces + reference template) and the first marketplace.
