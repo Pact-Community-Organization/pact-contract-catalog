@@ -3,10 +3,11 @@
 ;; The uri-update authority is REQUIRED in the create-token transaction and
 ;; bound into this policy's own state at init — fail closed: a missing guard
 ;; aborts creation, it never defaults to "anyone may update" or to "the
-;; framework admin may update". At update time the manager routes the request
-;; here (this policy registers itself as an updatable-uri handler) and the
-;; stored guard authorizes it. Stack nft.non-updatable-uri-policy alongside
-;; and its veto wins — every policy must pass.
+;; framework admin may update". This policy returns "permit" from the base
+;; token-policy uri-decision hook, and the manager then calls its
+;; enforce-update-uri, where the stored guard authorizes the specific update.
+;; Stack nft.non-updatable-uri-policy alongside and its veto wins — the manager
+;; evaluates every attached policy's stance, so one veto is final.
 ;;
 ;; All token-policy lifecycle hooks are permissive; each still requires the
 ;; ledger's matching -CALL capability in scope, so no hook is reachable
@@ -19,7 +20,6 @@
        \once at token creation; the manager's update-uri routing enforces it."
 
   (implements token-policy)
-  (implements updatable-uri-policy)
   (use token-policy [token-info payout])
 
   (defconst ADMIN-KS:string (read-string 'admin-ks)
@@ -49,7 +49,8 @@
   (defun get-uri-guard:guard (token-id:string)
     (at 'guard (read uri-guards token-id)))
 
-  ;; --- updatable-uri-policy: the guard decides ----------------------------------
+  ;; --- uri stance: PERMIT, then the stored guard authorizes the update -----------
+  (defun uri-decision:string (token:object{token-info}) (identity "permit"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::UPDATE-URI-CALL (at 'id token) new-uri)))

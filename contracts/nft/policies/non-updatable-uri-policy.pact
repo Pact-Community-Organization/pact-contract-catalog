@@ -1,11 +1,12 @@
 ;; nft.non-updatable-uri-policy — the immutable-metadata marker.
 ;;
-;; A token's uri is only updatable if its policy set includes a policy
-;; implementing `updatable-uri-policy` that PERMITS the update. This policy
-;; implements that interface with an unconditional REJECT, so attaching it
-;; VETOES uri updates no matter what other policies are stacked on the token
-;; — every policy must pass, so one veto is final. Attach it to make "this
-;; metadata can never change" an on-chain guarantee rather than a convention.
+;; A token's uri is only updatable if some attached policy returns "permit"
+;; from the base token-policy uri-decision hook AND none returns "veto". This
+;; policy returns "veto" unconditionally, so attaching it makes the uri
+;; immutable no matter what other policies are stacked on the token — the
+;; manager evaluates EVERY attached policy's stance, so the veto cannot be
+;; bypassed by omission. Attach it to make "this metadata can never change" an
+;; on-chain guarantee rather than a convention.
 ;;
 ;; All token-policy lifecycle hooks are permissive; each still requires the
 ;; ledger's matching -CALL capability in scope, so no hook is reachable
@@ -19,7 +20,6 @@
        \token lifecycle, vetoes every uri update."
 
   (implements token-policy)
-  (implements updatable-uri-policy)
   (use token-policy [token-info payout])
 
   (defconst ADMIN-KS:string (read-string 'admin-ks)
@@ -29,7 +29,8 @@
   (defcap GOVERNANCE ()
     (enforce-keyset ADMIN-KS))
 
-  ;; --- updatable-uri-policy: the unconditional veto ------------------------------
+  ;; --- uri stance: the unconditional VETO ----------------------------------------
+  (defun uri-decision:string (token:object{token-info}) (identity "veto"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (enforce false "the token uri is immutable"))
 

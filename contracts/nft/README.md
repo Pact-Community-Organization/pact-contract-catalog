@@ -77,10 +77,12 @@ immutable and verified equal on return.
 
 ## URI updates (fail closed)
 
-A token's uri is immutable unless its policy set includes a REGISTERED `updatable-uri-policy`
-implementation that permits the update (registration is permissionless but type-verified against
-the interface, keyed by the module's own name). Every attached handler must pass, so stacking
-`non-updatable-uri-policy` vetoes updates finally, whatever else is attached.
+A token's uri is immutable unless some attached policy returns `"permit"` from the base
+`token-policy` `uri-decision` hook AND none returns `"veto"`. The manager evaluates the stance of
+**every attached policy** — there is no registry to be absent from — so `non-updatable-uri-policy`
+(which always vetoes) makes the uri immutable no matter what else is stacked, and a permitting
+policy additionally authorizes the specific update in its own body. A token with no uri-aware
+policy is immutable by default.
 
 ## Relationship to the rest of the catalog
 

@@ -51,7 +51,7 @@ async function deployStack(chainId: ChainId, gov: Keypair): Promise<void> {
   const interfaces = [
     'interfaces/account-protocols.pact', 'interfaces/token-policy.pact',
     'interfaces/poly-fungible.pact', 'interfaces/ledger-iface.pact',
-    'interfaces/sale.pact', 'interfaces/updatable-uri-policy.pact',
+    'interfaces/sale.pact',
   ].map(src).join('\n');
   await send({
     code: interfaces, label: `ch${chainId}: deploy the six interfaces`,
@@ -65,8 +65,7 @@ async function deployStack(chainId: ChainId, gov: Keypair): Promise<void> {
     code: src('core/policy-manager.pact')
       + '\n(create-table free.policy-manager.ledgers)'
       + '(create-table free.policy-manager.quotes)'
-      + '(create-table free.policy-manager.sale-contracts)'
-      + '(create-table free.policy-manager.uri-handlers)',
+      + '(create-table free.policy-manager.sale-contracts)',
     label: `ch${chainId}: deploy policy-manager (+tables)`,
     signers: [{ kp: SENDER00 }], data: deployData, chainId,
   });

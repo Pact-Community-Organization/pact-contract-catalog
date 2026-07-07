@@ -94,27 +94,11 @@
   (defun get-sale-contract:object{sale-ref} (name:string)
     (read sale-contracts name))
 
-  ;; --- registered updatable-uri handlers (permissionless, type-verified) ------
-  ;; Pact has no on-chain interface introspection, so an updatable-uri policy
-  ;; REGISTERS itself: the parameter type makes the runtime verify the module
-  ;; implements BOTH token-policy and updatable-uri-policy, and the key is
-  ;; derived from the modref itself — registration cannot lie about identity.
-  ;; An updatable-uri implementation only participates in update-uri routing
-  ;; once registered (the framework's own uri policies are registered at
-  ;; deploy; third-party policies self-register with one call).
-  (defschema uri-handler-ref
-    handler-name:string   ;; mirrors the row key; "" is the never-stored sentinel
-    handler:module{updatable-uri-policy})
-  (deftable uri-handlers:{uri-handler-ref})
-
-  (defun register-uri-handler:bool (handler:module{token-policy,updatable-uri-policy})
-    @doc "Self-registration for a policy that gates uri updates. Permissionless \
-         \and safe: the type check proves the implementation, the derived key \
-         \proves the identity."
-    (let ((k:string (format "{}" [handler])))
-      (enforce (!= "" k) "handler name required")
-      (insert uri-handlers k { 'handler-name: k, 'handler: handler }))
-    true)
+  ;; NOTE: uri-update routing needs no registry. Every attached policy declares
+  ;; its stance through the base token-policy uri-decision hook, so the manager
+  ;; evaluates ALL of them at update time (see enforce-update-uri below) — a
+  ;; policy cannot be bypassed by omission, which the old global registry
+  ;; allowed (an attached-but-unregistered veto was silently skipped).
 
   ;; --- the quote: sale economics, bound at OFFER, read at BUY -----------------
   (defschema quote-spec
@@ -231,26 +215,29 @@
          (at 'policies token))
     true)
 
-  ;; --- UPDATE-URI: fail closed — immutable unless a registered handler permits
+  ;; --- UPDATE-URI: fail closed, ATTACHMENT-authoritative ----------------------
+  ;; Every attached policy declares its uri stance via the base token-policy
+  ;; uri-decision hook — so a policy can NEVER be bypassed by being absent from
+  ;; an out-of-band registry (the design flaw a global handler registry had).
+  ;; A permitter additionally authorizes the specific update in its own
+  ;; enforce-update-uri body. Rule: one veto is final; the
+  ;; uri is immutable unless some policy permits AND none vetoes; a token with
+  ;; no uri-aware policy (all abstain) is immutable by default.
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
-    @doc "Dispatches the uri update to every attached policy that is a \
-         \REGISTERED updatable-uri handler. No handler attached -> the uri is \
-         \immutable (reject). Every dispatched handler must pass, so one veto \
-         \(e.g. non-updatable-uri-policy) is final regardless of the stack."
     (let ((l:module{ledger-iface} (retrieve-ledger)))
       (require-capability (l::UPDATE-URI-CALL (at 'id token) new-uri)))
-    (let ((handled:integer
-            (fold (lambda (n:integer p:module{token-policy})
-                    (let ((k:string (format "{}" [p])))
-                      (with-default-read uri-handlers k
-                        { 'handler-name: "" } { 'handler-name := hn }
-                        (if (= "" hn)
-                          n
-                          (with-read uri-handlers k { 'handler := h:module{updatable-uri-policy} }
-                            (h::enforce-update-uri token new-uri)
-                            (+ n 1))))))
-                  0 (at 'policies token))))
-      (enforce (> handled 0) "the token uri is immutable (no updatable-uri policy attached)"))
+    (let* ((decisions:[string]
+             (map (lambda (p:module{token-policy}) (p::uri-decision token)) (at 'policies token)))
+           (vetoed:bool (contains "veto" decisions))
+           (permitted:bool (contains "permit" decisions)))
+      (enforce (not vetoed) "the token uri is immutable (a policy vetoes updates)")
+      (enforce permitted "the token uri is immutable (no policy permits updates)")
+      ;; run each permitter's own authorization (the guard check lives there)
+      (map (lambda (p:module{token-policy})
+             (if (= "permit" (p::uri-decision token))
+               (p::enforce-update-uri token new-uri)
+               false))
+           (at 'policies token)))
     true)
 
   ;; --- OFFER: bind the quote in state --------------------------------------
@@ -357,6 +344,14 @@
                    (fold (lambda (acc:[object{payout}] pol:module{token-policy})
                            (+ acc (pol::enforce-buy token seller buyer buyer-guard amount sale-id)))
                          [] (at 'policies token)))
+                 ;; every declared cut MUST be strictly positive: a zero leg is
+                 ;; noise, a negative leg would count against cuts-total (shrinking
+                 ;; it) while merge-payout drops it from the paid set — the two
+                 ;; must agree, so reject non-positive legs outright (fail closed)
+                 (checked:[bool] (map (lambda (p:object{payout})
+                                        (enforce (> (at 'amount p) 0.0)
+                                          "a policy declared a non-positive payout"))
+                                      policy-payouts))
                  (fee:decimal (if (> fee-bps 0) (floor (/ (* price (dec fee-bps)) (dec BPS-DENOM)) prec) 0.0))
                  (cuts-total:decimal (fold (+) 0.0 (map (at 'amount) policy-payouts)))
                  (proceeds:decimal (- price (+ cuts-total fee))))

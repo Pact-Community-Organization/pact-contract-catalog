@@ -145,4 +145,9 @@
           (let ((local (read op-guards (at 'id token))))
             (enforce (= local gs) "operation-guards passport mismatch")))))
     true)
+
+  ;; --- uri stance: this policy has no uri concern (abstain) --------------------
+  (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
+    (enforce false "this policy does not permit uri updates"))
 )

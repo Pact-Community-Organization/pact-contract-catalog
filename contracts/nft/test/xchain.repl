@@ -45,13 +45,11 @@
 (load "../interfaces/poly-fungible.pact")
 (load "../interfaces/ledger-iface.pact")
 (load "../interfaces/sale.pact")
-(load "../interfaces/updatable-uri-policy.pact")
 (load "../core/util.pact")
 (load "../core/policy-manager.pact")
 (create-table nft.policy-manager.ledgers)
 (create-table nft.policy-manager.quotes)
 (create-table nft.policy-manager.sale-contracts)
-(create-table nft.policy-manager.uri-handlers)
 (load "../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
@@ -62,7 +60,6 @@
 (create-table nft.non-fungible-policy.minted-table)
 (load "../policies/guarded-uri-policy.pact")
 (create-table nft.guarded-uri-policy.uri-guards)
-(nft.policy-manager.register-uri-handler nft.guarded-uri-policy)
 (commit-tx)
 
 ;; --- token X: royalty (transferable) + 1/1 + guarded uri, created on chain 0 ---

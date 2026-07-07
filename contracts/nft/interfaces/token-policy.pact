@@ -70,6 +70,27 @@
          \policy rejects this. (Account guards are immutable in this ledger: \
          \there is no rotate path for a policy to govern.)")
 
+  ;; --- uri-update stance + authorization (attachment-authoritative) -----------
+  ;; Both hooks are on the BASE interface so the manager evaluates them over
+  ;; EVERY attached policy — a policy can never be bypassed by being absent from
+  ;; an out-of-band registry. (This replaces the separate updatable-uri-policy
+  ;; interface, whose optional-ness was the bypass.)
+  (defun uri-decision:string (token:object{token-info})
+    @doc "This policy's stance on updating TOKEN's uri, evaluated over every \
+         \attached policy. Return one of: \
+         \\"veto\"    — the uri must never change (final: one veto beats any stack); \
+         \\"permit\"  — this policy authorizes updates (the manager then calls \
+         \             enforce-update-uri on it for the specific new uri); \
+         \\"abstain\" — no opinion. \
+         \Pure: no guard/signature check (it is read for every policy). The uri \
+         \is immutable unless some policy permits AND none vetoes — so a token \
+         \with no uri-aware policy is immutable by default.")
+
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
+    @doc "Run ONLY on a policy that returned \"permit\": authorize this specific \
+         \update to NEW-URI (e.g. enforce the token's uri-update guard). A \
+         \non-permitting policy is never called here; implement it to reject.")
+
   ;; --- cross-chain relocation (the policy passport) ---------------------------
   (defun enforce-xchain-send:object
     ( token:object{token-info} sender:string receiver:string receiver-guard:guard
