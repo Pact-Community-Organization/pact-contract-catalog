@@ -214,11 +214,26 @@
       { 'id: i, 'supply: s, 'precision: p, 'uri: u, 'policies: pol }))
 
   ;; --- IDENTITY (behavior kept verbatim from the correct Marmalade model) -----
+  (defun canonical-policies:[module{token-policy}] (policies:[module{token-policy}])
+    @doc "The canonical policy list: sorted by the policy's fully-qualified \
+         \name. Pact's plain `sort` is a NO-OP on module references, so the id \
+         \derivation, the stored row, the TOKEN event and hook dispatch all use \
+         \THIS order — the same policy SET derives the same token id no matter \
+         \the order the creator passed."
+    (map (lambda (o) (at 'p o))
+      (sort ['k]
+        (map (lambda (p:module{token-policy}) { 'k: (format "{}" [p]), 'p: p })
+             policies))))
+
   (defun create-token-id:string (details:object{token-details} creation-guard:guard)
     @doc "The token id is a hash of the token details + chain + CREATION-GUARD, \
-         \so the id is derived from the creator's key — forgery-proof."
-    (format "{}:{}" [TOKEN-ID-PREFIX
-      (hash [(format "{}" [details]) (at 'chain-id (chain-data)) creation-guard])]))
+         \so the id is derived from the creator's key — forgery-proof. The \
+         \policy list is canonicalized before hashing (order-independent id)."
+    (let ((canon:object{token-details}
+            { 'uri: (at 'uri details), 'precision: (at 'precision details)
+            , 'policies: (canonical-policies (at 'policies details)) }))
+      (format "{}:{}" [TOKEN-ID-PREFIX
+        (hash [(format "{}" [canon]) (at 'chain-id (chain-data)) creation-guard])])))
 
   (defun check-reserved:string (token-id:string)
     (let ((pfx (take 2 token-id)))
@@ -242,17 +257,22 @@
       policies:[module{token-policy}] creation-guard:guard )
     @doc "Create a token id. The id MUST re-derive from the details + \
          \CREATION-GUARD, the caller MUST satisfy that guard, and `insert` \
-         \fails on a duplicate — one id, one token, exactly once."
+         \fails on a duplicate — one id, one token, exactly once. The policy \
+         \list is canonicalized (name-sorted, duplicates rejected): storage, \
+         \the TOKEN event and every hook dispatch use the canonical order."
     (enforce-uri-reserved uri)
-    (let ((details:object{token-details} { 'uri: uri, 'precision: precision, 'policies: (sort policies) }))
-      (enforce-token-reserved id details creation-guard))
-    (with-capability (INIT-CALL id precision uri)
-      (policy-manager.enforce-init
-        { 'id: id, 'supply: 0.0, 'precision: precision, 'uri: uri, 'policies: policies }))
-    (with-capability (CREATE-TOKEN id creation-guard)
-      (insert tokens id { 'id: id, 'uri: uri, 'precision: precision, 'supply: 0.0, 'policies: policies })
-      (emit-event (TOKEN id precision policies uri creation-guard))
-      true))
+    (let ((canon:[module{token-policy}] (canonical-policies policies)))
+      (let ((names (map (lambda (p:module{token-policy}) (format "{}" [p])) canon)))
+        (enforce (= (length names) (length (distinct names))) "duplicate policy"))
+      (let ((details:object{token-details} { 'uri: uri, 'precision: precision, 'policies: canon }))
+        (enforce-token-reserved id details creation-guard))
+      (with-capability (INIT-CALL id precision uri)
+        (policy-manager.enforce-init
+          { 'id: id, 'supply: 0.0, 'precision: precision, 'uri: uri, 'policies: canon }))
+      (with-capability (CREATE-TOKEN id creation-guard)
+        (insert tokens id { 'id: id, 'uri: uri, 'precision: precision, 'supply: 0.0, 'policies: canon })
+        (emit-event (TOKEN id precision canon uri creation-guard))
+        true)))
 
   ;; --- accounts ----------------------------------------------------------------
   (defun create-account:bool (id:string account:string guard:guard)
