@@ -22,6 +22,7 @@ node-critical paths driven to mined confirmation.
 | [gas-station](../contracts/library/gas-station/) | ✅ PASS | `free.gas-station` | 7 | A **zero-KDA user** ran a tx the **station paid for** via `GAS_PAYER`; spend bounded/accounted against `(chain-data)` actual gas; non-enrolled user denied. |
 | [royalty-sale](../contracts/library/royalty-sale/) | ✅ PASS | `free.royalty-sale` | 13 | `buy` settlement on-node: **fresh escrow** (fund-then-plain-`let` baseline read, primary-sale payout merge, escrow → 0) and **dust-carrying escrow** (conservation returns to the donated baseline, not zero) — the auditor's F1 node-only class, proven. |
 | [nft-collection-policy](../contracts/library/nft-collection-policy/) | ⏸ deferred | — | — | Needs a marmalade-v2 deployment (absent on the campaign devnet). Its REPL suite already runs against the **real** marmalade sources; the outstanding on-chain **buy** is a follow-on. |
+| [property-lease](../contracts/library/property-lease/) | ⏸ pending | — | — | Deployable but not yet driven: its `AUDIT.md` names a devnet run of `give-notice` plus the full create → deposit → rent → claim → settle cycle as **required evidence before any production use** (its F1 class is REPL-invisible). |
 | [hello-world](../contracts/library/hello-world/) | n/a | — | — | No node-only behavior; the REPL suite is sufficient. |
 
 Every deployed module's source hash and every confirmed transaction's request
@@ -30,7 +31,7 @@ validation*).
 
 ## What this establishes — and what it doesn't
 
-**Establishes:** the read-in-enforce class is closed for all six deployable
+**Establishes:** the read-in-enforce class is closed for the seven driven
 templates. Every `SIGNER-AUTH` / `CLAIM-AUTH` / `MEMBER-AUTH` / `PUBLISH-AUTH`
 capability, the treasury/vesting/gas-station capability-guarded vaults, the
 token's `DEBIT`, and the gas-station's full drain-defense executed correctly
@@ -43,6 +44,12 @@ independent audit and not a cross-chain exercise. It does not replace the
 ladder, and it does not cover the token's `TRANSFER_XCHAIN` SPV path (which
 needs a multi-chain devnet). Templates remain `self-reviewed`; devnet
 validation is corroborating evidence for the node-safety claim, cited as such.
+
+The same harness also carries the [NFT Framework](../contracts/nft/README.md)'s
+own campaign (`npm run nft-framework`) — a genuinely **multi-chain** run with
+real SPV relocation; see
+[scripts/devnet-validate/README.md](../scripts/devnet-validate/README.md). That
+run does not close the token template's `TRANSFER_XCHAIN` gap above.
 
 ## Reproducing
 

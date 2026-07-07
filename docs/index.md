@@ -4,6 +4,8 @@ _Generated from `contracts/**/metadata.yaml`._
 
 - **Library** — PCO-authored deployable templates: copy, adapt, deploy.
 - **Registry** — observed contracts (upstream standards + on-chain census): read-only reference.
+- **Standards** — the Kadena NFT interface standard v1: not metadata-indexed; see [contracts/standards/](../contracts/standards/SPEC.md).
+- **NFT Framework** — the PCO shared-ledger NFT ecosystem: not metadata-indexed; see [contracts/nft/](../contracts/nft/README.md).
 
 ## Library — Deployable Templates (`library/`)
 
@@ -38,7 +40,7 @@ _Generated from `contracts/**/metadata.yaml`._
 | util.fungible-util | util-fungible-util | 1.0.0 | reference | utility, fungible, validation, helper, pre-deployed |
 | ns | ns | 1.0.0 | reference | namespace, governance, registry, core, pre-deployed |
 
-## Registry — Marmalade NFT Framework (`registry/marmalade/`)
+## Registry — Marmalade v2 NFT Stack (`registry/marmalade/`)
 
 | Name | Slug | Version | Audit Status | Tags |
 |------|------|---------|--------------|------|

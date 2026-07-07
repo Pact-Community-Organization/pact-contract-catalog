@@ -39,6 +39,8 @@ echo "_Generated from \`contracts/**/metadata.yaml\`._" >> "$INDEX_MD"
 echo "" >> "$INDEX_MD"
 echo "- **Library** — PCO-authored deployable templates: copy, adapt, deploy." >> "$INDEX_MD"
 echo "- **Registry** — observed contracts (upstream standards + on-chain census): read-only reference." >> "$INDEX_MD"
+echo "- **Standards** — the Kadena NFT interface standard v1: not metadata-indexed; see [contracts/standards/](../contracts/standards/SPEC.md)." >> "$INDEX_MD"
+echo "- **NFT Framework** — the PCO shared-ledger NFT ecosystem: not metadata-indexed; see [contracts/nft/](../contracts/nft/README.md)." >> "$INDEX_MD"
 echo "" >> "$INDEX_MD"
 
 # emit_section <dir> <heading> <style>
@@ -89,7 +91,7 @@ emit_section() {
 emit_section "contracts/library"            "Library — Deployable Templates (\`library/\`)"                       "tags"
 emit_section "contracts/registry/kip"       "Registry — KIP Standards (\`registry/kip/\`)"                        "tags"
 emit_section "contracts/registry/core"      "Registry — Core Infrastructure (\`registry/core/\`)"                 "tags"
-emit_section "contracts/registry/marmalade" "Registry — Marmalade NFT Framework (\`registry/marmalade/\`)"        "tags"
+emit_section "contracts/registry/marmalade" "Registry — Marmalade v2 NFT Stack (\`registry/marmalade/\`)"        "tags"
 emit_section "contracts/registry/ecosystem" "Registry — Ecosystem Modules (\`registry/ecosystem/\`) — census"     "census"
 emit_section "contracts/registry/community" "Registry — Community On-Chain Modules (\`registry/community/\`) — census" "census"
 

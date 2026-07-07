@@ -9,9 +9,17 @@ This tree contains **Pact Community Organization (PCO)** contract templates: dep
 | Contract | Directory | Description |
 |---------|-----------|-------------|
 | Hello World | [hello-world/](hello-world/README.md) | Introductory contract — entry point for new Pact developers |
-| Token (fungible-v2) | [token-fungible/](token-fungible/README.md) | Reference fungible token implementation (PCO template) |
+| Token (fungible-v2 + fungible-xchain-v1) | [token-fungible/](token-fungible/README.md) | Hardened fungible token: coin-pattern guard enforcement, governed mint, cross-chain steps |
+| Gas Station | [gas-station/](gas-station/README.md) | Drain-defended gas sponsorship with a per-user on-chain allowlist |
+| Multisig Treasury | [multisig-treasury/](multisig-treasury/README.md) | M-of-N treasury: capability-guarded vault, propose/approve/execute, stale-approval revocation |
+| Token Vesting | [vesting/](vesting/README.md) | Cliff + linear vesting, escrowed upfront; revoke returns only the unvested part |
+| DAO Voting | [dao-voting/](dao-voting/README.md) | Membership voting with quorum + threshold and per-proposal passage snapshots |
+| NFT Collection Policy | [nft-collection-policy/](nft-collection-policy/README.md) | marmalade-v2 concrete policy: creator-gated collections, size caps, strict 1-of-1 |
+| Oracle Feed | [oracle-feed/](oracle-feed/README.md) | Median data/price feed with fail-closed staleness windows and publisher rotation |
+| Property Lease | [property-lease/](property-lease/README.md) | Rental rails: escrowed deposit, rent buckets with revenue split, vault conservation |
+| Royalty Sale | [royalty-sale/](royalty-sale/README.md) | Conservation-checked NFT marketplace; reference implementation of the [NFT interface standard](../standards/SPEC.md) |
 
-Planned templates: gas-station, NFT collection + policy, multisig treasury, vesting escrow, DAO voting, oracle consumer.
+The [NFT Framework](../nft/README.md) (`contracts/nft/`) generalizes `royalty-sale`'s settlement discipline behind a shared-ledger policy architecture — it is a separate product tree, not a library template.
 
 ---
 

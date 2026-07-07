@@ -7,7 +7,7 @@
 
 ## Overview
 
-`marmalade-v2.ledger` is the core ledger module of KDA-CE's Marmalade v2 NFT framework. It manages token definitions, account balances, and the SALE defpact (offer → buy/withdraw). Policies are attached per token and enforced by `marmalade-v2.policy-manager`.
+`marmalade-v2.ledger` is the core ledger module of KDA-CE's Marmalade v2 NFT stack. It manages token definitions, account balances, and the SALE defpact (offer → buy/withdraw). Policies are attached per token and enforced by `marmalade-v2.policy-manager`.
 
 Marmalade v2 significantly upgrades v1:
 - Multiple policies per token (composable policy slots)
