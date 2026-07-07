@@ -60,7 +60,9 @@ Each hardened property maps directly to a finding in the analysis:
 cd contracts/library/royalty-sale/examples && pact royalty-sale-test.repl
 ```
 
-38 assertions: fail-closed mint validation, sale-only vs transferable transfer rules, listing validation with the fee fixed in state, a secondary sale proving conservation to 12 decimals (creator + marketplace + seller + escrow-to-zero), the **primary-sale merge** (creator == seller pays one merged payout with no managed-transfer collision), zero-royalty and odd-price rounding-dust conservation, unlisted/delisted/re-buy rejection, and end-to-end sale-only royalty enforcement. CI runs this suite as a blocking check.
+46 assertions: fail-closed mint validation, sale-only vs transferable transfer rules, listing validation with the fee fixed in state, a secondary sale proving conservation to 12 decimals (creator + marketplace + seller + escrow-to-zero), the **primary-sale merge** (creator == seller pays one merged payout with no managed-transfer collision), zero-royalty and odd-price rounding-dust conservation, unlisted/delisted/re-buy rejection, and end-to-end sale-only royalty enforcement. CI runs this suite as a blocking check.
+
+`examples/royalty-sale-market-sim.repl` is the full-marketplace economic simulation (also self-contained, also a blocking CI suite): 149 assertions driving two artists, four collectors, two marketplaces, and an adversary through a 4-hop resale chain (royalty accrues to the original creator on every hop, exactly rate x volume), a sale in a second non-coin fungible-v2 currency, every payout-merge case, a front-run/dust/wash-trade adversarial sweep, global conservation of every unit funded, and an event-log replay of all ownership history. Results in [SIMULATION.md](SIMULATION.md); the on-node counterpart is `scripts/devnet-validate` -> `npm run royalty-sale-sim`.
 
 ## Known limits
 

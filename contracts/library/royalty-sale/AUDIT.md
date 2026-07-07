@@ -130,3 +130,8 @@ pact royalty-sale-test.repl        # 46 assertions
 # on-node (F1):
 cd ../../../../scripts/devnet-validate && npm run royalty-sale
 ```
+
+The economic follow-up — a full-marketplace simulation (resale chain,
+multi-currency, adversarial sweep, global conservation) — is documented in
+[SIMULATION.md](SIMULATION.md) (`examples/royalty-sale-market-sim.repl` +
+`npm run royalty-sale-sim`).
