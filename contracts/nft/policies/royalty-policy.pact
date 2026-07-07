@@ -152,4 +152,40 @@
       (enforce (not sale-only)
         "sale-only token: free transfer is disabled — sell via the sale pact"))
     true)
+  ;; --- cross-chain passport (policy state travels with the token) ---------------
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
+    (with-read royalties (at 'id token)
+      { 'creator := creator, 'creator-guard := creator-guard, 'bps := bps, 'sale-only := sale-only }
+      ;; a sale-only token may only RELOCATE (owner to themselves): an x-chain
+      ;; ownership change would be a free transfer in two hops
+      (if sale-only
+        (enforce (= sender receiver) "sale-only token: cross-chain relocation only to the same owner")
+        true)
+      { 'creator: creator, 'creator-guard: creator-guard, 'bps: bps, 'sale-only: sale-only }))
+
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-RECEIVE-CALL (at 'id token) receiver amount)))
+    (let ((spec:object{royalty-spec}
+            { 'creator: (at 'creator state), 'creator-guard: (at 'creator-guard state)
+            , 'bps: (at 'bps state), 'sale-only: (at 'sale-only state) }))
+      (enforce (and (>= (at 'bps spec) 0) (<= (at 'bps spec) MAX-ROYALTY-BPS))
+        (format "royalty bps must be in [0, {}]" [MAX-ROYALTY-BPS]))
+      (enforce (validate-principal (at 'creator-guard spec) (at 'creator spec))
+        "creator must be the principal account of creator-guard")
+      (with-default-read royalties (at 'id token) { 'bps: -1 } { 'bps := existing }
+        (if (= -1 existing)
+          (insert royalties (at 'id token) spec)
+          ;; a RETURNING token: the immutable spec must be identical
+          (let ((local (read royalties (at 'id token))))
+            (enforce (= local spec) "royalty passport mismatch")))))
+    true)
+
+
+  ;; --- uri stance: this policy has no uri concern (abstain) --------------------
+  (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
+    (enforce false "this policy does not permit uri updates"))
 )

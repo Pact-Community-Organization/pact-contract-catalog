@@ -136,8 +136,23 @@
       newbal))
 
   (defcap XTRANSFER:bool (id:string sender:string receiver:string target-chain:string amount:decimal)
+    @doc "Relocate AMOUNT of ID to RECEIVER on TARGET-CHAIN (source-chain \
+         \authority: the sender's guard + supply bookkeeping). One managed \
+         \linear amount, installed by the sender's signature."
     @managed amount TRANSFER-mgr
-    (enforce false "cross-chain transfer not supported by this ledger"))
+    (enforce (> amount 0.0) "positive amount")
+    (enforce-unit id amount)
+    (enforce (!= "" target-chain) "target chain required")
+    (enforce (!= target-chain (at 'chain-id (chain-data))) "cannot relocate to the same chain")
+    (compose-capability (DEBIT id sender))
+    (compose-capability (UPDATE_SUPPLY)))
+
+  (defcap XRECEIVE:bool (id:string receiver:string amount:decimal)
+    @doc "Target-chain credit scope for a relocation. Weak body by design: \
+         \the ONLY acquisition site is the SPV-continued receive step of \
+         \transfer-crosschain — unreachable except through the pact machinery."
+    (compose-capability (CREDIT id receiver))
+    (compose-capability (UPDATE_SUPPLY)))
 
   (defcap DEBIT:bool (id:string sender:string)
     @doc "Debit authority: the sender's account guard (bound in arg position — \
@@ -189,6 +204,10 @@
     @doc "Scopes policy enforce-buy dispatch to the sale defpact (Phase 2)." true)
   (defcap UPDATE-URI-CALL:bool (id:string new-uri:string)
     @doc "Scopes policy enforce-update-uri dispatch (updatable-uri policies)." true)
+  (defcap XCHAIN-SEND-CALL:bool (id:string sender:string receiver:string target-chain:string amount:decimal)
+    @doc "Scopes policy enforce-xchain-send dispatch to transfer-crosschain step 0." true)
+  (defcap XCHAIN-RECEIVE-CALL:bool (id:string receiver:string amount:decimal)
+    @doc "Scopes policy enforce-xchain-receive dispatch to transfer-crosschain step 1." true)
 
   ;; --- key / view helpers -----------------------------------------------------
   (defun key:string (id:string account:string) (format "{}:{}" [id account]))
@@ -341,8 +360,55 @@
         (emit-event (RECONCILE id amount s r))))
     true)
 
+  ;; --- cross-chain relocation (the policy passport) ----------------------------
+  ;; Step 0 (source): policies validate the move and RETURN their per-token
+  ;; state (passports); the sender is debited and the supply decremented; the
+  ;; token metadata + passports YIELD to the target chain. Step 1 (target,
+  ;; SPV-continued): the token row is materialized if this chain has never
+  ;; seen it (its immutable identity is the SPV-proven yield — re-derivation
+  ;; is impossible off the minting chain and unnecessary: `create-token` on
+  ;; this chain can never mint a colliding id because its re-derivation uses
+  ;; THIS chain's id); policies re-bind their passports; the receiver is
+  ;; credited and the supply incremented. The uri is chain-local mutable
+  ;; state (guarded policies), so a RETURNING token keeps this chain's uri.
   (defpact transfer-crosschain:bool (id:string sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
-    (step (enforce false "cross-chain transfer not supported by this ledger")))
+    (step
+      (with-capability (XTRANSFER id sender receiver target-chain amount)
+        (util.enforce-valid-account receiver)
+        (util.enforce-reserved receiver receiver-guard)
+        (let ((token-info (get-token-info id)))
+          (let ((passports:[object]
+                  (with-capability (XCHAIN-SEND-CALL id sender receiver target-chain amount)
+                    (policy-manager.enforce-xchain-send token-info sender receiver receiver-guard target-chain amount))))
+            (let ((sender-change (debit id sender amount))
+                  (receiver-change:object{receiver-balance-change} { 'account: "", 'previous: 0.0, 'current: 0.0 }))
+              (emit-event (RECONCILE id amount sender-change receiver-change))
+              (update-supply id (- amount)))
+            (yield { 'id: id, 'receiver: receiver, 'receiver-guard: receiver-guard, 'amount: amount
+                   , 'uri: (at 'uri token-info), 'precision: (at 'precision token-info)
+                   , 'policies: (at 'policies token-info), 'passports: passports }
+              target-chain)))
+        true))
+    (step
+      (resume { 'id := rid, 'receiver := rcv, 'receiver-guard := rg:guard, 'amount := amt
+              , 'uri := ruri, 'precision := rprec:integer
+              , 'policies := rpols:[module{token-policy}], 'passports := rpass:[object] }
+        ;; materialize the token on first arrival; on a RETURN verify the
+        ;; immutable identity (precision + policy set); the local uri stands
+        (with-default-read tokens rid { 'id: "" } { 'id := existing }
+          (if (= "" existing)
+            (insert tokens rid { 'id: rid, 'uri: ruri, 'precision: rprec, 'supply: 0.0, 'policies: rpols })
+            (with-read tokens rid { 'precision := lprec, 'policies := lpols }
+              (enforce (= lprec rprec) "token precision mismatch on receive")
+              (enforce (= lpols rpols) "token policy set mismatch on receive"))))
+        (with-capability (XCHAIN-RECEIVE-CALL rid rcv amt)
+          (policy-manager.enforce-xchain-receive (get-token-info rid) rcv rg amt rpass))
+        (with-capability (XRECEIVE rid rcv amt)
+          (let ((receiver-change (credit rid rcv rg amt))
+                (sender-change:object{sender-balance-change} { 'account: "", 'previous: 0.0, 'current: 0.0 }))
+            (emit-event (RECONCILE rid amt sender-change receiver-change))
+            (update-supply rid amt)))
+        true)))
 
   ;; --- internal debit / credit / supply ----------------------------------------
   (defun debit:object{sender-balance-change} (id:string account:string amount:decimal)

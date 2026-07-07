@@ -136,4 +136,29 @@
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::TRANSFER-CALL (at 'id token) sender receiver amount)))
     true)
+  ;; --- cross-chain passport (policy state travels with the token) ---------------
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
+    ;; membership travels; the collection ROW (operator, size) is state of the
+    ;; chain where the collection was created — the size cap is a creation-time
+    ;; rule, already enforced when this token joined
+    { 'collection-id: (at 'collection-id (read collection-tokens (at 'id token))) })
+
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-RECEIVE-CALL (at 'id token) receiver amount)))
+    (let ((cid:string (at 'collection-id state)))
+      (enforce (!= "" cid) "malformed collection passport")
+      (with-default-read collection-tokens (at 'id token) { 'collection-id: "" } { 'collection-id := existing }
+        (if (= "" existing)
+          (insert collection-tokens (at 'id token) { 'collection-id: cid })
+          (enforce (= existing cid) "collection passport mismatch"))))
+    true)
+
+
+  ;; --- uri stance: this policy has no uri concern (abstain) --------------------
+  (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
+    (enforce false "this policy does not permit uri updates"))
 )

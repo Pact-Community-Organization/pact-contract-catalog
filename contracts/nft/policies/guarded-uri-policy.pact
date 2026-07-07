@@ -3,10 +3,11 @@
 ;; The uri-update authority is REQUIRED in the create-token transaction and
 ;; bound into this policy's own state at init — fail closed: a missing guard
 ;; aborts creation, it never defaults to "anyone may update" or to "the
-;; framework admin may update". At update time the manager routes the request
-;; here (this policy registers itself as an updatable-uri handler) and the
-;; stored guard authorizes it. Stack nft.non-updatable-uri-policy alongside
-;; and its veto wins — every policy must pass.
+;; framework admin may update". This policy returns "permit" from the base
+;; token-policy uri-decision hook, and the manager then calls its
+;; enforce-update-uri, where the stored guard authorizes the specific update.
+;; Stack nft.non-updatable-uri-policy alongside and its veto wins — the manager
+;; evaluates every attached policy's stance, so one veto is final.
 ;;
 ;; All token-policy lifecycle hooks are permissive; each still requires the
 ;; ledger's matching -CALL capability in scope, so no hook is reachable
@@ -19,7 +20,6 @@
        \once at token creation; the manager's update-uri routing enforces it."
 
   (implements token-policy)
-  (implements updatable-uri-policy)
   (use token-policy [token-info payout])
 
   (defconst ADMIN-KS:string (read-string 'admin-ks)
@@ -34,7 +34,10 @@
          \for any token carrying this policy — fail closed.")
 
   (defschema uri-guard-schema
-    @doc "Who may update the token's uri, bound once at token creation."
+    @doc "Who may update the token's uri, bound once at token creation. \
+         \token-id mirrors the row key (\"\" = the never-stored sentinel the \
+         \cross-chain receive uses to detect absence)."
+    token-id:string
     guard:guard)
   (deftable uri-guards:{uri-guard-schema})
 
@@ -46,7 +49,8 @@
   (defun get-uri-guard:guard (token-id:string)
     (at 'guard (read uri-guards token-id)))
 
-  ;; --- updatable-uri-policy: the guard decides ----------------------------------
+  ;; --- uri stance: PERMIT, then the stored guard authorizes the update -----------
+  (defun uri-decision:string (token:object{token-info}) (identity "permit"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::UPDATE-URI-CALL (at 'id token) new-uri)))
@@ -60,7 +64,7 @@
       (require-capability (l::INIT-CALL (at 'id token) (at 'precision token) (at 'uri token))))
     ;; the guard is REQUIRED (typed read: absent -> abort, fail closed)
     (let ((g:guard (read-msg URI-GUARD-MSG-KEY)))
-      (insert uri-guards (at 'id token) { 'guard: g })
+      (insert uri-guards (at 'id token) { 'token-id: (at 'id token), 'guard: g })
       (emit-event (URI-GUARD (at 'id token))))
     true)
 
@@ -93,4 +97,21 @@
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::TRANSFER-CALL (at 'id token) sender receiver amount)))
     true)
+  ;; --- cross-chain passport (policy state travels with the token) ---------------
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
+    { 'guard: (get-uri-guard (at 'id token)) })
+
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-RECEIVE-CALL (at 'id token) receiver amount)))
+    (let ((g:guard (at 'guard state)))
+      (with-default-read uri-guards (at 'id token) { 'token-id: "" } { 'token-id := existing }
+        (if (= "" existing)
+          (insert uri-guards (at 'id token) { 'token-id: (at 'id token), 'guard: g })
+          ;; a RETURNING token: the immutable uri guard must be identical
+          (enforce (= g (get-uri-guard (at 'id token))) "uri-guard passport mismatch"))))
+    true)
+
 )

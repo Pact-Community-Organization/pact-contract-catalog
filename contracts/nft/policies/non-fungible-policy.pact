@@ -82,4 +82,27 @@
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::TRANSFER-CALL (at 'id token) sender receiver amount)))
     true)
+  ;; --- cross-chain passport (policy state travels with the token) ---------------
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
+    (enforce (= amount 1.0) "a 1/1 NFT relocates whole (amount 1.0)")
+    { 'minted: true })
+
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object)
+    (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
+      (require-capability (l::XCHAIN-RECEIVE-CALL (at 'id token) receiver amount)))
+    (enforce (= amount 1.0) "a 1/1 NFT relocates whole (amount 1.0)")
+    (enforce (= true (at 'minted state)) "malformed 1/1 passport")
+    ;; carry the once-EVER marker: on first arrival bind it (blocks any mint
+    ;; here); a returning token already has it
+    (with-default-read minted-table (at 'id token) { 'minted: false } { 'minted := m }
+      (if m true (insert minted-table (at 'id token) { 'minted: true })))
+    true)
+
+
+  ;; --- uri stance: this policy has no uri concern (abstain) --------------------
+  (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
+    (enforce false "this policy does not permit uri updates"))
 )
