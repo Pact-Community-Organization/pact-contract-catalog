@@ -22,7 +22,7 @@ Every entry in this tree must satisfy (enforced by CI via `scripts/validate_cont
 1. **Schema-A metadata** — `name`, `slug`, `version`, `repository`, `license`, `authors`, `audit_status`, `tags` in a co-located `metadata.yaml`.
 2. **Co-located `.repl` test suite** — under `examples/`, runnable against the [kadena_repl_sandbox](https://github.com/CryptoPascal31/kadena_repl_sandbox).
 3. **`AUDIT.md` at `self-reviewed` or better** — per the ladder in [docs/CONTRACT_POLICIES.md](../../docs/CONTRACT_POLICIES.md) §3.1.
-4. **No open CRITICAL findings** — entries with a CRITICAL finding live in `registry/`, never here (ADR-001 rule 4).
+4. **No open CRITICAL findings** — entries with a CRITICAL finding live in `registry/`, never here.
 
 ---
 

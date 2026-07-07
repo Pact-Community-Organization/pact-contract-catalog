@@ -4,7 +4,7 @@
 
 Provide a layered, dependency-aware catalog of production Pact smart contracts on KDA-CE. Each contract entry ships with its source code (as deployed on-chain), human-readable documentation, machine-readable metadata, and an audit record.
 
-Per [ADR-001](docs/adr/ADR-001-registry-library-split.md), the catalog is split into
+The catalog is split into
 two product trees: **`contracts/registry/`** (the observatory — verbatim observed
 contracts, read-only reference) and **`contracts/library/`** (the product —
 PCO-authored deployable templates with a strict quality gate).
@@ -29,7 +29,7 @@ contracts/
     ecosystem/         — production third-party modules (deployment breadth + call-frequency census)
     community/         — census-observed community free-namespace modules
 scripts/               — validation, index generation
-docs/                  — onboarding, policies, ADRs, index output (index.md, index.json)
+docs/                  — onboarding, policies, index output (index.md, index.json)
 ```
 
 ---
@@ -108,7 +108,7 @@ Library — Deployable Templates (contracts/library/)
   PCO-authored starting points. Outside the registry layer stack.
   Quality gate: schema-A metadata, co-located .repl tests,
   audit_status self-reviewed or better. Entries with open CRITICAL
-  findings can never live here (ADR-001 rule 4).
+  findings can never live here.
 
     library/hello-world                tutorial entry point
     library/token-fungible             implements kip/fungible-v2
@@ -221,5 +221,5 @@ keywords: ['pact', 'smart-contract']
 - Additions to `registry/kip/`, `registry/core/`, or `registry/marmalade/` require a maintainer PR for upstream sync.
 - Additions to `registry/ecosystem/` and `registry/community/` require evidence of deployment on mainnet01 (module hash, describe-module output, or block explorer link) plus a PR matching the census methodology in `contracts/registry/ecosystem/README.md`.
 - Additions to `library/` require a PR linking a GitHub issue, passing CI (including the library quality gate: schema-A metadata, co-located `.repl` tests, `audit_status` of `self-reviewed` or better), and approval per `CONTRIBUTING.md`.
-- Entries with an open CRITICAL finding live in `registry/`, never `library/` (ADR-001 rule 4).
+- Entries with an open CRITICAL finding live in `registry/`, never `library/`.
 - Audit promotions follow the ladder in `docs/CONTRACT_POLICIES.md` §3.1 (`reference` / `unaudited` / `self-reviewed` / `community-reviewed` / `independently-audited`) and require evidence in `AUDIT.md`.

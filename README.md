@@ -2,7 +2,7 @@
 
 Reusable, trusted Pact smart contracts, maintained by the Pact Community Organization (PCO) in service of one mission: **make it easy and safe for businesses to start building with smart contracts.**
 
-The catalog ships two clearly separated products (see [ADR-001](docs/adr/ADR-001-registry-library-split.md)):
+The catalog ships two clearly separated products:
 
 - **[`contracts/library/`](contracts/library/) — the Library**: PCO-authored, deployable templates. Start here.
 - **[`contracts/registry/`](contracts/registry/) — the Registry**: an observatory of contracts that already exist on-chain, catalogued verbatim for reference.
@@ -57,7 +57,7 @@ All submissions run the CI validation gate (`scripts/validate_contract.sh`). See
 
 ## Governance
 
-This repository follows the governance model defined in the [PCO Foundation](https://github.com/Pact-Community-Organization/foundation). Contract policies: [docs/CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md). Architecture decisions: [docs/adr/](docs/adr/). Security disclosures: [SECURITY.md](SECURITY.md).
+This repository follows the governance model defined in the [PCO Foundation](https://github.com/Pact-Community-Organization/foundation). Contract policies: [docs/CONTRACT_POLICIES.md](docs/CONTRACT_POLICIES.md). Security disclosures: [SECURITY.md](SECURITY.md).
 
 ## License
 
