@@ -16,6 +16,11 @@
 ;; ---------------------------------------------------------------------------
 ;; deploy the stack: interfaces -> util -> policy-manager -> ledger -> init
 ;; ---------------------------------------------------------------------------
+;; fungible-v2 at root (the manager references it for the sale escrow)
+(begin-tx "fungible-v2")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(commit-tx)
+
 (begin-tx "deploy the nft framework (Phase 1)")
 (env-data
   { "g":     { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
@@ -32,8 +37,9 @@
 (load "../interfaces/sale.pact")
 (load "../interfaces/updatable-uri-policy.pact")
 (load "../core/util.pact")
-(load "../core/policy-manager-min.pact")
+(load "../core/policy-manager.pact")
 (create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
 (load "../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
@@ -267,18 +273,7 @@
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
-;; Phase-2 boundaries are explicit
-;; ---------------------------------------------------------------------------
-(begin-tx "settlement is Phase 2")
-(env-data
-  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
-(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
-(let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
-            (read-keyset 'alice))))
-  (expect-failure "the sale defpact rejects until the hardened manager lands" "Phase 2"
-    (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 100)))
-(rollback-tx)
+;; (Settlement — the offer/buy sale — is exercised by test/settlement.repl.)
 
 (print "")
 (print "=== NFT FRAMEWORK PHASE 1 — IDENTITY CORE: ALL GREEN ===")

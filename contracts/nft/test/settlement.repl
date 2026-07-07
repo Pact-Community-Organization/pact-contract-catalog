@@ -1,0 +1,237 @@
+;; nft framework — Phase 2 settlement suite.
+;;
+;; Proves the hardened policy-manager fixes both settlement flaws of the
+;; Marmalade architecture:
+;;   * ARCH-2 (economics-from-the-buyer): the quote (price, fungible, seller
+;;     account, marketplace fee) is bound in STATE at offer by the seller; the
+;;     buyer supplies only their own paying account. A malicious economic
+;;     payload in the buy tx is IGNORED.
+;;   * ARCH-1 (sweep-what's-left): ONE settlement routine pays every policy-
+;;     declared cut + the marketplace fee + the seller remainder and ASSERTS
+;;     escrow-in = Σ payouts. No policy touches the escrow.
+;; Reconciles all payouts to coin precision (12 dp), and proves the withdraw
+;; rollback returns the NFT.
+;;
+;; A tiny fixture royalty policy exercises the declared-payout path; the real
+;; hardened royalty policy is Phase 3.
+;;
+;; Two-step sale defpacts: env-hash makes each pact-id deterministic, so the
+;; escrow account is known before the buy tx (for the buyer's TRANSFER cap).
+;;
+;; Run: pact contracts/nft/test/settlement.repl
+
+;; --- coin (payment fungible) ------------------------------------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- the nft framework ------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../interfaces/updatable-uri-policy.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(commit-tx)
+
+;; --- fixture royalty policy (test-only; the hardened one is Phase 3) --------
+(begin-tx "fixture royalty policy")
+(namespace "nft")
+(module fixture-royalty GOV
+  (implements token-policy)
+  (defcap GOV () (enforce-keyset "nft.admin"))
+  (use token-policy [token-info payout])
+  (defschema r creator:string creator-guard:guard bps:integer)
+  (deftable rt:{r})
+  (defun enforce-init:bool (token:object{token-info})
+    (let ((spec (read-msg "royalty")))
+      (enforce (and (>= (at 'bps spec) 0) (<= (at 'bps spec) 5000)) "royalty-bps in [0,50%]")
+      (insert rt (at 'id token)
+        { 'creator: (at 'creator spec), 'creator-guard: (at 'creator-guard spec), 'bps: (at 'bps spec) }))
+    true)
+  (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal) true)
+  (defun enforce-burn:bool (token:object{token-info} account:string amount:decimal) true)
+  (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string)
+    (with-read rt (at 'id token) { 'creator := c, 'creator-guard := cg, 'bps := bps }
+      (let ((roy (floor (/ (* (policy-manager.get-quote-price sale-id) (dec bps)) 10000.0) (coin.precision))))
+        (if (> roy 0.0) [{ 'account: c, 'guard: cg, 'amount: roy }] [])))))
+(create-table nft.fixture-royalty.rt)
+(commit-tx)
+
+;; --- fund the buyer ---------------------------------------------------------
+(begin-tx "fund")
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+;; --- alice creates + mints her NFT with the royalty policy (10% to alice) ---
+(begin-tx "create + mint")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+               , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+               , "bps": 1000 } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://art" [nft.fixture-royalty] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect "alice owns her NFT" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(commit-tx)
+
+;; ===========================================================================
+;; SALE: alice offers at 100 with a 2.5% marketplace fee (bound at offer); bob
+;; buys. royalty 10 -> alice(creator), fee 2.5 -> mkt, proceeds 87.5 ->
+;; alice(seller). alice is creator AND seller -> legs MERGE -> alice nets 97.5.
+;; Conservation: 10 + 2.5 + 87.5 = 100.
+;; ===========================================================================
+
+;; STEP 0 — offer (deterministic pact-id via env-hash)
+(begin-tx "offer")
+(env-hash (hash "nft-sale-1"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 250 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (let ((sale-id (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)))
+    (expect "the sale-id is the deterministic pact-id" (tx-hash) sale-id)
+    (expect "NFT escrowed out of alice" 0.0
+      (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111"))
+    (expect "escrow funded 0 before buy" 0.0
+      (coin.get-balance (nft.policy-manager.escrow-account sale-id)))))
+(commit-tx)
+
+;; STEP 1 — buy. bob signs BUY + coin.TRANSFER to the (known) escrow, AND
+;; injects a malicious economic payload (fee-bps 0, price 1) that MUST be ignored.
+(begin-tx "buy — economics come from state, not the buyer")
+(env-data
+  { "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  ;; the attack surface — bogus economics in the BUY tx:
+  , "quote": { "fee-bps": 0, "price": 1.0 }
+  , "marketplace_fee": { "mk-account": "k:2222222222222222222222222222222222222222222222222222222222222222", "mk-fee-percentage": 0.0 } })
+;; bob signs BOTH the BUY managed cap (sale-id = the offer tx hash) AND the coin
+;; payment into the escrow. The id below is alice's derived token id.
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [ (nft.ledger.BUY "n:eiw2KsXMj0X-Ym_eVlhRsPzhnE32esxwSUuzG4VRGdI"
+                          "k:1111111111111111111111111111111111111111111111111111111111111111"
+                          "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                          "BUdmPBIo36KSM7AF8vwsyXv7w684crXTIEwdrszlfJU")
+                      , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                          "c:IL8NH2tFDpV8LJSmp58s9s9Dt1DrTRfZmGglJ5q1Thc" 100.0) ] } ])
+;; sale-id = the offer tx hash (deterministic)
+(continue-pact 1 false "BUdmPBIo36KSM7AF8vwsyXv7w684crXTIEwdrszlfJU")
+
+;; --- reconciliation (12 dp) ---
+;; bob paid 100 (the STATE price, not the injected 1.0)
+(expect "bob paid exactly the state price 100" 900.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+;; alice = creator(10) + seller proceeds(87.5), merged = 97.5 (fee NOT zeroed)
+(expect "alice netted royalty 10 + proceeds 87.5 = 97.5 (merged)" 97.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+;; the marketplace fee went to mkt — the buyer could NOT zero it (2.5% of 100)
+(expect "marketplace fee 2.5 accrued (buyer could not zero it)" 2.5
+  (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
+;; conservation: the escrow returned to baseline (0)
+(expect "escrow empty after settlement (conservation)" 0.0
+  (coin.get-balance "c:IL8NH2tFDpV8LJSmp58s9s9Dt1DrTRfZmGglJ5q1Thc"))
+(commit-tx)
+
+;; bob owns the NFT
+(begin-tx "bob owns it")
+(env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            (read-keyset 'alice))))
+  (expect "bob holds the NFT" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(commit-tx)
+
+;; ===========================================================================
+;; WITHDRAW ROLLBACK — an offered-but-unsold NFT returns to the seller
+;;   bob (new owner) lists a second sale, then withdraws it (timeout 0 = the
+;;   seller may withdraw anytime). The NFT comes back to bob.
+;; ===========================================================================
+(begin-tx "second offer, then withdraw")
+(env-hash (hash "nft-sale-2"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 50.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0)
+  (expect "NFT escrowed out of bob" 0.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(commit-tx)
+
+(begin-tx "withdraw (rollback of step 0) — the NFT returns to bob")
+(env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+;; bob signs WITHDRAW (sale-id = the nft-sale-2 offer tx hash)
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [ (nft.ledger.WITHDRAW "n:eiw2KsXMj0X-Ym_eVlhRsPzhnE32esxwSUuzG4VRGdI"
+                          "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0
+                          "cryRAzHyIbNjbNNGuUY82EeEsLZ5XNNmRqvgxtHmFIo") ] } ])
+(continue-pact 0 true "cryRAzHyIbNjbNNGuUY82EeEsLZ5XNNmRqvgxtHmFIo")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            (read-keyset 'alice))))
+  (expect "withdraw returned the NFT to bob" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(commit-tx)
+
+(print "")
+(print "=== NFT FRAMEWORK PHASE 2 — SETTLEMENT: ALL GREEN ===")
+(print "  ARCH-2 fixed: quote bound at offer; buyer's malicious economics ignored")
+(print "    (paid the state price 100, fee 2.5 not zeroed).")
+(print "  ARCH-1 fixed: one settlement, escrow-in = sum payouts asserted; conserved.")
+(print "  royalty 10 -> creator, fee 2.5 -> marketplace, 87.5 -> seller (merged).")
+(print "  withdraw rollback returns the escrowed NFT.")

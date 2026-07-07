@@ -19,6 +19,17 @@
     uri:string
     policies:[module{token-policy}])
 
+  (defschema payout
+    @doc "A cut a policy DECLARES from a sale price. The policy computes the \
+         \amount from its OWN on-chain state (never the buy tx) and names the \
+         \payee; it does NOT move the money. The single settlement routine in \
+         \the manager pays every declared payout + the marketplace fee + the \
+         \seller remainder from one escrow and asserts conservation. This is the \
+         \ARCH-1 fix: no policy hook holds spend authority over the escrow."
+    account:string
+    guard:guard
+    amount:decimal)
+
   (defun enforce-init:bool (token:object{token-info})
     @doc "Run at token creation. A hardened policy binds its economic terms \
          \(e.g. royalty rate + payee) into its OWN on-chain state HERE, from \
@@ -38,13 +49,16 @@
     ( token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string )
     @doc "Run when SELLER offers AMOUNT of TOKEN for sale SALE-ID.")
 
-  (defun enforce-buy:bool
+  (defun enforce-buy:[object{payout}]
     ( token:object{token-info} seller:string buyer:string buyer-guard:guard
       amount:decimal sale-id:string )
     @doc "Run at settlement of SALE-ID (SELLER -> BUYER). A hardened policy \
-         \DECLARES its cut of the price (read from its own state) for the \
-         \single conservation-asserted settlement; it MUST NOT reach into a \
-         \shared escrow itself, and MUST NOT read economics from the tx.")
+         \authorizes the sale AND RETURNS the payout(s) it claims from the \
+         \price — each amount computed from the policy's OWN on-chain state \
+         \(never the buy tx). It MUST NOT move money or touch the escrow. The \
+         \manager's single settlement routine pays every returned payout + the \
+         \marketplace fee + the seller remainder and asserts escrow \
+         \conservation. Return [] to claim nothing.")
 
   (defun enforce-withdraw:bool
     ( token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string )
