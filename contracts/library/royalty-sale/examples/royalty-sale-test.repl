@@ -1,0 +1,419 @@
+;; royalty-sale-test.repl — PCO library template test suite
+;;
+;; Self-contained: loads coin + interfaces from this repo's registry tree.
+;;
+;; Proves the hardened patterns from the Marmalade V2 analysis:
+;;  - conservation to 12 dp on every sale (royalty + fee + proceeds == price,
+;;    escrow returns to baseline);
+;;  - the primary-sale merge (creator == seller pays ONE payout, no
+;;    managed-transfer install collision);
+;;  - economics come from state, not the buy transaction (no fee arg exists);
+;;  - sale-only tokens enforce royalty (free transfer rejected, buy always pays);
+;;  - fail-closed validation (non-principal payees, over-cap rates rejected).
+;;
+;; Payout accounts are k: principals (the module requires it).
+
+(begin-tx "load coin")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+(begin-tx "keysets + fund buyers")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "mkt":   { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+  , "eve":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "gov":   { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" } })
+;; buyers need coin
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob") 1000.0)
+(test-capability (coin.CREDIT "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(coin.credit "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol") 1000.0)
+(commit-tx)
+
+(begin-tx "load royalty-sale")
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "free" (read-keyset "gov") (read-keyset "gov"))
+(namespace "free")
+(define-keyset "free.royalty-sale-gov" (read-keyset "gov"))
+(load "../royalty-sale.pact")
+(create-table free.royalty-sale.tokens)
+(create-table free.royalty-sale.listings)
+(commit-tx)
+
+;; convenience: account name constants
+;; alice=k:1111..  bob=k:2222..  carol=k:3333..  mkt=k:4444..  eve=k:5555..
+
+;; ===========================================================================
+;; 1. mint — fail-closed validation
+;; ===========================================================================
+(begin-tx "mint validation")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "alice"))] } ])
+(expect-failure "non-principal owner rejected" "owner must be a principal account"
+  (free.royalty-sale.mint "t-bad" "alice-vanity" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    500 false "ipfs://x"))
+(expect-failure "non-principal creator rejected" "creator must be a principal account"
+  (free.royalty-sale.mint "t-bad" "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "creator-vanity" (read-keyset "alice")
+    500 false "ipfs://x"))
+(expect-failure "royalty over 50% rejected" "royalty-bps must be in [0, 5000]"
+  (free.royalty-sale.mint "t-bad" "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    6000 false "ipfs://x"))
+(rollback-tx)
+
+(begin-tx "mint without owner signature")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(expect-failure "minter must satisfy the owner guard" "Keyset failure"
+  (free.royalty-sale.mint "t-1" "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    500 false "ipfs://x"))
+(rollback-tx)
+
+;; ===========================================================================
+;; 2. sale-only vs transferable (POL-2 done right)
+;; ===========================================================================
+(begin-tx "mint a SALE-ONLY token (transferable=false, 5% royalty)")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "alice"))] } ])
+(expect "sale-only token minted" "t-so"
+  (free.royalty-sale.mint "t-so"
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    500 false "ipfs://sale-only"))
+(expect "MINTED emitted" true
+  (contains "free.royalty-sale.MINTED" (map (at 'name) (env-events true))))
+(commit-tx)
+
+(begin-tx "sale-only token cannot be free-transferred (royalty enforced)")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "t-so")] } ])
+(expect-failure "free transfer of a sale-only token rejected" "token is sale-only; use buy"
+  (free.royalty-sale.transfer "t-so"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+(rollback-tx)
+
+(begin-tx "mint a TRANSFERABLE token; free transfer works")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "alice"))] } ])
+(free.royalty-sale.mint "t-tr"
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+  250 true "ipfs://transferable")
+(commit-tx)
+
+(begin-tx "transferable token: gift to bob")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "t-tr")] } ])
+(expect-failure "transfer to a non-principal receiver rejected" "receiver must be a principal account"
+  (free.royalty-sale.transfer "t-tr" "bob-vanity" (read-keyset "bob")))
+(expect "gift succeeds" "t-tr"
+  (free.royalty-sale.transfer "t-tr"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+(expect "bob now owns it" "k:2222222222222222222222222222222222222222222222222222222222222222"
+  (free.royalty-sale.owner-of "t-tr"))
+(commit-tx)
+
+;; ===========================================================================
+;; 3. listing — economics fixed on-chain by the seller
+;; ===========================================================================
+(begin-tx "list validation")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "t-so")] } ])
+(expect-failure "zero price rejected" "price must be positive"
+  (free.royalty-sale.list-token "t-so" 0.0 coin "" (read-keyset "alice") 0))
+(expect-failure "fee over 10% rejected" "marketplace-bps must be in [0, 1000]"
+  (free.royalty-sale.list-token "t-so" 100.0 coin
+    "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt") 2000))
+(expect-failure "non-principal marketplace with a fee rejected" "marketplace must be a principal account"
+  (free.royalty-sale.list-token "t-so" 100.0 coin "mkt-vanity" (read-keyset "mkt") 250))
+(rollback-tx)
+
+(begin-tx "non-owner cannot list")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+            , "caps": [(free.royalty-sale.OWNER "t-so")] } ])
+(expect-failure "stranger cannot list someone's token" "Keyset failure"
+  (free.royalty-sale.list-token "t-so" 100.0 coin "" (read-keyset "alice") 0))
+(rollback-tx)
+
+;; ===========================================================================
+;; 4. SECONDARY SALE — conservation to 12dp (the core proof)
+;;    bob owns t-tr (2.5% royalty to alice). bob lists at 100 with a 2.5%
+;;    marketplace fee to mkt. carol buys.
+;;    royalty = 2.5 -> alice(creator); fee = 2.5 -> mkt; proceeds = 95 -> bob.
+;; ===========================================================================
+(begin-tx "bob lists t-tr at 100, 2.5% marketplace fee")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "t-tr")] } ])
+(free.royalty-sale.list-token "t-tr" 100.0 coin
+  "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt") 250)
+(expect "listed" true (free.royalty-sale.is-listed "t-tr"))
+(commit-tx)
+
+(begin-tx "carol buys t-tr — conservation")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                      (free.royalty-sale.get-escrow-account) 100.0)] } ])
+(expect "buy succeeds" "t-tr"
+  (free.royalty-sale.buy "t-tr"
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")))
+(expect "creator (alice) received 2.5% royalty" 2.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "marketplace received 2.5% fee" 2.5
+  (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
+;; bob was funded 1000 in setup and is the seller here → 1000 + 95 remainder
+(expect "seller (bob) received the 95 remainder" 1095.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "carol debited exactly the price" 900.0
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "escrow returned to zero (conservation)" 0.0
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(expect "carol now owns it" "k:3333333333333333333333333333333333333333333333333333333333333333"
+  (free.royalty-sale.owner-of "t-tr"))
+(expect "listing closed" false (free.royalty-sale.is-listed "t-tr"))
+(expect "SOLD emitted" true
+  (contains "free.royalty-sale.SOLD" (map (at 'name) (env-events true))))
+(commit-tx)
+
+(begin-tx "cannot re-buy a settled listing")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 100.0)] } ])
+(expect-failure "not listed anymore" "token is not listed for sale"
+  (free.royalty-sale.buy "t-tr"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+(rollback-tx)
+
+;; ===========================================================================
+;; 5. PRIMARY SALE — creator == seller merge (the collision regression)
+;;    alice mints t-p (10% royalty, alice creator), alice still owns it, alice
+;;    lists at 50 (no fee). bob buys. royalty(alice)=5 + proceeds(alice)=45 must
+;;    MERGE into ONE 50 payout — a naive two-payout settle would abort on the
+;;    duplicate managed-transfer install and lock the sale.
+;; ===========================================================================
+(begin-tx "alice mints + lists her own token (primary sale)")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "alice"))] } ])
+(free.royalty-sale.mint "t-p"
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+  1000 true "ipfs://primary")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "t-p")] } ])
+(free.royalty-sale.list-token "t-p" 50.0 coin "" (read-keyset "alice") 0)
+(commit-tx)
+
+(begin-tx "bob buys alice's primary listing — creator==seller merges cleanly")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 50.0)] } ])
+(let ((alice-before (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")))
+  (expect "primary sale succeeds (no self-payout collision)" "t-p"
+    (free.royalty-sale.buy "t-p"
+      "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+  (expect "alice received royalty + proceeds as ONE merged payment (full 50)"
+    (+ alice-before 50.0)
+    (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(expect "escrow conserved to zero" 0.0
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(expect "bob owns the primary token" "k:2222222222222222222222222222222222222222222222222222222222222222"
+  (free.royalty-sale.owner-of "t-p"))
+(commit-tx)
+
+;; ===========================================================================
+;; 6. royalty 0 + rounding-dust conservation
+;;    t-d: 0% royalty is fine (only-seller). And an odd price with a 3.33% fee
+;;    floors the fee; the seller proceeds absorb the dust so the sale conserves.
+;; ===========================================================================
+(begin-tx "mint a no-royalty token, list at an odd price with a 3.33% fee")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "carol"))] } ])
+(free.royalty-sale.mint "t-d"
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")
+  0 true "ipfs://dust")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(free.royalty-sale.OWNER "t-d")] } ])
+(free.royalty-sale.list-token "t-d" 10.000000000001 coin
+  "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt") 333)
+(commit-tx)
+
+(begin-tx "buy the odd-priced token — dust conserved to 12 dp")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 10.000000000001)] } ])
+(let ((carol-before (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+      (mkt-before (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444")))
+  (free.royalty-sale.buy "t-d"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob"))
+  ;; fee = floor(10.000000000001 * 0.0333, 12) = 0.333000000000
+  (expect "marketplace fee floored to 12 dp" 0.333
+    (- (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444") mkt-before))
+  ;; seller (carol) absorbs the dust: price - fee (royalty 0)
+  (expect "seller proceeds carry the dust (price - fee)" 9.667000000001
+    (- (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333") carol-before)))
+(expect "escrow conserved to zero on an odd price" 0.0
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(commit-tx)
+
+;; ===========================================================================
+;; 7. buy an unlisted token; delist; buy after delist
+;; ===========================================================================
+(begin-tx "cannot buy an unlisted token")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect-failure "unlisted token cannot be bought" "No value found"
+  (free.royalty-sale.buy "t-so"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+(rollback-tx)
+
+(begin-tx "list then delist; buy rejected after delist")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "t-so")] } ])
+(free.royalty-sale.list-token "t-so" 100.0 coin "" (read-keyset "alice") 0)
+(expect "delisted" "t-so" (free.royalty-sale.delist "t-so"))
+(expect "no longer listed" false (free.royalty-sale.is-listed "t-so"))
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 100.0)] } ])
+(expect-failure "buy after delist rejected" "token is not listed for sale"
+  (free.royalty-sale.buy "t-so"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+(commit-tx)
+
+;; ===========================================================================
+;; 8. sale-only royalty is genuinely enforced end-to-end:
+;;    t-so is sale-only; the ONLY way to move it is buy, which pays alice.
+;; ===========================================================================
+(begin-tx "sale-only token sells only via buy (royalty always paid)")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "t-so")] } ])
+(free.royalty-sale.list-token "t-so" 200.0 coin "" (read-keyset "alice") 0)
+(commit-tx)
+
+(begin-tx "carol buys the sale-only token; alice's 5% royalty is unavoidable")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                      (free.royalty-sale.get-escrow-account) 200.0)] } ])
+(let ((alice-before (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")))
+  (free.royalty-sale.buy "t-so"
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol"))
+  ;; alice is creator AND seller here (she still owned t-so) -> merged; she gets
+  ;; the full 200 (royalty 10 + proceeds 190). The royalty was enforced: there
+  ;; was no non-paying path off the token.
+  (expect "royalty enforced: alice made whole on a sale-only token"
+    (+ alice-before 200.0)
+    (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(expect "carol owns the sale-only token now" "k:3333333333333333333333333333333333333333333333333333333333333333"
+  (free.royalty-sale.owner-of "t-so"))
+(commit-tx)
+
+;; ===========================================================================
+;; 9. F2 regression: TRANSFERRED records the real sender (not receiver twice)
+;; ===========================================================================
+(begin-tx "mint + transfer records correct provenance")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "alice"))] } ])
+(free.royalty-sale.mint "t-prov"
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+  0 true "ipfs://prov")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
+(free.royalty-sale.transfer "t-prov"
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob"))
+(expect "TRANSFERRED records the real sender then receiver"
+  ["t-prov"
+   "k:1111111111111111111111111111111111111111111111111111111111111111"
+   "k:2222222222222222222222222222222222222222222222222222222222222222"]
+  (at 'params
+    (at 0 (filter (lambda (e) (= "free.royalty-sale.TRANSFERRED" (at 'name e)))
+                  (env-events true)))))
+(commit-tx)
+
+;; ===========================================================================
+;; 10. transfer-while-listed rejected; non-owner delist rejected
+;; ===========================================================================
+(begin-tx "cannot free-transfer a listed token")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
+(free.royalty-sale.list-token "t-prov" 10.0 coin "" (read-keyset "bob") 0)
+(expect-failure "listed token cannot be gifted" "delist before transferring"
+  (free.royalty-sale.transfer "t-prov"
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")))
+(rollback-tx)
+
+(begin-tx "non-owner cannot delist")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
+(free.royalty-sale.list-token "t-prov" 10.0 coin "" (read-keyset "bob") 0)
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+            , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
+(expect-failure "stranger cannot delist someone's listing" "Keyset failure"
+  (free.royalty-sale.delist "t-prov"))
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
+(free.royalty-sale.delist "t-prov")
+(commit-tx)
+
+;; ===========================================================================
+;; 11. merge across marketplace==seller (fee + proceeds to one account, once)
+;;     bob owns t-prov (0% royalty). bob lists at 100 with a 3% fee TO HIMSELF.
+;;     fee(3) + proceeds(97) both to bob -> merged into one 100 payout.
+;; ===========================================================================
+(begin-tx "marketplace == seller merge")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
+(free.royalty-sale.list-token "t-prov" 100.0 coin
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob") 300)
+(commit-tx)
+
+(begin-tx "carol buys; bob (seller==marketplace) is paid once")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                      (free.royalty-sale.get-escrow-account) 100.0)] } ])
+(let ((bob-before (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222")))
+  (free.royalty-sale.buy "t-prov"
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol"))
+  (expect "seller==marketplace paid the full 100 as one merged payout"
+    (+ bob-before 100.0)
+    (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(expect "escrow conserved on the seller==marketplace merge" 0.0
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(commit-tx)
+
+;; ===========================================================================
+;; 12. escrow-donation robustness (F1/F4): a griefer donates dust to the shared
+;;     escrow; the next sale still conserves (final == funded - price == baseline).
+;; ===========================================================================
+(begin-tx "griefer donates dust to the escrow, then a sale still settles")
+;; eve funds herself and donates dust to the escrow principal
+(test-capability (coin.CREDIT "k:5555555555555555555555555555555555555555555555555555555555555555"))
+(coin.credit "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset "eve") 1.0)
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+            , "caps": [(coin.TRANSFER "k:5555555555555555555555555555555555555555555555555555555555555555"
+                                      (free.royalty-sale.get-escrow-account) 0.000000000001)] } ])
+(coin.transfer-create "k:5555555555555555555555555555555555555555555555555555555555555555"
+  (free.royalty-sale.get-escrow-account) (free.royalty-sale.create-escrow-guard) 0.000000000001)
+(expect "escrow now carries donated dust" 0.000000000001
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(commit-tx)
+
+(begin-tx "carol lists t-prov, alice buys; sale conserves despite the dust")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
+(free.royalty-sale.list-token "t-prov" 20.0 coin "" (read-keyset "carol") 0)
+(commit-tx)
+
+(begin-tx "buy over a dust-carrying escrow")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 20.0)] } ])
+(free.royalty-sale.buy "t-prov"
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob"))
+(expect "escrow returns to its donated-dust baseline (not zero) — conservation holds"
+  0.000000000001
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(expect "bob owns t-prov after buying over dust" "k:2222222222222222222222222222222222222222222222222222222222222222"
+  (free.royalty-sale.owner-of "t-prov"))
+(commit-tx)

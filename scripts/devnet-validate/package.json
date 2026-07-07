@@ -12,7 +12,8 @@
     "gas-station": "tsx src/gas-station.ts",
     "token-fungible": "tsx src/token-fungible.ts",
     "hello-world": "tsx src/hello-world.ts",
-    "all": "tsx src/treasury.ts && tsx src/vesting.ts && tsx src/dao-voting.ts && tsx src/oracle-feed.ts && tsx src/gas-station.ts && tsx src/token-fungible.ts && tsx src/hello-world.ts"
+    "all": "tsx src/treasury.ts && tsx src/vesting.ts && tsx src/dao-voting.ts && tsx src/oracle-feed.ts && tsx src/gas-station.ts && tsx src/token-fungible.ts && tsx src/hello-world.ts && tsx src/royalty-sale.ts",
+    "royalty-sale": "tsx src/royalty-sale.ts"
   },
   "dependencies": {
     "@kadena/client": "^1.18.3",
