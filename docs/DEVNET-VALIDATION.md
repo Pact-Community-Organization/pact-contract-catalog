@@ -20,6 +20,7 @@ node-critical paths driven to mined confirmation.
 | [oracle-feed](../contracts/library/oracle-feed/) | ✅ PASS | `free.oracle-feed-v2` | 13 | `PUBLISH-AUTH` bound read; median pipeline in a **mined consumer tx**; staleness fail-closed vs real block time; rotation revocation. |
 | [token-fungible](../contracts/library/token-fungible/) | ✅ PASS | `free.token-v2` | 10 | `DEBIT` stored-guard enforcement (the v0.2.0 CRITICAL fix): authorized transfer succeeds, **foreign-key transfer rejected**, rotate updates the enforced guard. |
 | [gas-station](../contracts/library/gas-station/) | ✅ PASS | `free.gas-station` | 7 | A **zero-KDA user** ran a tx the **station paid for** via `GAS_PAYER`; spend bounded/accounted against `(chain-data)` actual gas; non-enrolled user denied. |
+| [royalty-sale](../contracts/library/royalty-sale/) | ✅ PASS | `free.royalty-sale` | 13 | `buy` settlement on-node: **fresh escrow** (fund-then-plain-`let` baseline read, primary-sale payout merge, escrow → 0) and **dust-carrying escrow** (conservation returns to the donated baseline, not zero) — the auditor's F1 node-only class, proven. |
 | [nft-collection-policy](../contracts/library/nft-collection-policy/) | ⏸ deferred | — | — | Needs a marmalade-v2 deployment (absent on the campaign devnet). Its REPL suite already runs against the **real** marmalade sources; the outstanding on-chain **buy** is a follow-on. |
 | [hello-world](../contracts/library/hello-world/) | n/a | — | — | No node-only behavior; the REPL suite is sufficient. |
 
