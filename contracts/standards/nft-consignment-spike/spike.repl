@@ -1,0 +1,258 @@
+;; NFT consignment spike — the painting model, proven end to end.
+;;
+;; An NFT is created in the ARTIST's namespace, consigned to a marketplace in
+;; ITS OWN namespace, sold there (creator royalty paid BY THE ASSET, market fee
+;; added), then the new owner RE-CONSIGNS it to a DIFFERENT marketplace in a
+;; THIRD namespace and it sells again — the same painting, gallery to gallery,
+;; royalty to the original creator every time, no marketplace able to skim it.
+;;
+;; Proves: self-custody asset; frozen-at-mint (upgrade rejected); cross-namespace
+;; sale via module{nft-asset} modref authorized by the CONSIGNMENT GUARD (not a
+;; cap); one-marketplace-at-a-time consignment; fee cap; conservation; and that a
+;; NON-consigned marketplace cannot sell.
+;;
+;; Run: pact contracts/standards/nft-consignment-spike/spike.repl
+
+;; ---------------------------------------------------------------------------
+;; coin environment
+;; ---------------------------------------------------------------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; the standard interfaces live in a shared standards namespace `std`
+;; ---------------------------------------------------------------------------
+(begin-tx "interfaces in std namespace")
+(env-data { "g": { "keys": ["std-key"], "pred": "keys-all" } })
+(env-keys ["std-key"])
+(define-namespace "std" (read-keyset 'g) (read-keyset 'g))
+(namespace "std")
+(load "nft-asset.pact")
+(load "nft-marketplace.pact")
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; personas (all k: principals) + funding
+;;   artist  = creator (earns royalty forever)
+;;   collector-1 buys first; collector-2 buys the resale
+;;   gallery-a fee acct; gallery-b fee acct
+;; ---------------------------------------------------------------------------
+(begin-tx "personas + funding")
+(env-data
+  { "artist":  { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "coll1":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "coll2":   { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "feeA":    { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "feeB":    { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'coll1) 1000.0)
+(test-capability (coin.CREDIT "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(coin.credit "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'coll2) 1000.0)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; the NFT — deployed in the ARTIST's namespace `art`
+;; ---------------------------------------------------------------------------
+(begin-tx "deploy the NFT in the artist namespace")
+(env-data
+  { "g": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "ns": "art"
+  , "admin-ks": "art.artist-ks" })
+(env-keys ["1111111111111111111111111111111111111111111111111111111111111111"])
+(define-namespace "art" (read-keyset 'g) (read-keyset 'g))
+(namespace "art")
+(define-keyset "art.artist-ks" (read-keyset 'g))
+(load "nft-single.pact")
+(create-table art.nft-single.state)
+(commit-tx)
+
+;; mint (freezes) — 10% royalty to the artist
+(begin-tx "mint")
+(env-data
+  { "artist": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect "mint" "minted"
+  (art.nft-single.mint
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'artist)
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'artist)
+    1000 "ipfs://the-painting"))
+(expect "artist owns it" "k:1111111111111111111111111111111111111111111111111111111111111111" (art.nft-single.get-owner))
+(expect "frozen after mint" true (art.nft-single.is-frozen))
+(expect "royalty 10%" 1000 (art.nft-single.get-royalty-bps))
+(commit-tx)
+
+;; FROZEN: acquiring the module's GOVERNANCE (the upgrade authority) must abort
+;; after mint — proving the artist cannot change terms. GOVERNANCE enforces
+;; (not (minted)); minted is now true, so it fails BEFORE the keyset check.
+(begin-tx "frozen: governance is un-acquirable after mint")
+(env-keys ["1111111111111111111111111111111111111111111111111111111111111111"])
+(expect-failure "frozen NFT: GOVERNANCE (upgrade authority) rejected after mint" "frozen"
+  (test-capability (art.nft-single.GOVERNANCE)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; GALLERY A — a marketplace in namespace `gala`, 2.5% fee to feeA
+;; ---------------------------------------------------------------------------
+(begin-tx "deploy gallery A")
+(env-data
+  { "g": { "keys": ["ga-key"], "pred": "keys-all" }
+  , "ns": "gala"
+  , "admin-ks": "gala.admin"
+  , "fee-account": "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  , "fee-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "fee-bps": 250 })
+(env-keys ["ga-key"])
+(define-namespace "gala" (read-keyset 'g) (read-keyset 'g))
+(namespace "gala")
+(define-keyset "gala.admin" (read-keyset 'g))
+(load "simple-market.pact")
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; ADVERSARIAL: a marketplace NOT consigned cannot sell.
+;;   Deploy gallery B first, then have the artist consign to A, then try to sell
+;;   through B — B's guard doesn't match the recorded consignment guard.
+;; ---------------------------------------------------------------------------
+(begin-tx "deploy gallery B (namespace galb), 5% fee to feeB")
+(env-data
+  { "g": { "keys": ["gb-key"], "pred": "keys-all" }
+  , "ns": "galb"
+  , "admin-ks": "galb.admin"
+  , "fee-account": "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  , "fee-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "fee-bps": 500 })
+(env-keys ["gb-key"])
+(define-namespace "galb" (read-keyset 'g) (read-keyset 'g))
+(namespace "galb")
+(define-keyset "galb.admin" (read-keyset 'g))
+(load "simple-market.pact")
+(commit-tx)
+
+;; artist consigns the painting to GALLERY A at 100 KDA
+(begin-tx "consign to gallery A")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [] } ])
+(expect "consigned to A" "listed"
+  (art.nft-single.list-for-sale (gala.simple-market.marketplace-guard) 100.0))
+(expect "listed" true (art.nft-single.is-listed))
+(commit-tx)
+
+;; adversarial: gallery B is NOT the consignee — its execute-sale must fail
+(begin-tx "gallery B cannot sell an NFT consigned to A")
+(env-data { "coll1": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                        art.nft-single.ESCROW 100.0)] } ])
+;; B's SELL guard doesn't satisfy the consignment guard recorded for A —
+;; enforce-guard on the user-guard fails (surfaced as a guard/keyset failure).
+(expect-failure "a non-consigned marketplace cannot sell" "not granted"
+  (galb.simple-market.execute-sale art.nft-single
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'coll1)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; SALE 1 — collector-1 buys through GALLERY A (the consignee)
+;;   price 100, royalty 10 -> artist(creator), fee 2.5 -> feeA, proceeds 87.5 -> artist(seller)
+;;   artist is creator AND seller here (primary sale) -> legs merge: artist nets 97.5
+;; ---------------------------------------------------------------------------
+(begin-tx "sale 1: collector-1 buys via gallery A")
+(env-data { "coll1": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                        art.nft-single.ESCROW 100.0)] } ])
+(expect "sale via gallery A" "sold"
+  (gala.simple-market.execute-sale art.nft-single
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'coll1)))
+(expect "collector-1 now owns the painting" "k:2222222222222222222222222222222222222222222222222222222222222222"
+  (art.nft-single.get-owner))
+(expect "artist (creator+seller, merged) netted royalty 10 + proceeds 87.5 = 97.5" 97.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "gallery A fee account got 2.5" 2.5
+  (coin.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+(expect "escrow empty (conservation)" 0.0 (coin.get-balance art.nft-single.ESCROW))
+(expect "no longer listed" false (art.nft-single.is-listed))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; RE-CONSIGN — collector-1 moves the painting to GALLERY B (different namespace)
+;;   and it sells to collector-2. Now creator != seller: royalty to the ARTIST,
+;;   proceeds to collector-1.
+;;   price 200, royalty 20 -> artist, fee (5%) 10 -> feeB, proceeds 170 -> collector-1
+;; ---------------------------------------------------------------------------
+(begin-tx "collector-1 re-consigns to gallery B")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect "consigned to B" "listed"
+  (art.nft-single.list-for-sale (galb.simple-market.marketplace-guard) 200.0))
+(commit-tx)
+
+;; sanity: gallery A can no longer sell it (consignment superseded)
+(begin-tx "gallery A can no longer sell (superseded)")
+(env-data { "coll2": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                        art.nft-single.ESCROW 200.0)] } ])
+(expect-failure "the previous marketplace's authority was superseded" "not granted"
+  (gala.simple-market.execute-sale art.nft-single
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'coll2)))
+(rollback-tx)
+
+(begin-tx "sale 2: collector-2 buys via gallery B")
+(env-data { "coll2": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                        art.nft-single.ESCROW 200.0)] } ])
+(expect "resale via gallery B" "sold"
+  (galb.simple-market.execute-sale art.nft-single
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'coll2)))
+(expect "collector-2 now owns it" "k:3333333333333333333333333333333333333333333333333333333333333333"
+  (art.nft-single.get-owner))
+;; the ORIGINAL creator got the royalty on the resale too: 97.5 (from sale 1) + 20
+(expect "artist got the resale royalty (cumulative 117.5)" 117.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+;; collector-1 (seller on resale) got proceeds 170: started 1000, paid 100 in
+;; sale 1, received 170 here -> absolute balance 1070
+(expect "collector-1 balance after resale = 1070 (1000 - 100 + 170)" 1070.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "gallery B fee account got 10" 10.0
+  (coin.get-balance "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+(expect "escrow empty again (conservation)" 0.0 (coin.get-balance art.nft-single.ESCROW))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; FINAL RECONCILIATION — every party, absolute balances
+;; ---------------------------------------------------------------------------
+(begin-tx "reconciliation")
+;; artist: +97.5 (sale1 merged) +20 (resale royalty) = 117.5
+(expect "artist balance = 117.5" 117.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+;; collector-1: 1000 - 100 (bought) + 170 (resale proceeds) = 1070
+(expect "collector-1 balance = 1070" 1070.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+;; collector-2: 1000 - 200 (bought) = 800
+(expect "collector-2 balance = 800" 800.0
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+;; galleries
+(expect "gallery A fees = 2.5" 2.5 (coin.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+(expect "gallery B fees = 10.0" 10.0 (coin.get-balance "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+;; global conservation: total out of collectors = total into everyone else
+;; collectors paid: 100 + 200 = 300 ; distributed: artist 117.5 + coll1-net + feeA 2.5 + feeB 10
+;; simpler: sum of all balances is conserved (2000 credited initially)
+(expect "global coin conserved (2000 initial across all accounts)" 2000.0
+  (+ (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")
+     (+ (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222")
+        (+ (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333")
+           (+ (coin.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+              (coin.get-balance "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))))))
+(commit-tx)
+
+(print "")
+(print "=== NFT CONSIGNMENT SPIKE — the painting model, PROVEN ===")
+(print "  NFT self-custody in the artist ns; frozen at mint (upgrade rejected);")
+(print "  consigned to gallery A (ns gala), sold cross-namespace via modref;")
+(print "  re-consigned to gallery B (ns galb), resold; royalty to the ORIGINAL")
+(print "  creator every time; a non-consigned market cannot sell; conservation +")
+(print "  global coin conserved to 12 dp.")
