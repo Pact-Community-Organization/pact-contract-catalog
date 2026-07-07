@@ -76,8 +76,42 @@
     @doc "Accounting event: sender={\"\",0,0} for mint, receiver={\"\",0,0} for burn."
     @event true)
   (defcap SALE:bool (id:string seller:string amount:decimal timeout:integer sale-id:string)
-    @doc "Wrapper event for a sale offer (settlement lands in Phase 2)."
-    @event true)
+    @doc "Wrapper cap/event for a sale of ID by SELLER until TIMEOUT. Composes \
+         \the seller-authorized OFFER and the sale-private token."
+    @event
+    (enforce (> amount 0.0) "amount must be positive")
+    (compose-capability (OFFER id seller amount timeout))
+    (compose-capability (SALE_PRIVATE sale-id)))
+
+  (defcap OFFER:bool (id:string seller:string amount:decimal timeout:integer)
+    @doc "Seller offers AMOUNT of ID until TIMEOUT: escrows the NFT into the \
+         \sale-account. One-shot managed (installed by the seller's signature)."
+    @managed
+    (enforce (sale-active timeout) "invalid or expired timeout at offer")
+    (compose-capability (DEBIT id seller))
+    (compose-capability (CREDIT id (sale-account))))
+
+  (defcap WITHDRAW:bool (id:string seller:string amount:decimal timeout:integer sale-id:string)
+    @doc "Return the escrowed NFT to SELLER (rollback of an unsold offer, or an \
+         \expired one). One-shot managed."
+    @managed
+    (compose-capability (SALE_PRIVATE sale-id))
+    (if (= 0 timeout)
+      (enforce-guard (at 'guard (details id seller)))
+      (enforce (not (sale-active timeout)) "offer still active — cannot withdraw"))
+    (compose-capability (DEBIT id (sale-account)))
+    (compose-capability (CREDIT id seller)))
+
+  (defcap BUY:bool (id:string seller:string buyer:string amount:decimal sale-id:string)
+    @doc "Complete the sale: move the escrowed NFT to BUYER. One-shot managed."
+    @managed
+    (compose-capability (SALE_PRIVATE sale-id))
+    (compose-capability (DEBIT id (sale-account)))
+    (compose-capability (CREDIT id buyer)))
+
+  (defcap SALE_PRIVATE:bool (sale-id:string)
+    @doc "Guards the sale-account escrow: satisfied only inside the sale defpact."
+    true)
 
   ;; --- auth caps --------------------------------------------------------------
   (defcap CREATE-TOKEN:bool (id:string creation-guard:guard)
@@ -327,7 +361,86 @@
         (emit-event (SUPPLY id new-s))
         true)))
 
-  ;; --- sale defpact (offer/buy) — the hardened settlement lands in Phase 2 ----
+  ;; --- sale defpact (offer -> buy, with withdraw rollback) --------------------
+  ;; The NFT escrows into the sale-account (a capability-pact-guarded principal)
+  ;; at offer, and moves to the buyer at buy. The FUNGIBLE settlement (payment +
+  ;; the conservation-asserted split) is the hardened policy-manager's job — this
+  ;; ledger only moves the token.
+  ;;
+  ;; TIMEOUT SEMANTICS (unix seconds): the timeout gates WITHDRAWAL, not buying.
+  ;;   * 0 — the seller may withdraw anytime (guard-checked);
+  ;;   * t>0 — the offer is withdraw-LOCKED until t; after t, ANYONE may trigger
+  ;;     the withdraw rollback (the token can only return to the seller).
+  ;; An offer that has not been withdrawn remains BUYABLE — also after t. A
+  ;; seller who no longer wants the quoted price must withdraw; a policy may
+  ;; impose stricter offer-expiry semantics via enforce-buy.
+
   (defpact sale:string (id:string seller:string amount:decimal timeout:integer)
-    (step (format "{}" [(enforce false "sale settlement is delivered in Phase 2 (hardened manager)")])))
+    (step-with-rollback
+      ;; step 0: offer — run policy enforce-offer, then escrow the NFT
+      (let ((token-info (get-token-info id)))
+        (with-capability (OFFER-CALL id seller amount timeout (pact-id))
+          (policy-manager.enforce-offer token-info seller amount timeout (pact-id)))
+        (with-capability (SALE id seller amount timeout (pact-id))
+          (offer id seller amount))
+        (pact-id))
+      ;; step 0 rollback: withdraw — run policy enforce-withdraw, return the NFT
+      (let ((token-info (get-token-info id)))
+        (with-capability (WITHDRAW-CALL id seller amount timeout (pact-id))
+          (policy-manager.enforce-withdraw token-info seller amount timeout (pact-id)))
+        (with-capability (WITHDRAW id seller amount timeout (pact-id))
+          (withdraw id seller amount))
+        (pact-id)))
+    (step
+      ;; step 1: buy — the buyer + guard come from the buy continuation payload
+      (let ( (buyer:string (read-msg "buyer"))
+             (buyer-guard:guard (read-msg "buyer-guard")) )
+        (with-capability (BUY-CALL id seller buyer amount (pact-id))
+          (policy-manager.enforce-buy (get-token-info id) seller buyer buyer-guard amount (pact-id)))
+        (with-capability (BUY id seller buyer amount (pact-id))
+          (buy id seller buyer buyer-guard amount))
+        (pact-id))))
+
+  (defun offer:bool (id:string seller:string amount:decimal)
+    @doc "Escrow AMOUNT of the NFT from SELLER into the sale-account."
+    (require-capability (SALE_PRIVATE (pact-id)))
+    (let ((sender (debit id seller amount))
+          (receiver (credit id (sale-account) (create-capability-pact-guard (SALE_PRIVATE (pact-id))) amount)))
+      (emit-event (TRANSFER id seller (sale-account) amount))
+      (emit-event (RECONCILE id amount sender receiver)))
+    true)
+
+  (defun withdraw:bool (id:string seller:string amount:decimal)
+    @doc "Return the escrowed NFT to SELLER."
+    (require-capability (SALE_PRIVATE (pact-id)))
+    (let ((sender (debit id (sale-account) amount))
+          (receiver (credit-account id seller amount)))
+      (emit-event (TRANSFER id (sale-account) seller amount))
+      (emit-event (RECONCILE id amount sender receiver)))
+    true)
+
+  (defun buy:bool (id:string seller:string buyer:string buyer-guard:guard amount:decimal)
+    @doc "Move the escrowed NFT to BUYER (fungible settlement is the manager's)."
+    (require-capability (SALE_PRIVATE (pact-id)))
+    (let ((sender (debit id (sale-account) amount))
+          (receiver (credit id buyer buyer-guard amount)))
+      (emit-event (TRANSFER id (sale-account) buyer amount))
+      (emit-event (RECONCILE id amount sender receiver)))
+    true)
+
+  (defun credit-account:object{receiver-balance-change} (id:string account:string amount:decimal)
+    @doc "Credit AMOUNT to an EXISTING account using its stored guard (used by \
+         \withdraw to return the NFT to the seller's account)."
+    (require-capability (CREDIT id account))
+    (credit id account (account-guard id account) amount))
+
+  (defun sale-active:bool (timeout:integer)
+    @doc "A sale is active until TIMEOUT (unix seconds; 0 = always active)."
+    (if (= 0 timeout)
+      true
+      (< (at 'block-time (chain-data)) (add-time (time "1970-01-01T00:00:00Z") timeout))))
+
+  (defun sale-account:string ()
+    @doc "The per-sale NFT escrow principal (guarded by SALE_PRIVATE of this pact)."
+    (create-principal (create-capability-pact-guard (SALE_PRIVATE (pact-id)))))
 )
