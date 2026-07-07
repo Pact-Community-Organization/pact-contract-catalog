@@ -67,5 +67,6 @@
   (defun enforce-transfer:bool
     ( token:object{token-info} sender:string guard:guard receiver:string amount:decimal )
     @doc "Run on a free (no-sale) transfer SENDER -> RECEIVER. A sale-only \
-         \policy rejects this; it governs rotate too (RECEIVER=SENDER, 0.0).")
+         \policy rejects this. (Account guards are immutable in this ledger: \
+         \there is no rotate path for a policy to govern.)")
 )

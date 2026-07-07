@@ -135,7 +135,9 @@
     (expect "the sale-id is the deterministic pact-id" (tx-hash) sale-id)
     (expect "NFT escrowed out of alice" 0.0
       (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111"))
-    (expect "escrow funded 0 before buy" 0.0
+    ;; the fungible escrow account is NOT pre-created at offer (a pre-create
+    ;; would be front-runnable); the buy step's transfer-create creates it
+    (expect-failure "no fungible escrow account exists before buy" "No value found"
       (coin.get-balance (nft.policy-manager.escrow-account sale-id)))))
 (commit-tx)
 
@@ -143,23 +145,26 @@
 ;; injects a malicious economic payload (fee-bps 0, price 1) that MUST be ignored.
 (begin-tx "buy — economics come from state, not the buyer")
 (env-data
-  { "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
   , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
   ;; the attack surface — bogus economics in the BUY tx:
   , "quote": { "fee-bps": 0, "price": 1.0 }
   , "marketplace_fee": { "mk-account": "k:2222222222222222222222222222222222222222222222222222222222222222", "mk-fee-percentage": 0.0 } })
-;; bob signs BOTH the BUY managed cap (sale-id = the offer tx hash) AND the coin
-;; payment into the escrow. The id below is alice's derived token id.
-(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
-            , "caps": [ (nft.ledger.BUY "n:eiw2KsXMj0X-Ym_eVlhRsPzhnE32esxwSUuzG4VRGdI"
-                          "k:1111111111111111111111111111111111111111111111111111111111111111"
-                          "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
-                          "BUdmPBIo36KSM7AF8vwsyXv7w684crXTIEwdrszlfJU")
-                      , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
-                          "c:IL8NH2tFDpV8LJSmp58s9s9Dt1DrTRfZmGglJ5q1Thc" 100.0) ] } ])
-;; sale-id = the offer tx hash (deterministic)
-(continue-pact 1 false "BUdmPBIo36KSM7AF8vwsyXv7w684crXTIEwdrszlfJU")
+;; bob signs BOTH the BUY managed cap (sale-id = the offer tx hash, deterministic
+;; via env-hash) AND the coin payment into the (computable) escrow principal.
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "nft-sale-1"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "nft-sale-1")) 100.0) ] } ])
+  (continue-pact 1 false (hash "nft-sale-1")))
 
 ;; --- reconciliation (12 dp) ---
 ;; bob paid 100 (the STATE price, not the injected 1.0)
@@ -173,7 +178,7 @@
   (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
 ;; conservation: the escrow returned to baseline (0)
 (expect "escrow empty after settlement (conservation)" 0.0
-  (coin.get-balance "c:IL8NH2tFDpV8LJSmp58s9s9Dt1DrTRfZmGglJ5q1Thc"))
+  (coin.get-balance (nft.policy-manager.escrow-account (hash "nft-sale-1"))))
 (commit-tx)
 
 ;; bob owns the NFT
@@ -215,15 +220,15 @@
 
 (begin-tx "withdraw (rollback of step 0) — the NFT returns to bob")
 (env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
-;; bob signs WITHDRAW (sale-id = the nft-sale-2 offer tx hash)
-(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
-            , "caps": [ (nft.ledger.WITHDRAW "n:eiw2KsXMj0X-Ym_eVlhRsPzhnE32esxwSUuzG4VRGdI"
-                          "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0
-                          "cryRAzHyIbNjbNNGuUY82EeEsLZ5XNNmRqvgxtHmFIo") ] } ])
-(continue-pact 0 true "cryRAzHyIbNjbNNGuUY82EeEsLZ5XNNmRqvgxtHmFIo")
+;; bob signs WITHDRAW (sale-id = the nft-sale-2 offer tx hash, deterministic)
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
             (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.WITHDRAW id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0
+                            (hash "nft-sale-2")) ] } ])
+  (continue-pact 0 true (hash "nft-sale-2"))
   (expect "withdraw returned the NFT to bob" 1.0
     (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
 (commit-tx)
