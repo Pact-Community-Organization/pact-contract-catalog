@@ -1,0 +1,354 @@
+;; nft framework — Phase 1 identity suite.
+;;
+;; Proves the property that motivated this architecture (and that a
+;; self-sovereign per-NFT module could not provide): TOKEN IDENTITY IS ANCHORED
+;; IN THE SHARED LEDGER, derived from the creator's guard.
+;;   * forgery rejected two ways: a fabricated id fails protocol re-derivation,
+;;     and a correctly-derived id for someone ELSE's guard fails their guard;
+;;   * double-mint rejected: one id, one row, exactly once (insert);
+;;   * the manager handshake: policy hooks cannot be invoked directly with
+;;     fabricated token-info;
+;;   * accounting: mint/transfer/burn with supply + precision + principal
+;;     (k:) account protocol enforcement.
+;;
+;; Run: pact contracts/nft/test/identity.repl
+
+;; ---------------------------------------------------------------------------
+;; deploy the stack: interfaces -> util -> policy-manager -> ledger -> init
+;; ---------------------------------------------------------------------------
+;; fungible-v2 at root (the manager references it for the sale escrow)
+(begin-tx "fungible-v2")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(commit-tx)
+
+(begin-tx "deploy the nft framework (Phase 1)")
+(env-data
+  { "g":     { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns":    "nft"
+  , "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+;; one-time: register the ledger with the manager (governance-gated)
+(nft.policy-manager.init nft.ledger)
+(commit-tx)
+
+;; init is one-time
+(begin-tx "manager re-init rejected")
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(expect-failure "re-registering a ledger is rejected (one-time insert)" "already"
+  (nft.policy-manager.init nft.ledger))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; personas (raw keysets; k: principal accounts)
+;; ---------------------------------------------------------------------------
+;; alice = creator; bob = collector; mallory = adversary
+;; (env-data replaces the WHOLE map — carry all personas in every tx)
+
+;; ---------------------------------------------------------------------------
+;; happy path: alice creates HER token (id derived from HER guard)
+;; ---------------------------------------------------------------------------
+(begin-tx "alice creates her token")
+(env-data
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":     { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            (read-keyset 'alice))))
+  (expect "id carries our reserved protocol prefix" "n:" (take 2 id))
+  (expect "create-token succeeds for the guard-holder" true
+    (nft.ledger.create-token id 0 "ipfs://the-painting" [] (read-keyset 'alice)))
+  (expect "token exists with supply 0" 0.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; FORGERY A — a fabricated id fails the protocol re-derivation
+;; ---------------------------------------------------------------------------
+(begin-tx "forgery A: fabricated id")
+(env-data
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(expect-failure "an id that does not re-derive from the details+guard is rejected"
+  "token protocol violation"
+  (nft.ledger.create-token "n:FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
+    0 "ipfs://forged" [] (read-keyset 'mallory)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; FORGERY B — the correct id for ALICE's guard, but mallory signs.
+;;   The id re-derives (mallory passed alice's guard), but CREATE-TOKEN
+;;   enforces that guard — mallory cannot satisfy it. THE anti-impersonation
+;;   proof: you cannot create a token whose identity claims someone else.
+;; ---------------------------------------------------------------------------
+(begin-tx "forgery B: right id, wrong signer")
+(env-data
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(expect-failure "mallory cannot create a token derived from ALICE's guard"
+  "Keyset failure"
+  (let ((id (nft.ledger.create-token-id
+              { 'uri: "ipfs://impersonation", 'precision: 0, 'policies: [] }
+              (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://impersonation" [] (read-keyset 'alice))))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; DOUBLE-MINT — the same id a second time is rejected (insert: one row ever)
+;; ---------------------------------------------------------------------------
+(begin-tx "double-mint rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect-failure "creating the SAME token id twice is rejected" "already"
+  (let ((id (nft.ledger.create-token-id
+              { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+              (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://the-painting" [] (read-keyset 'alice))))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; protocol edges: foreign prefix + reserved uri
+;; ---------------------------------------------------------------------------
+(begin-tx "protocol edges")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect-failure "a non-n: prefix is rejected" "unrecognized reserved protocol"
+  (nft.ledger.create-token "t:someforeignid" 0 "ipfs://x" [] (read-keyset 'alice)))
+(expect-failure "the reserved uri prefix cannot be self-assigned" "reserved uri protocol"
+  (let ((id (nft.ledger.create-token-id
+              { 'uri: "nft:sneaky", 'precision: 0, 'policies: [] }
+              (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "nft:sneaky" [] (read-keyset 'alice))))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; CANONICAL POLICY ORDER — the same policy SET derives the same id no matter
+;; the order passed (plain `sort` is a no-op on modrefs — the ledger
+;; canonicalizes by policy NAME), and a duplicate policy is rejected.
+;; ---------------------------------------------------------------------------
+(begin-tx "canonical policy order")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+;; alice signs (creation guard); the ns key signs (module deploys into `nft`)
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
+          , { "key": "9999999999999999999999999999999999999999999999999999999999999999", "caps": [] } ])
+(namespace "nft")
+;; two no-op fixture policies, names chosen to differ from creation order
+(module fixture-pol-b GOV
+  (defcap GOV () (enforce-keyset "nft.admin"))
+  (implements token-policy)
+  (use token-policy [token-info payout])
+  (defun enforce-init:bool (token:object{token-info}) true)
+  (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal) true)
+  (defun enforce-burn:bool (token:object{token-info} account:string amount:decimal) true)
+  (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) [])
+  (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
+    (enforce false "this policy does not permit uri updates"))
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal) {})
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object) true))
+(module fixture-pol-a GOV
+  (defcap GOV () (enforce-keyset "nft.admin"))
+  (implements token-policy)
+  (use token-policy [token-info payout])
+  (defun enforce-init:bool (token:object{token-info}) true)
+  (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal) true)
+  (defun enforce-burn:bool (token:object{token-info} account:string amount:decimal) true)
+  (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) [])
+  (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
+    (enforce false "this policy does not permit uri updates"))
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal) {})
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object) true))
+
+(expect "the id is order-independent (canonical policy order)"
+  (nft.ledger.create-token-id
+    { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-b] }
+    (read-keyset 'alice))
+  (nft.ledger.create-token-id
+    { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-b nft.fixture-pol-a] }
+    (read-keyset 'alice)))
+
+;; create with one order, id derived from the OTHER order — canonical end-to-end
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-b] }
+            (read-keyset 'alice))))
+  (expect "create-token accepts the id whichever order the list is passed in" true
+    (nft.ledger.create-token id 0 "ipfs://ordered"
+      [nft.fixture-pol-b nft.fixture-pol-a] (read-keyset 'alice))))
+
+(expect-failure "a duplicate policy in the list is rejected" "duplicate policy"
+  (let ((id (nft.ledger.create-token-id
+              { 'uri: "ipfs://dup", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-a] }
+              (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://dup"
+      [nft.fixture-pol-a nft.fixture-pol-a] (read-keyset 'alice))))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; THE HANDSHAKE — policy hooks cannot be invoked directly with fake token-info
+;; ---------------------------------------------------------------------------
+(begin-tx "manager handshake")
+(env-data
+  { "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(expect-failure "enforce-mint cannot be called outside the ledger's mint path" "not granted"
+  (nft.policy-manager.enforce-mint
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [] }
+    "k:3333333333333333333333333333333333333333333333333333333333333333"
+    (read-keyset 'mallory) 1.0))
+(expect-failure "enforce-init cannot be called outside create-token" "not granted"
+  (nft.policy-manager.enforce-init
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [] }))
+(expect-failure "enforce-transfer cannot be called outside the transfer path" "not granted"
+  (nft.policy-manager.enforce-transfer
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [] }
+    "a" (read-keyset 'mallory) "b" 1.0))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; accounting: mint -> transfer -> burn (supply + precision + k: protocol)
+;;   NOTE (Phase 1): mint AUTHORIZATION is a policy concern — a token created
+;;   with an empty policy list is open to mint. Phase 3 ships the guard/
+;;   non-fungible policies that gate this; the suite documents the semantics.
+;; ---------------------------------------------------------------------------
+(begin-tx "mint")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            (read-keyset 'alice))))
+  (expect "mint 1 to alice's k: account" true
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 1.0))
+  (expect "alice balance 1" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect "supply 1" 1.0 (nft.ledger.total-supply id))
+  (expect-failure "precision-0 token rejects fractional mint" "precision violation"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 0.5))
+  (expect-failure "zero-amount mint rejected" "positive amount"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 0.0)))
+(commit-tx)
+
+(begin-tx "k: principal protocol on accounts")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            (read-keyset 'alice))))
+  ;; a k: account whose guard is NOT its key is a squat — rejected
+  (expect-failure "k: account with a mismatched guard is rejected"
+    "single-key account protocol violation"
+    (nft.ledger.create-account id
+      "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'bob))))
+(rollback-tx)
+
+(begin-tx "transfer alice -> bob")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+;; sign SCOPED to TRANSFER (as a real transfer tx does): this installs the
+;; managed cap AND authorizes the composed DEBIT (alice's account guard).
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0) ] } ])
+  (expect "transfer-create to bob" true
+    (nft.ledger.transfer-create id
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      "k:2222222222222222222222222222222222222222222222222222222222222222"
+      (read-keyset 'bob) 1.0))
+  (expect "alice balance 0" 0.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect "bob balance 1" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (expect "supply unchanged by transfer" 1.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+(begin-tx "over-balance transfer rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            "k:1111111111111111111111111111111111111111111111111111111111111111" 2.0) ] } ])
+  (expect-failure "cannot transfer more than the balance" "insufficient funds"
+    (nft.ledger.transfer id
+      "k:2222222222222222222222222222222222222222222222222222222222222222"
+      "k:1111111111111111111111111111111111111111111111111111111111111111" 2.0)))
+(rollback-tx)
+
+(begin-tx "burn by the owner")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            (read-keyset 'alice))))
+  (expect "bob burns his token" true
+    (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0))
+  (expect "supply back to 0" 0.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+(begin-tx "burn requires the account guard")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            (read-keyset 'alice))))
+  ;; re-mint one to alice first requires no sig (no policies); then mallory
+  ;; cannot burn it: DEBIT enforces alice's account guard
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect-failure "a stranger cannot burn someone's token" "Keyset failure"
+    (nft.ledger.burn id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; (Settlement — the offer/buy sale — is exercised by test/settlement.repl.)
+
+(print "")
+(print "=== NFT FRAMEWORK PHASE 1 — IDENTITY CORE: ALL GREEN ===")
+(print "  forgery rejected (fabricated id + impersonated guard); double-mint")
+(print "  rejected (one id, one row); manager handshake closed (no direct policy")
+(print "  dispatch); accounting sound (mint/transfer/burn, supply, precision,")
+(print "  k: principal protocol). Settlement arrives in Phase 2.")
