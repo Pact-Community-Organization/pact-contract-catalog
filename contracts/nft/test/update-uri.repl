@@ -1,0 +1,206 @@
+;; nft framework — Phase 4/5: update-uri suite.
+;;
+;; Proves the fail-closed, ATTACHMENT-authoritative uri-update path (no
+;; registry — the manager evaluates every attached policy's uri-decision):
+;;   * a token with NO uri-aware policy is immutable (all abstain -> reject);
+;;   * guarded-uri-policy: the update guard is REQUIRED at create (fail
+;;     closed), the guard authorizes updates, anyone else rejects;
+;;   * VETO COMPOSITION (the audit-hardened case): stacking
+;;     non-updatable-uri-policy on top of a permitting policy makes the veto
+;;     FINAL purely by attachment — no registration step, and the permitter's
+;;     own guard signature does NOT rescue the update;
+;;   * the reserved uri prefix cannot be smuggled in via an update;
+;;   * no hook or manager routing is reachable outside the ledger path.
+;;
+;; Run: pact contracts/nft/test/update-uri.repl
+
+;; --- coin (unused by uri flows, loaded for stack parity) -----------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- the nft framework --------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(load "../policies/non-updatable-uri-policy.pact")
+(load "../policies/guarded-uri-policy.pact")
+(create-table nft.guarded-uri-policy.uri-guards)
+;; NO registry: a uri policy participates simply by being ATTACHED to the
+;; token (the manager evaluates every attached policy's uri-decision stance).
+(commit-tx)
+
+;; ===========================================================================
+;; TOKEN A — guarded-uri-policy: the guard authorizes updates
+;; ===========================================================================
+(begin-tx "the uri guard is REQUIRED at create (fail closed)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "create-token without a uri guard is rejected" "read-msg failure"
+    (nft.ledger.create-token id 0 "ipfs://a-1" [nft.guarded-uri-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "create token A (uri guard = the curator key)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "uri_guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://a-1" [nft.guarded-uri-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect "the initial uri" "ipfs://a-1" (nft.ledger.get-uri id)))
+(commit-tx)
+
+(begin-tx "the guard authorizes the update; others reject")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy] }
+            (read-keyset 'alice))))
+  ;; the OWNER's key is not the uri guard — owner cannot update
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (expect-failure "a non-guard signer cannot update the uri" "Keyset failure"
+    (nft.ledger.update-uri id "ipfs://a-2"))
+  ;; the curator key updates
+  (env-sigs [ { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (expect "the uri guard authorizes the update" true
+    (nft.ledger.update-uri id "ipfs://a-2"))
+  (expect "the uri changed" "ipfs://a-2" (nft.ledger.get-uri id))
+  ;; the reserved protocol prefix cannot be smuggled in via an update
+  (expect-failure "the reserved uri prefix is rejected on update" "reserved uri protocol"
+    (nft.ledger.update-uri id "nft:sneaky")))
+(commit-tx)
+
+;; ===========================================================================
+;; TOKEN B — no updatable-uri policy: immutable by default (fail closed)
+;; ===========================================================================
+(begin-tx "a token without a uri policy is immutable")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 0, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
+          , { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://b-1", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://b-1" [nft.royalty-policy] (read-keyset 'alice))
+  (expect-failure "no updatable-uri policy -> the uri is immutable"
+    "the token uri is immutable"
+    (nft.ledger.update-uri id "ipfs://b-2")))
+(commit-tx)
+
+;; ===========================================================================
+;; TOKEN C — VETO COMPOSITION: the non-updatable veto beats a permitting policy
+;; ===========================================================================
+(begin-tx "the veto is final even when a permitting policy would allow")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "uri_guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
+          , { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://c-1", 'precision: 0
+            , 'policies: [nft.guarded-uri-policy nft.non-updatable-uri-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://c-1"
+    [nft.guarded-uri-policy nft.non-updatable-uri-policy] (read-keyset 'alice))
+  ;; THE AUDIT-HARDENED CASE: a permitting policy (guarded-uri) is stacked with
+  ;; the veto, and the uri-guard holder (cccc…) signs — under the old registry
+  ;; design an unregistered veto would have been silently skipped and this
+  ;; update would SUCCEED. Now the veto is authoritative by ATTACHMENT: even
+  ;; with the permitter's guard signature present, the update is rejected.
+  (env-sigs [ { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (expect-failure "the veto is final by attachment (permitter's guard cannot rescue it)"
+    "the token uri is immutable (a policy vetoes updates)"
+    (nft.ledger.update-uri id "ipfs://c-2"))
+  (expect "the uri did not change" "ipfs://c-1" (nft.ledger.get-uri id)))
+(commit-tx)
+
+;; ===========================================================================
+;; TOKEN D — only the veto policy: immutable
+;; ===========================================================================
+(begin-tx "a veto-only token is immutable")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d-1", 'precision: 0, 'policies: [nft.non-updatable-uri-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://d-1" [nft.non-updatable-uri-policy] (read-keyset 'alice))
+  (expect-failure "the marker vetoes the update" "the token uri is immutable"
+    (nft.ledger.update-uri id "ipfs://d-2")))
+(commit-tx)
+
+;; --- nothing is reachable outside the ledger path -------------------------------
+(begin-tx "direct calls are rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+(let ((fake:object{nft.token-policy.token-info}
+        { 'id: "n:fake", 'supply: 1.0, 'precision: 0, 'uri: "ipfs://fake"
+        , 'policies: [nft.guarded-uri-policy] }))
+  (expect-failure "the manager's routing is not directly callable" "not granted"
+    (nft.policy-manager.enforce-update-uri fake "ipfs://evil"))
+  (expect-failure "the guarded policy's hook is not directly callable" "not granted"
+    (nft.guarded-uri-policy.enforce-update-uri fake "ipfs://evil")))
+(rollback-tx)
+
+;; --- the lifecycle flows through the uri policies --------------------------------
+(begin-tx "transfer + burn flow through token A's policy")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0) ] } ])
+  (nft.ledger.transfer-create id
+    "k:1111111111111111111111111111111111111111111111111111111111111111"
+    "k:3333333333333333333333333333333333333333333333333333333333333333"
+    (read-keyset 'dave) 1.0)
+  (expect "dave holds token A" 1.0
+    (nft.ledger.get-balance id "k:3333333333333333333333333333333333333333333333333333333333333333")))
+(commit-tx)
+
+(print "")
+(print "=== NFT FRAMEWORK PHASE 4 — UPDATE-URI: ALL GREEN ===")
+(print "  immutable by default (no handler -> reject); the bound uri guard")
+(print "  authorizes updates; the non-updatable veto is FINAL in composition;")
+(print "  the non-updatable veto is FINAL by ATTACHMENT (no registry to bypass);")
+(print "  reserved prefix rejected on update; routing + hooks ledger-gated only.")

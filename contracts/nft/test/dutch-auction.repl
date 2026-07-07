@@ -1,0 +1,348 @@
+;; nft framework — Phase 4: dutch (declining-price) auction suite.
+;;
+;; Proves the declining-curve quoted sale:
+;;   * the curve is monotonically non-increasing, constant within an
+;;     interval, and floored at the floor price;
+;;   * purchase settles ONLY at the current curve price (stale/low candidates
+;;     reject), only inside the window, and the royalty + marketplace fee are
+;;     carved from the accepted price at 12 dp — a dutch sale is not a
+;;     royalty bypass;
+;;   * withdrawal per sale-contract rules: free before start, refused while
+;;     live, free after an unsold end (nothing escrowed, nothing to strand);
+;;   * seller-only create/update, update only before start;
+;;   * settlement hooks are unreachable outside the manager's path.
+;;
+;; Run: pact contracts/nft/test/dutch-auction.repl
+
+;; --- coin (payment fungible) ------------------------------------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- the nft framework --------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(load "../sale/dutch-auction.pact")
+(create-table nft.dutch-auction.auctions)
+(nft.policy-manager.register-sale-contract nft.dutch-auction)
+(commit-tx)
+
+;; --- fund bob -----------------------------------------------------------------
+(begin-tx "fund bob")
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+;; --- alice creates + mints (10% royalty) ---------------------------------------
+(begin-tx "create + mint")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 1000, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://dutch-art" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0))
+(commit-tx)
+
+;; ===========================================================================
+;; AUCTION 1 — offer @0, start 100, end 1100, 100 -> 40 over 10 intervals of
+;; 100 s (step 6.0). Fee 250 bps. Sold mid-curve at 94.
+;; ===========================================================================
+(begin-tx "offer through the dutch contract")
+(env-hash (hash "da-1"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 250, "sale-contract": "nft.dutch-auction" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+(begin-tx "seller-only creation; curve parameters validated")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "x": 1 })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(expect-failure "a stranger cannot create the seller's dutch auction" "Keyset failure"
+  (nft.dutch-auction.create-auction (hash "da-1") "n:whatever" 1767225700 1767226700 100.0 40.0 100))
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect-failure "a start price at or below the floor is rejected" "must exceed the floor"
+  (nft.dutch-auction.create-auction (hash "da-1") "n:whatever" 1767225700 1767226700 40.0 40.0 100))
+(rollback-tx)
+
+(begin-tx "alice creates the dutch auction")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (nft.dutch-auction.create-auction (hash "da-1") id 1767225700 1767226700 100.0 40.0 100))
+(commit-tx)
+
+;; --- the curve: monotone, interval-constant, floored ----------------------------
+(begin-tx "curve values")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 50) })
+(expect-failure "no price before the start" "auction has not started"
+  (nft.dutch-auction.current-price (hash "da-1")))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 100) })
+(expect "price at the start = start price" 100.0 (nft.dutch-auction.current-price (hash "da-1")))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 150) })
+(expect "price constant within an interval" 100.0 (nft.dutch-auction.current-price (hash "da-1")))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 250) })
+(expect "one full interval elapsed -> one step down" 94.0 (nft.dutch-auction.current-price (hash "da-1")))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 600) })
+(expect "five intervals elapsed -> five steps down" 70.0 (nft.dutch-auction.current-price (hash "da-1")))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1050) })
+(expect "the last interval sits one step above the floor" 46.0 (nft.dutch-auction.current-price (hash "da-1")))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1100) })
+(expect-failure "no price after the end" "auction has ended"
+  (nft.dutch-auction.current-price (hash "da-1")))
+(rollback-tx)
+
+;; --- purchase: only at the current curve price ----------------------------------
+(begin-tx "stale and low candidates reject")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 250) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "quoted_price": 100.0 })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "da-1"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "da-1")) 100.0) ] } ])
+  (expect-failure "a stale (higher) candidate rejects" "does not match the current curve price"
+    (continue-pact 1 false (hash "da-1"))))
+(rollback-tx)
+
+(begin-tx "an under-curve candidate rejects")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 250) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "quoted_price": 40.0 })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "da-1"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "da-1")) 40.0) ] } ])
+  (expect-failure "the floor is not purchasable while the curve is above it"
+    "does not match the current curve price"
+    (continue-pact 1 false (hash "da-1"))))
+(rollback-tx)
+
+(begin-tx "bob buys at the current curve price; the split reconciles at 12 dp")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 250) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "quoted_price": 94.0
+  ;; bogus economics in the buy tx are still ignored
+  , "quote": { "fee-bps": 0, "price": 1.0 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "da-1"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "da-1")) 94.0) ] } ])
+  (continue-pact 1 false (hash "da-1"))
+  (expect "bob holds the NFT" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+;; reconciliation of the accepted price (94): royalty 9.4 + fee 2.35 +
+;; proceeds 82.25 = 94. alice is creator AND seller -> merged 91.65.
+(expect "bob paid exactly the curve price 94" 906.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "alice netted royalty 9.4 + proceeds 82.25 = 91.65 (merged)" 91.65
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "the marketplace fee 2.35 accrued from the accepted price" 2.35
+  (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(expect "the settlement escrow is empty (conservation)" 0.0
+  (coin.get-balance (nft.policy-manager.escrow-account (hash "da-1"))))
+(expect "the finalized price is recorded in the quote" 94.0
+  (nft.policy-manager.get-quote-price (hash "da-1")))
+(commit-tx)
+
+;; ===========================================================================
+;; WITHDRAWAL RULES — free before start, refused live, free after unsold end
+;; ===========================================================================
+(begin-tx "auction 2: offer + create (starts at +1400)")
+(env-hash (hash "da-2"))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1200) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "nft.dutch-auction" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0)
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (nft.dutch-auction.create-auction (hash "da-2") id 1767227000 1767227200 100.0 40.0 100)
+  ;; update before start is allowed (seller-only)
+  (nft.dutch-auction.update-auction (hash "da-2") 1767227000 1767227200 80.0 40.0 100)
+  (expect "start price updated" 80.0
+    (at 'start-price (nft.dutch-auction.get-auction (hash "da-2")))))
+(commit-tx)
+
+(begin-tx "withdrawal is refused while the dutch auction is live")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1450) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.WITHDRAW id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0
+                            (hash "da-2")) ] } ])
+  (expect-failure "no withdrawal while live" "auction is live"
+    (continue-pact 0 true (hash "da-2"))))
+(rollback-tx)
+
+(begin-tx "no update once started")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1450) })
+(env-data { "x": 1 })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect-failure "update after start rejects" "auction already started"
+  (nft.dutch-auction.update-auction (hash "da-2") 1767227500 1767227700 80.0 40.0 100))
+(rollback-tx)
+
+(begin-tx "withdrawal after an unsold end returns the NFT")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1700) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.WITHDRAW id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0
+                            (hash "da-2")) ] } ])
+  (continue-pact 0 true (hash "da-2"))
+  (expect "the NFT returned to bob" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(commit-tx)
+
+(begin-tx "auction 3: withdrawal is free BEFORE the start")
+(env-hash (hash "da-3"))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1750) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "nft.dutch-auction" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0)
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (nft.dutch-auction.create-auction (hash "da-3") id 1767227500 1767227700 100.0 40.0 100))
+(commit-tx)
+
+(begin-tx "the seller withdraws before the curve goes live")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1800) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.WITHDRAW id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0
+                            (hash "da-3")) ] } ])
+  (continue-pact 0 true (hash "da-3"))
+  (expect "the NFT returned to bob before the start" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(commit-tx)
+
+;; --- the settlement hooks are manager-gated ------------------------------------
+(begin-tx "direct hook calls are rejected")
+(env-data { "x": 1 })
+(expect-failure "enforce-quote-update is not directly callable" "not granted"
+  (nft.dutch-auction.enforce-quote-update (hash "da-2") 40.0))
+(expect-failure "enforce-withdrawal is not directly callable" "not granted"
+  (nft.dutch-auction.enforce-withdrawal (hash "da-2")))
+(rollback-tx)
+
+(print "")
+(print "=== NFT FRAMEWORK PHASE 4 — DUTCH AUCTION: ALL GREEN ===")
+(print "  curve monotone, interval-constant, floored (100 -> 94 -> 70 -> 46);")
+(print "  purchase only at the current curve price (stale/low candidates reject);")
+(print "  royalty 9.4 + fee 2.35 + proceeds 82.25 = accepted price 94 (12 dp);")
+(print "  withdrawal free before start / refused live / free after unsold end;")
+(print "  hooks unreachable outside the manager path.")

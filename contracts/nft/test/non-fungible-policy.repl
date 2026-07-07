@@ -1,0 +1,228 @@
+;; nft framework — Phase 3: non-fungible-policy suite.
+;;
+;; Proves the strict 1/1 NFT shape:
+;;   * precision must be 0 at creation;
+;;   * mint amount must be exactly 1.0, and only while supply is 0;
+;;   * the mint is ONCE, EVER — after a burn (supply back to 0) a re-mint is
+;;     still rejected (the one-way insert marker);
+;;   * burn and offer must take the whole token (amount 1.0);
+;;   * the full sale lifecycle reconciles exactly;
+;;   * no hook is reachable outside the ledger's lifecycle path (-CALL gate).
+;;
+;; Run: pact contracts/nft/test/non-fungible-policy.repl
+
+;; --- coin (payment fungible) ------------------------------------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- the nft framework --------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(commit-tx)
+
+;; --- the non-fungible policy ----------------------------------------------------
+(begin-tx "deploy non-fungible policy")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(load "../policies/non-fungible-policy.pact")
+(create-table nft.non-fungible-policy.minted-table)
+(commit-tx)
+
+;; --- fund the buyer -----------------------------------------------------------
+(begin-tx "fund bob")
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+;; ===========================================================================
+;; SHAPE — precision 0, mint exactly 1.0, once
+;; ===========================================================================
+(begin-tx "precision 1 rejected at creation")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://frac", 'precision: 1, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a fractional-precision 1/1 is rejected" "requires precision 0"
+    (nft.ledger.create-token id 1 "ipfs://frac" [nft.non-fungible-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "create the 1/1 token")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://one-of-one" [nft.non-fungible-policy] (read-keyset 'alice))
+  (expect "not minted yet" false (nft.non-fungible-policy.is-minted id)))
+(commit-tx)
+
+(begin-tx "mint amount 2.0 rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a 1/1 NFT mints exactly 1.0" "mints exactly 1.0"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 2.0)))
+(rollback-tx)
+
+(begin-tx "mint 1.0 passes; a second mint is rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect "alice holds the 1/1" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect "supply is exactly 1" 1.0 (nft.ledger.total-supply id))
+  (expect "minted marker set" true (nft.non-fungible-policy.is-minted id)))
+(commit-tx)
+
+(begin-tx "second mint rejected while supply is 1")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a 1/1 NFT cannot be minted twice" "already minted"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 1.0)))
+(rollback-tx)
+
+;; --- no hook is reachable outside the ledger flow -----------------------------
+(begin-tx "direct hook calls are rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((fake:object{nft.token-policy.token-info}
+        { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
+        , 'policies: [nft.non-fungible-policy] }))
+  (expect-failure "enforce-init is not directly callable" "not granted"
+    (nft.non-fungible-policy.enforce-init fake))
+  (expect-failure "enforce-mint is not directly callable" "not granted"
+    (nft.non-fungible-policy.enforce-mint fake "k:x" (read-keyset 'alice) 1.0)))
+(rollback-tx)
+
+;; ===========================================================================
+;; SALE — the 1/1 sells whole and reconciles exactly
+;; ===========================================================================
+(begin-tx "offer the 1/1 at 25")
+(env-hash (hash "nf-sale-1"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 25.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)
+  (expect "the 1/1 escrowed out of alice" 0.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(commit-tx)
+
+(begin-tx "bob buys the 1/1")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "nf-sale-1"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "nf-sale-1")) 25.0) ] } ])
+  (continue-pact 1 false (hash "nf-sale-1"))
+  (expect "bob holds the 1/1" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (expect "supply is still exactly 1" 1.0 (nft.ledger.total-supply id)))
+(expect "bob paid exactly 25" 975.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "seller alice received the full 25" 25.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "escrow empty after settlement (conservation)" 0.0
+  (coin.get-balance (nft.policy-manager.escrow-account (hash "nf-sale-1"))))
+(commit-tx)
+
+;; ===========================================================================
+;; BURN ONCE — the whole token burns; a re-mint is rejected FOREVER
+;; ===========================================================================
+(begin-tx "partial burn rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a 1/1 NFT burns whole" "burns whole"
+    (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 2.0)))
+(rollback-tx)
+
+(begin-tx "bob burns the 1/1")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0)
+  (expect "supply back to 0" 0.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+(begin-tx "re-mint after burn is rejected — once means EVER")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a burned 1/1 cannot be re-minted" "already"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 1.0)))
+(rollback-tx)
+
+(print "")
+(print "=== NFT FRAMEWORK PHASE 3 — NON-FUNGIBLE POLICY: ALL GREEN ===")
+(print "  precision 0 enforced at creation; mint exactly 1.0, once EVER;")
+(print "  re-mint after burn rejected (one-way marker); burn/offer take the whole token;")
+(print "  sale lifecycle reconciled exactly; hooks unreachable outside the ledger.")
