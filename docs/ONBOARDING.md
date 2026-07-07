@@ -15,6 +15,7 @@ This guide outlines the process for onboarding a new Pact smart contract to the 
 
 2. **Create Contract Structure**:
    - Deployable templates go to `contracts/library/<contract-name>/`; observed on-chain modules go to `contracts/registry/ecosystem/` or `contracts/registry/community/` with deployment evidence (see [ARCHITECTURE.md](../ARCHITECTURE.md))
+   - `contracts/standards/` (the normative NFT interface standard) and `contracts/nft/` (the NFT Framework) are PCO-maintained products, not onboarding targets — changes there go through maintainer PRs and those trees' own gates
    - Create metadata at `<contract-dir>/metadata.yaml` (co-located YAML, not JSON)
    - Add a `README.md` and `AUDIT.md` in the same directory
    - Library entries: add tests to `<contract-dir>/examples/` using the `.repl` extension (mandatory)

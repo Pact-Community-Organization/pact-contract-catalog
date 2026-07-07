@@ -47,7 +47,7 @@ proving-ground record.
 | `core/` | `ledger` (identity + balances + the offer/withdraw/buy sale defpact + policy-mediated `update-uri` + the `transfer-crosschain` defpact), `policy-manager` (dispatch, the single conservation-asserted settlement, the governance-registered sale-contract whitelist, the attachment-authoritative uri-update routing) |
 | `policies/` | `royalty-policy`, `guard-policy`, `non-fungible-policy` (strict 1/1, minted once ever), `collection-policy`, `guarded-uri-policy` (guard-bound uri updates), `non-updatable-uri-policy` (unconditional uri veto) |
 | `sale/` | `conventional-auction` (escrowed ascending bids, increment-enforced outbidding with full refunds, winner-only settlement, grace-windowed withdrawal), `dutch-auction` (interval-stepped declining curve) |
-| `test/` | one adversarial suite per policy and per sale contract + `identity`, `settlement`, `composition`, `update-uri` (incl. the veto composition case), `xchain` (the passport mechanics) and `marketplace-sim` (create on chain 0 -> sell on marketplace A -> relocate to chain 1 -> auction on marketplace B, all legs reconciled) |
+| `test/` | **14 suites**: `identity`, `settlement`, `negative-payout` (non-positive policy legs rejected), an adversarial suite per policy (`royalty-policy`, `guard-policy`, `non-fungible-policy`, `collection-policy`, `non-updatable-uri-policy`; `guarded-uri-policy` is exercised in `update-uri` and `xchain`), one per sale contract (`conventional-auction`, `dutch-auction`), `composition`, `update-uri` (incl. the veto composition case), `xchain` (the passport mechanics) and `marketplace-sim` (create on chain 0 -> sell on marketplace A -> relocate to chain 1 -> auction on marketplace B, all legs reconciled) |
 
 ## Price-discovery sales (auctions)
 
@@ -69,7 +69,9 @@ uri guard) — which yields to the target chain with the token's metadata. On th
 SPV-continued step, the only way to reach it) the token row is materialized on first arrival and
 every policy re-binds its passport, so **the token's rules travel with it**: the creator's royalty
 is enforced on every chain the token ever sells on. A sale-only token relocates owner-to-owner only
-(a cross-chain ownership change would be a free transfer in two hops). The id needs no re-derivation
+(a cross-chain ownership change would be a free transfer in two hops), and for a transfer-guarded
+token (`guard-policy`) a relocation that changes the owner must satisfy the **transfer-guard** —
+same-chain parity — while an owner relocating to themselves stays ungated. The id needs no re-derivation
 on arrival and cannot be forged there: `create-token` re-derives with the LOCAL chain-id, so the
 relocated id fails the protocol check for everyone, on every other chain, forever. The uri is
 chain-local mutable state — a returning token keeps the local uri; all other passport state is

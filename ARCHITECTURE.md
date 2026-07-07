@@ -4,10 +4,14 @@
 
 Provide a layered, dependency-aware catalog of production Pact smart contracts on KDA-CE. Each contract entry ships with its source code (as deployed on-chain), human-readable documentation, machine-readable metadata, and an audit record.
 
-The catalog is split into
-two product trees: **`contracts/registry/`** (the observatory — verbatim observed
-contracts, read-only reference) and **`contracts/library/`** (the product —
-PCO-authored deployable templates with a strict quality gate).
+The catalog ships four product trees: **`contracts/library/`** (PCO-authored
+deployable templates with a strict quality gate), **`contracts/registry/`** (the
+observatory — verbatim observed contracts, read-only reference),
+**`contracts/standards/`** (the Kadena NFT interface standard v1 — a normative
+SPEC, three un-upgradeable interfaces, and a runnable conformance suite), and
+**`contracts/nft/`** (the NFT Framework — the PCO-authored shared-ledger NFT
+ecosystem: one hardened ledger, a conservation-asserted settlement manager, six
+policies, two auction sale contracts, and cross-chain relocation).
 
 ---
 
@@ -25,9 +29,11 @@ contracts/
   registry/            — observed contracts, grouped by dependency layer
     kip/               — KIP standard interfaces (no executable logic)
     core/              — Pre-deployed KDA-CE chain infrastructure
-    marmalade/         — Marmalade v2 NFT framework (pre-deployed)
+    marmalade/         — Marmalade v2 NFT stack (pre-deployed, verbatim reference)
     ecosystem/         — production third-party modules (deployment breadth + call-frequency census)
     community/         — census-observed community free-namespace modules
+  standards/           — Kadena NFT interface standard v1 (normative SPEC + conformance suite)
+  nft/                 — the NFT Framework (PCO-authored shared-ledger NFT ecosystem)
 scripts/               — validation, index generation
 docs/                  — onboarding, policies, index output (index.md, index.json)
 ```
@@ -57,7 +63,7 @@ Layer 1 — Core Infrastructure (registry/core/)
     core/ns                    namespace registry; called by define-namespace
     core/fungible-util         implements kip.account-protocols-v1; used by coin
 
-Layer 2 — NFT Framework (registry/marmalade/)
+Layer 2 — Marmalade v2 NFT Stack (registry/marmalade/)
   Marmalade v2 pre-deployed NFT stack.
   Depends on kip/ interfaces and core/coin for payments.
 
@@ -110,8 +116,24 @@ Library — Deployable Templates (contracts/library/)
   audit_status self-reviewed or better. Entries with open CRITICAL
   findings can never live here.
 
-    library/hello-world                tutorial entry point
-    library/token-fungible             implements kip/fungible-v2
+    Ten templates: hello-world, token-fungible, gas-station,
+    multisig-treasury, vesting, dao-voting, nft-collection-policy,
+    oracle-feed, property-lease, royalty-sale
+    (see contracts/library/README.md for the full table)
+
+Standards — Kadena NFT Interface Standard v1 (contracts/standards/)
+  PCO-authored, normative. Outside the registry layer stack.
+  Three un-upgradeable interfaces (nft-asset-v1, nft-market-v1,
+  nft-xchain-v1) + a normative SPEC + a modref-driven conformance
+  suite. royalty-sale is the reference implementation.
+
+NFT Framework (contracts/nft/)
+  PCO-authored shared-ledger NFT ecosystem. Outside the registry
+  layer stack; an original implementation (not a Marmalade fork).
+  One hardened ledger (token identity), a policy-manager with a
+  single conservation-asserted settlement, six policies, two
+  auction sale contracts, cross-chain relocation via policy
+  passports. Gate: 14 REPL suites + static analysis on every change.
 ```
 
 ### Full dependency graph
@@ -186,7 +208,7 @@ license: 'Apache-2.0'
 authors:
   - name: 'Author Name'
     email: 'author@example.org'
-audit_status: 'audited'   # audited | in-review | not-audited
+audit_status: 'self-reviewed'   # reference | unaudited | self-reviewed | community-reviewed | independently-audited (docs/CONTRACT_POLICIES.md §3.1)
 tags: ['token', 'finance']
 keywords: ['pact', 'smart-contract']
 ```
@@ -211,6 +233,8 @@ keywords: ['pact', 'smart-contract']
 | `registry/ecosystem/` | Third-party projects | Various (see each module's `metadata.yaml`) — verified from mainnet01 blockchain census Jan 2025 / Mar 2026 |
 | `registry/community/` | Community projects | Census-observed free-namespace modules (see each module's `metadata.yaml`) |
 | `library/` | PCO contributors | [Pact-Community-Organization/pact-contract-catalog](https://github.com/Pact-Community-Organization/pact-contract-catalog) |
+| `standards/` | PCO-authored | This repository (normative interface standard, un-upgradeable once deployed) |
+| `nft/` | PCO-authored | This repository (original implementation; Marmalade sources were read-only reference) |
 
 > All `registry/` entries are **observed entries** — verbatim snapshots of upstream or on-chain code, catalogued to document what community modules build upon and integrate with. PCO makes no security claim beyond the recorded audit status. Only `library/` entries are authored, maintained, and quality-gated by PCO.
 
@@ -222,4 +246,6 @@ keywords: ['pact', 'smart-contract']
 - Additions to `registry/ecosystem/` and `registry/community/` require evidence of deployment on mainnet01 (module hash, describe-module output, or block explorer link) plus a PR matching the census methodology in `contracts/registry/ecosystem/README.md`.
 - Additions to `library/` require a PR linking a GitHub issue, passing CI (including the library quality gate: schema-A metadata, co-located `.repl` tests, `audit_status` of `self-reviewed` or better), and approval per `CONTRIBUTING.md`.
 - Entries with an open CRITICAL finding live in `registry/`, never `library/`.
+- `contracts/standards/` is normative: the three interfaces are un-upgradeable (`CannotUpgradeInterface`) and the SPEC's clauses are versioned — breaking changes ship as `-v2`, never as edits. Changes go through maintainer PRs.
+- `contracts/nft/` changes require every suite under `contracts/nft/test/` green and the static gate at 0 violations (see the Gates section of [contracts/nft/README.md](contracts/nft/README.md)); cross-chain behavior classes additionally require multi-chain devnet evidence.
 - Audit promotions follow the ladder in `docs/CONTRACT_POLICIES.md` §3.1 (`reference` / `unaudited` / `self-reviewed` / `community-reviewed` / `independently-audited`) and require evidence in `AUDIT.md`.

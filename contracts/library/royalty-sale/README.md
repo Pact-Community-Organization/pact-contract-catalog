@@ -1,6 +1,6 @@
 # Royalty Sale — conservation-checked NFT marketplace
 
-PCO library template: a **self-contained NFT with an enforceable-royalty marketplace**, built as the hardened answer to the flaws documented in our [Marmalade V2 security & architecture analysis](../../docs/). It owns both its token ledger and its sale escrow end to end — which is the only way to *prove* the safe settlement patterns rather than inherit a shared-escrow sweep.
+PCO library template: a **self-contained NFT with an enforceable-royalty marketplace**, built as the hardened answer to the failure modes our Marmalade V2 analysis documented — restated as the normative clauses of the [NFT interface standard](../../standards/SPEC.md), of which this template is the reference implementation. It owns both its token ledger and its sale escrow end to end — which is the only way to *prove* the safe settlement patterns rather than inherit a shared-escrow sweep.
 
 On-chain royalty enforcement is genuinely the strongest model in the NFT market (Ethereum's EIP-2981 is metadata-only and its enforcement collapsed; Solana keeps re-platforming transfer-restriction). Marmalade had the right idea; this template keeps the idea and fixes the execution.
 
@@ -66,7 +66,7 @@ cd contracts/library/royalty-sale/examples && pact royalty-sale-test.repl
 
 ## Known limits
 
-- **Instant fixed-price sales only.** Auctions, Dutch auctions, and time-escrowed offers are a future extension; the conservation-checked settlement generalizes to them.
+- **Instant fixed-price sales only.** Auctions and Dutch auctions exist in the catalog as part of the [NFT Framework](../../nft/README.md) (`contracts/nft/`), which generalizes this template's conservation-checked settlement behind a shared-ledger policy architecture; this template stays the minimal standalone reference.
 - **Sale-only tokens cannot be gifted or freely migrated** — that is the cost of enforceable royalties, and it is the creator's explicit opt-in, not a default.
 - **1-of-1 NFTs.** Fractional / multi-edition supply is out of scope for this template.
 - **The escrow is shared across sales but nets to zero each sale** (conservation is asserted per sale). Do not send funds to the escrow account directly.

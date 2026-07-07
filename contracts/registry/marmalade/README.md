@@ -1,6 +1,6 @@
-# marmalade/ — Marmalade v2 NFT Framework
+# marmalade/ — Marmalade v2 NFT Stack
 
-This layer contains the **Marmalade v2** NFT framework pre-deployed on all KDA-CE chains. Marmalade is KDA-CE's production NFT standard — it powers token creation, minting, burning, and multi-step sales with composable policies.
+This layer contains the **Marmalade v2** NFT stack pre-deployed on all KDA-CE chains. Marmalade is KDA-CE's production NFT standard — it powers token creation, minting, burning, and multi-step sales with composable policies. These are **verbatim snapshots**, read-only reference; the analysis of this stack produced the design principles behind the PCO-authored [NFT Framework](../../nft/README.md) (`contracts/nft/`), which is an original implementation, not a fork.
 
 ---
 
