@@ -1,0 +1,398 @@
+;; nft framework — Phase 3: royalty-policy suite.
+;;
+;; Proves genuinely enforced on-chain creator royalties:
+;;   * fail-closed init: a missing/partial/invalid royalty spec ABORTS creation
+;;     (bps capped at 50%, creator principal-validated — impersonation rejected);
+;;   * the creator is paid on a SECONDARY sale (creator != seller) — the cut is
+;;     computed from the policy's stored spec + the manager's state-bound quote,
+;;     never from the buy tx;
+;;   * the dust guard rejects an offer whose floored royalty would be zero;
+;;   * sale-only is an explicit opt-in: free transfers reject (for every owner),
+;;     while a sale via the sale pact always works and always pays the royalty;
+;;   * no hook is reachable outside the ledger's lifecycle path (-CALL gate).
+;;
+;; Run: pact contracts/nft/test/royalty-policy.repl
+
+;; --- coin (payment fungible) ------------------------------------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- the nft framework --------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../interfaces/updatable-uri-policy.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(commit-tx)
+
+;; --- the royalty policy -------------------------------------------------------
+(begin-tx "deploy royalty policy")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(load "../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(commit-tx)
+
+;; --- fund the buyer -----------------------------------------------------------
+(begin-tx "fund bob")
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+;; ===========================================================================
+;; FAIL-CLOSED INIT — every malformed spec ABORTS token creation
+;; ===========================================================================
+
+(begin-tx "no spec at all -> creation aborts (fail closed)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://no-spec", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "create-token without a royalty spec is rejected" "read-msg failure"
+    (nft.ledger.create-token id 0 "ipfs://no-spec" [nft.royalty-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "partial spec (missing sale-only) -> creation aborts (fail closed)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 1000 } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://partial", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a partial royalty spec is rejected" "Runtime typecheck failure"
+    (nft.ledger.create-token id 0 "ipfs://partial" [nft.royalty-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "bps over the 50% cap -> rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 6000, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://greedy", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a 60% royalty is rejected" "royalty bps must be in"
+    (nft.ledger.create-token id 0 "ipfs://greedy" [nft.royalty-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "negative bps -> rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": -1, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://negative", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a negative royalty is rejected" "royalty bps must be in"
+    (nft.ledger.create-token id 0 "ipfs://negative" [nft.royalty-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "impersonated spec -> rejected (attacker account, victim guard)")
+;; mallory names HER account as creator but pairs it with ALICE's guard: the
+;; principal validation catches the mismatch, so a spec cannot route royalties
+;; to an account its guard does not own.
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:6666666666666666666666666666666666666666666666666666666666666666"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 1000, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://impersonated", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "an account/guard mismatch in the spec is rejected"
+    "creator must be the principal account of creator-guard"
+    (nft.ledger.create-token id 0 "ipfs://impersonated" [nft.royalty-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+;; ===========================================================================
+;; HAPPY PATH — alice creates + mints token-1 (10% royalty, freely transferable)
+;; ===========================================================================
+(begin-tx "create + mint token-1")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 1000, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-1", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://art-1" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect "alice owns token-1" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect "the royalty terms are bound on-chain" 1000
+    (at 'bps (nft.royalty-policy.get-royalty id))))
+(commit-tx)
+
+;; --- no hook is reachable outside the ledger flow -----------------------------
+(begin-tx "direct hook calls are rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:6666666666666666666666666666666666666666666666666666666666666666"
+                    , "creator-guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+                    , "bps": 5000, "sale-only": false } })
+(let ((fake:object{nft.token-policy.token-info}
+        { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
+        , 'policies: [nft.royalty-policy] }))
+  (expect-failure "enforce-init is not directly callable" "not granted"
+    (nft.royalty-policy.enforce-init fake))
+  (expect-failure "enforce-buy is not directly callable" "not granted"
+    (nft.royalty-policy.enforce-buy fake "k:seller" "k:buyer" (read-keyset 'alice) 1.0 "sale-x"))
+  (expect-failure "enforce-transfer is not directly callable" "not granted"
+    (nft.royalty-policy.enforce-transfer fake "k:seller" (read-keyset 'alice) "k:buyer" 1.0)))
+(rollback-tx)
+
+;; --- free transfer works when sale-only is off --------------------------------
+(begin-tx "alice gifts token-1 to dave (sale-only off)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-1", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0) ] } ])
+  (nft.ledger.transfer-create id
+    "k:1111111111111111111111111111111111111111111111111111111111111111"
+    "k:3333333333333333333333333333333333333333333333333333333333333333"
+    (read-keyset 'dave) 1.0)
+  (expect "dave holds token-1" 1.0
+    (nft.ledger.get-balance id "k:3333333333333333333333333333333333333333333333333333333333333333")))
+(commit-tx)
+
+;; ===========================================================================
+;; DUST GUARD — a price whose floored royalty is zero is rejected at offer
+;; ===========================================================================
+(begin-tx "dust-price offer rejected")
+(env-hash (hash "roy-dust"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.000000000001
+    , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
+    , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-bps": 0 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-1", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.OFFER id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0) ] } ])
+  (expect-failure "a royalty-evading dust price is rejected"
+    "price too low: the royalty would floor to zero"
+    (nft.ledger.sale id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0)))
+(rollback-tx)
+
+;; ===========================================================================
+;; SECONDARY SALE — dave (seller) lists at 100 with a 2.5% marketplace fee;
+;; bob buys. The CREATOR alice is paid 10 although she is not a party to the
+;; sale: royalty 10 -> alice, fee 2.5 -> marketplace, proceeds 87.5 -> dave.
+;; ===========================================================================
+(begin-tx "offer token-1 at 100 (fee 250 bps)")
+(env-hash (hash "roy-sale-1"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
+    , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 250 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-1", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.OFFER id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0) ] } ])
+  (let ((sale-id (nft.ledger.sale id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0)))
+    (expect "the sale-id is the deterministic pact-id" (hash "roy-sale-1") sale-id)
+    (expect "token-1 escrowed out of dave" 0.0
+      (nft.ledger.get-balance id "k:3333333333333333333333333333333333333333333333333333333333333333"))))
+(commit-tx)
+
+(begin-tx "bob buys — the creator is paid on a sale she is no party to")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  ;; bogus economics in the buy tx MUST be ignored (state quote wins)
+  , "quote": { "fee-bps": 0, "price": 1.0 }
+  , "royalty_spec": { "creator": "k:2222222222222222222222222222222222222222222222222222222222222222"
+                    , "creator-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+                    , "bps": 0, "sale-only": false } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-1", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:3333333333333333333333333333333333333333333333333333333333333333"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "roy-sale-1"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "roy-sale-1")) 100.0) ] } ])
+  (continue-pact 1 false (hash "roy-sale-1"))
+  (expect "bob holds token-1" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+;; reconciliation (12 dp): 10 + 2.5 + 87.5 = 100
+(expect "bob paid exactly the state price 100" 900.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "creator alice received the 10% royalty on the SECONDARY sale" 10.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "seller dave received the 87.5 remainder" 87.5
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "the marketplace fee 2.5 accrued (not zeroed by the buyer)" 2.5
+  (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(expect "escrow empty after settlement (conservation)" 0.0
+  (coin.get-balance (nft.policy-manager.escrow-account (hash "roy-sale-1"))))
+(commit-tx)
+
+;; ===========================================================================
+;; SALE-ONLY — an explicit opt-in: free transfers reject for EVERY owner, the
+;; sale pact always works (and pays the royalty) — royalty-by-settlement, not
+;; a composable-away transfer ban.
+;; ===========================================================================
+(begin-tx "create + mint token-2 (5% royalty, sale-only)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 500, "sale-only": true } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-2", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://art-2" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "free transfer of a sale-only token rejects")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-2", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0) ] } ])
+  (expect-failure "sale-only blocks the free transfer" "sale-only token: free transfer is disabled"
+    (nft.ledger.transfer-create id
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      "k:3333333333333333333333333333333333333333333333333333333333333333"
+      (read-keyset 'dave) 1.0)))
+(rollback-tx)
+
+(begin-tx "the sale pact still works for a sale-only token")
+(env-hash (hash "roy-sale-2"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 40.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-2", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+(begin-tx "bob buys token-2 — royalty enforced at settlement")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-2", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "roy-sale-2"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "roy-sale-2")) 40.0) ] } ])
+  (continue-pact 1 false (hash "roy-sale-2"))
+  (expect "bob holds token-2" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+;; alice is creator AND seller here: royalty 2 + proceeds 38, merged = +40
+(expect "alice netted royalty 2 + proceeds 38 = 50 total balance" 50.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "bob paid 40 (balance 860)" 860.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "escrow empty after settlement (conservation)" 0.0
+  (coin.get-balance (nft.policy-manager.escrow-account (hash "roy-sale-2"))))
+(commit-tx)
+
+(begin-tx "sale-only persists for the NEW owner")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://art-2", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0) ] } ])
+  (expect-failure "bob cannot free-transfer the sale-only token either"
+    "sale-only token: free transfer is disabled"
+    (nft.ledger.transfer-create id
+      "k:2222222222222222222222222222222222222222222222222222222222222222"
+      "k:3333333333333333333333333333333333333333333333333333333333333333"
+      (read-keyset 'dave) 1.0)))
+(rollback-tx)
+
+(print "")
+(print "=== NFT FRAMEWORK PHASE 3 — ROYALTY POLICY: ALL GREEN ===")
+(print "  fail-closed init: missing/partial/greedy/impersonated specs all abort;")
+(print "  creator paid 10% on a SECONDARY sale (creator != seller), from state;")
+(print "  dust guard: royalty-evading price rejected at offer;")
+(print "  sale-only: free transfers reject for every owner, sales always work;")
+(print "  no policy hook reachable outside the ledger lifecycle path.")

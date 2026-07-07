@@ -1,0 +1,389 @@
+;; nft framework — Phase 3: policy COMPOSITION suite.
+;;
+;; One token carries royalty-policy + guard-policy + non-fungible-policy
+;; stacked together, and every policy's rule holds simultaneously:
+;;   * creation demands EVERY policy's required input — a missing royalty spec
+;;     or a missing operation guard aborts (fail closed across the stack);
+;;   * mint needs the mint-guard AND the 1/1 shape (amount exactly 1.0, once);
+;;   * free transfer needs the transfer-guard;
+;;   * offer needs the sale-guard AND survives the royalty dust guard;
+;;   * at settlement the FULL split reconciles: creator royalty + marketplace
+;;     fee + seller remainder, with the buyer's malicious economics ignored;
+;;   * burn needs the burn-guard AND takes the whole token; re-mint is
+;;     rejected forever.
+;;
+;; Run: pact contracts/nft/test/composition.repl
+
+;; --- coin (payment fungible) ------------------------------------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- the nft framework --------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../interfaces/updatable-uri-policy.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(commit-tx)
+
+;; --- the three policies ---------------------------------------------------------
+(begin-tx "deploy the policy stack")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(load "../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(load "../policies/guard-policy.pact")
+(create-table nft.guard-policy.op-guards)
+(load "../policies/non-fungible-policy.pact")
+(create-table nft.non-fungible-policy.minted-table)
+(commit-tx)
+
+;; --- fund the buyer -----------------------------------------------------------
+(begin-tx "fund bob")
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+;; NOTE: the policy list order is fixed throughout — Pact 5 `sort` is a no-op
+;; on modrefs, so the order the creator passes is part of the derived id.
+
+;; ===========================================================================
+;; CREATION — every policy's required input must be present
+;; ===========================================================================
+(begin-tx "missing royalty spec aborts even with guards present")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "operation_guards":
+    { "mint-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "burn-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+    , "sale-guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }
+    , "transfer-guard": { "keys": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"], "pred": "keys-all" } } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "the royalty policy's requirement binds the whole stack" "read-msg failure"
+    (nft.ledger.create-token id 0 "ipfs://stack"
+      [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "missing operation guards abort even with the royalty spec present")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 1000, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "the guard policy's requirement binds the whole stack" "read-msg failure"
+    (nft.ledger.create-token id 0 "ipfs://stack"
+      [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "precision 1 aborts (the 1/1 policy binds the whole stack)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 1000, "sale-only": false }
+  , "operation_guards":
+    { "mint-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "burn-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+    , "sale-guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }
+    , "transfer-guard": { "keys": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"], "pred": "keys-all" } } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 1
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "precision 1 is rejected by the stacked 1/1 policy" "requires precision 0"
+    (nft.ledger.create-token id 1 "ipfs://stack"
+      [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "create the fully-specified stacked token")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 1000, "sale-only": false }
+  , "operation_guards":
+    { "mint-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "burn-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+    , "sale-guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }
+    , "transfer-guard": { "keys": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"], "pred": "keys-all" } } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://stack"
+    [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] (read-keyset 'alice))
+  (expect "royalty terms bound" 1000 (at 'bps (nft.royalty-policy.get-royalty id)))
+  (expect "guards bound" true (contains 'mint-guard (nft.guard-policy.get-guards id)))
+  (expect "not minted yet" false (nft.non-fungible-policy.is-minted id)))
+(commit-tx)
+
+;; ===========================================================================
+;; MINT — the mint-guard AND the 1/1 shape hold together
+;; ===========================================================================
+(begin-tx "mint without the mint key rejects")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "the mint-guard holds in the stack" "Keyset failure"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 1.0)))
+(rollback-tx)
+
+(begin-tx "mint amount 2.0 rejects even WITH the mint key")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "the 1/1 shape holds in the stack" "mints exactly 1.0"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 2.0)))
+(rollback-tx)
+
+(begin-tx "mint 1.0 with the mint key passes; a second mint rejects")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect "alice holds the stacked token" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect-failure "no second mint" "already minted"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 1.0)))
+(commit-tx)
+
+;; ===========================================================================
+;; TRANSFER — the transfer-guard holds (royalty sale-only is off)
+;; ===========================================================================
+(begin-tx "transfer without the transfer key rejects")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0) ] } ])
+  (expect-failure "the transfer-guard holds in the stack" "Keyset failure"
+    (nft.ledger.transfer-create id
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      "k:3333333333333333333333333333333333333333333333333333333333333333"
+      (read-keyset 'dave) 1.0)))
+(rollback-tx)
+
+(begin-tx "transfer with the transfer key passes")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0) ] }
+            , { "key": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "caps": [] } ])
+  (nft.ledger.transfer-create id
+    "k:1111111111111111111111111111111111111111111111111111111111111111"
+    "k:3333333333333333333333333333333333333333333333333333333333333333"
+    (read-keyset 'dave) 1.0)
+  (expect "dave holds the stacked token" 1.0
+    (nft.ledger.get-balance id "k:3333333333333333333333333333333333333333333333333333333333333333")))
+(commit-tx)
+
+;; ===========================================================================
+;; SALE — sale-guard + dust guard at offer; the FULL split at settlement
+;; ===========================================================================
+(begin-tx "offer without the sale key rejects")
+(env-hash (hash "stack-sale-0"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 60.0
+    , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
+    , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 250 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.OFFER id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0) ] } ])
+  (expect-failure "the sale-guard holds in the stack" "Keyset failure"
+    (nft.ledger.sale id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0)))
+(rollback-tx)
+
+(begin-tx "dust price rejects even with the sale key")
+(env-hash (hash "stack-dust"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.000000000001
+    , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
+    , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-bps": 0 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.OFFER id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0) ] }
+            , { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (expect-failure "the royalty dust guard holds in the stack"
+    "price too low: the royalty would floor to zero"
+    (nft.ledger.sale id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0)))
+(rollback-tx)
+
+(begin-tx "dave lists at 60 (fee 250 bps) with the sale key")
+(env-hash (hash "stack-sale-1"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 60.0
+    , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
+    , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 250 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.OFFER id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0) ] }
+            , { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (nft.ledger.sale id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0))
+(commit-tx)
+
+(begin-tx "bob buys — the full stacked split reconciles; bogus economics ignored")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  ;; the attack surface — bogus economics in the BUY tx must be ignored:
+  , "quote": { "fee-bps": 0, "price": 1.0 }
+  , "royalty_spec": { "creator": "k:2222222222222222222222222222222222222222222222222222222222222222"
+                    , "creator-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+                    , "bps": 0, "sale-only": false } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:3333333333333333333333333333333333333333333333333333333333333333"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "stack-sale-1"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "stack-sale-1")) 60.0) ] } ])
+  (continue-pact 1 false (hash "stack-sale-1"))
+  (expect "bob holds the stacked token" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (expect "supply is still exactly 1" 1.0 (nft.ledger.total-supply id)))
+;; reconciliation (12 dp): royalty 6 + fee 1.5 + proceeds 52.5 = 60
+(expect "bob paid exactly the state price 60" 940.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "creator alice received the 10% royalty (6)" 6.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "the marketplace fee 1.5 accrued (not zeroed by the buyer)" 1.5
+  (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(expect "seller dave received the 52.5 remainder" 52.5
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "escrow empty after settlement (conservation)" 0.0
+  (coin.get-balance (nft.policy-manager.escrow-account (hash "stack-sale-1"))))
+(commit-tx)
+
+;; ===========================================================================
+;; BURN — burn-guard + whole-token + once-ever hold together
+;; ===========================================================================
+(begin-tx "burn without the burn key rejects")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "the burn-guard holds in the stack" "Keyset failure"
+    (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0)))
+(rollback-tx)
+
+(begin-tx "burn with owner + burn key passes; re-mint rejected forever")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] }
+          , { "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "caps": [] }
+          , { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://stack", 'precision: 0
+            , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0)
+  (expect "burned (supply 0)" 0.0 (nft.ledger.total-supply id))
+  ;; even with the mint key signing, the 1/1 marker is final
+  (expect-failure "no re-mint after burn, ever" "already"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 1.0)))
+(commit-tx)
+
+(print "")
+(print "=== NFT FRAMEWORK PHASE 3 — COMPOSITION: ALL GREEN ===")
+(print "  royalty + guard + non-fungible stacked on ONE token:")
+(print "  creation demands every policy's input; mint/transfer/offer/burn guards")
+(print "  hold alongside the 1/1 shape; the settlement split reconciles exactly")
+(print "  (royalty 6 + fee 1.5 + proceeds 52.5 = 60) with bogus economics ignored.")
