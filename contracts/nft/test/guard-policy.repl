@@ -1,0 +1,344 @@
+;; nft framework — Phase 3: guard-policy suite.
+;;
+;; Proves fail-closed per-operation guards (the POL-1 fix):
+;;   * a MISSING guard field aborts token creation — it never defaults to
+;;     "anyone can, forever";
+;;   * mint / burn / offer / transfer each enforce their own distinct guard
+;;     (four different keys prove no cross-satisfaction);
+;;   * the buy side is deliberately not gated (a buyer cannot carry the
+;;     seller-side guard) — a listed token can always settle;
+;;   * withdraw needs only the seller (the sale-guard cannot hold the escrowed
+;;     token hostage);
+;;   * no hook is reachable outside the ledger's lifecycle path (-CALL gate).
+;;
+;; Run: pact contracts/nft/test/guard-policy.repl
+
+;; --- coin (payment fungible) ------------------------------------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- the nft framework --------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../interfaces/updatable-uri-policy.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(commit-tx)
+
+;; --- the guard policy ---------------------------------------------------------
+(begin-tx "deploy guard policy")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(load "../policies/guard-policy.pact")
+(create-table nft.guard-policy.op-guards)
+(commit-tx)
+
+;; --- fund the buyer -----------------------------------------------------------
+(begin-tx "fund bob")
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+;; ===========================================================================
+;; FAIL CLOSED — a missing guard ABORTS creation (never defaults to open)
+;; ===========================================================================
+(begin-tx "no guards object at all -> creation aborts")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://no-guards", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "create-token without operation guards is rejected" "read-msg failure"
+    (nft.ledger.create-token id 0 "ipfs://no-guards" [nft.guard-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "a MISSING guard field -> creation aborts (the POL-1 fix)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "operation_guards":
+    { "mint-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "burn-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+    , "sale-guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" } } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://partial-guards", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a missing transfer-guard aborts creation — it does NOT default to open"
+    "Runtime typecheck failure"
+    (nft.ledger.create-token id 0 "ipfs://partial-guards" [nft.guard-policy] (read-keyset 'alice))))
+(rollback-tx)
+
+;; ===========================================================================
+;; HAPPY CREATE — four DISTINCT operation guards bind at creation
+;; ===========================================================================
+(begin-tx "create token-g with four distinct operation guards")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "operation_guards":
+    { "mint-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "burn-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+    , "sale-guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }
+    , "transfer-guard": { "keys": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"], "pred": "keys-all" } } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://guarded" [nft.guard-policy] (read-keyset 'alice))
+  (expect "the guards are bound on-chain" true
+    (contains 'mint-guard (nft.guard-policy.get-guards id))))
+(commit-tx)
+
+;; --- MINT is gated by the mint-guard ------------------------------------------
+(begin-tx "mint WITHOUT the mint key rejects")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "minting is closed to non-holders of the mint-guard" "Keyset failure"
+    (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) 1.0)))
+(rollback-tx)
+
+(begin-tx "mint WITH the mint key passes")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect "alice holds token-g" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(commit-tx)
+
+;; --- no hook is reachable outside the ledger flow -----------------------------
+(begin-tx "direct hook calls are rejected")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "operation_guards":
+    { "mint-guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+    , "burn-guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+    , "sale-guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+    , "transfer-guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" } } })
+(let ((fake:object{nft.token-policy.token-info}
+        { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
+        , 'policies: [nft.guard-policy] }))
+  (expect-failure "enforce-init is not directly callable" "not granted"
+    (nft.guard-policy.enforce-init fake))
+  (expect-failure "enforce-mint is not directly callable" "not granted"
+    (nft.guard-policy.enforce-mint fake "k:x" (read-keyset 'alice) 1.0))
+  (expect-failure "enforce-transfer is not directly callable" "not granted"
+    (nft.guard-policy.enforce-transfer fake "k:x" (read-keyset 'alice) "k:y" 1.0)))
+(rollback-tx)
+
+;; --- TRANSFER is gated by the transfer-guard (distinct from the others) --------
+(begin-tx "transfer WITHOUT the transfer key rejects (owner sig alone is not enough)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0) ] }
+            ;; the MINT key signs too — a different guard must NOT satisfy transfer
+            , { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+  (expect-failure "the transfer-guard is enforced (mint key does not cross-satisfy)" "Keyset failure"
+    (nft.ledger.transfer-create id
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      "k:3333333333333333333333333333333333333333333333333333333333333333"
+      (read-keyset 'dave) 1.0)))
+(rollback-tx)
+
+(begin-tx "transfer WITH the transfer key passes")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0) ] }
+            , { "key": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "caps": [] } ])
+  (nft.ledger.transfer-create id
+    "k:1111111111111111111111111111111111111111111111111111111111111111"
+    "k:3333333333333333333333333333333333333333333333333333333333333333"
+    (read-keyset 'dave) 1.0)
+  (expect "dave holds token-g" 1.0
+    (nft.ledger.get-balance id "k:3333333333333333333333333333333333333333333333333333333333333333")))
+(commit-tx)
+
+;; ===========================================================================
+;; SALE — listing is gated by the sale-guard; the BUYER is not gated
+;; ===========================================================================
+(begin-tx "offer WITHOUT the sale key rejects")
+(env-hash (hash "guard-sale-0"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 25.0
+    , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
+    , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-bps": 0 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.OFFER id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0) ] } ])
+  (expect-failure "listing is closed to non-holders of the sale-guard" "Keyset failure"
+    (nft.ledger.sale id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0)))
+(rollback-tx)
+
+(begin-tx "offer WITH the sale key passes")
+(env-hash (hash "guard-sale-1"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 25.0
+    , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
+    , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-bps": 0 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.OFFER id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0) ] }
+            , { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (nft.ledger.sale id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0)
+  (expect "token-g escrowed out of dave" 0.0
+    (nft.ledger.get-balance id "k:3333333333333333333333333333333333333333333333333333333333333333")))
+(commit-tx)
+
+(begin-tx "bob buys — the buyer needs NO operation guard")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:3333333333333333333333333333333333333333333333333333333333333333"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "guard-sale-1"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "guard-sale-1")) 25.0) ] } ])
+  (continue-pact 1 false (hash "guard-sale-1"))
+  (expect "bob holds token-g" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+;; reconciliation: no fee, no royalty — the full price reaches the seller
+(expect "bob paid exactly 25" 975.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "seller dave received the full 25" 25.0
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "escrow empty after settlement (conservation)" 0.0
+  (coin.get-balance (nft.policy-manager.escrow-account (hash "guard-sale-1"))))
+(commit-tx)
+
+;; ===========================================================================
+;; WITHDRAW — needs only the seller; the sale-guard CANNOT hold the escrowed
+;; token hostage
+;; ===========================================================================
+(begin-tx "bob lists again (sale key co-signs the offer)")
+(env-hash (hash "guard-sale-2"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 30.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0 } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] }
+            , { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (nft.ledger.sale id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0))
+(commit-tx)
+
+(begin-tx "bob withdraws WITHOUT the sale key — the token comes back")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.WITHDRAW id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0
+                            (hash "guard-sale-2")) ] } ])
+  (continue-pact 0 true (hash "guard-sale-2"))
+  (expect "withdraw returned token-g to bob (no sale-guard hostage)" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(commit-tx)
+
+;; ===========================================================================
+;; BURN — gated by the burn-guard IN ADDITION to the owner's guard
+;; ===========================================================================
+(begin-tx "burn WITHOUT the burn key rejects (owner sig alone is not enough)")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "burning is closed to non-holders of the burn-guard" "Keyset failure"
+    (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0)))
+(rollback-tx)
+
+(begin-tx "burn WITH owner + burn key passes")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] }
+          , { "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0)
+  (expect "token-g burned (supply 0)" 0.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+(print "")
+(print "=== NFT FRAMEWORK PHASE 3 — GUARD POLICY: ALL GREEN ===")
+(print "  fail closed: a missing guard field ABORTS creation (POL-1 fixed);")
+(print "  mint/burn/offer/transfer each enforce their own distinct guard;")
+(print "  the buyer is not gated; withdraw needs only the seller (no hostage);")
+(print "  no policy hook reachable outside the ledger lifecycle path.")
