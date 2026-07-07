@@ -1,0 +1,929 @@
+;; royalty-sale-market-sim.repl — full-marketplace economic simulation
+;;
+;; Runs a realistic NFT marketplace end to end on the royalty-sale template and
+;; PROVES the economics, not just the API:
+;;
+;;   - CATALOG: two artists mint six tokens across the royalty spectrum
+;;     (0% / 2.5% / 5% / 50%-max bps), sale-only and transferable.
+;;   - RESALE CHAIN (headline): creator->A->B->C->D on a sale-only 5% token,
+;;     through two marketplaces at different fee rates. The ORIGINAL creator
+;;     collects the royalty on EVERY hop; the cumulative accrual is asserted
+;;     equal to rate x SUM(prices) exactly, and each seller nets
+;;     price - royalty - fee.
+;;   - FEES: fee fixed on the listing by the seller; marketplace==creator and
+;;     marketplace==seller payout merges; a buyer CANNOT underpay (their scoped
+;;     TRANSFER cap is the price - underscoping aborts the sale).
+;;   - MULTI-CURRENCY: a full primary + secondary sale in a NON-coin
+;;     fungible-v2 (the library token-fungible template) - royalties accrue in
+;;     that currency; the marketplace is currency-agnostic.
+;;   - LIFECYCLE: gift with correct provenance events, sale-only has no
+;;     non-paying exit, list -> delist -> relist -> buy, settled listings die.
+;;   - ADVERSARIAL: every path rejected (non-owner ops, insufficient funds,
+;;     under-scoped caps, front-run price change, escrow self-buy,
+;;     non-principals, over-cap rates, over-precision, dust griefing).
+;;   - ACCOUNTING: exact final balance of EVERY participant; global
+;;     conservation (sum of all balances == sum funded, to 12 dp); ownership
+;;     history and royalty totals RECONSTRUCTED from SOLD/TRANSFERRED events
+;;     and matched against state.
+;;   - GAS: mint / list / buy / transfer / delist measured under the table
+;;     model against the 150k KDA-CE ceiling (devnet run has the node-true
+;;     numbers; see scripts/devnet-validate).
+;;
+;; Self-contained: loads coin + the token-fungible template from this repo.
+;; NOTE: (env-events false) is used throughout (never true) so the FULL event
+;; log survives to the accounting act. Adversarial txs contain only failing
+;; ops, so the log holds exactly the committed marketplace history.
+
+;; ===========================================================================
+;; ACT 0 — world setup: currencies, module, personas, funding
+;; ===========================================================================
+
+(begin-tx "load coin (currency #1)")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+(begin-tx "load token-fungible (currency #2, NON-coin fungible-v2)")
+(env-data { "token-gov": ["9999999999999999999999999999999999999999999999999999999999999999"] })
+(define-keyset "token-gov" (read-keyset "token-gov"))
+(load "../../token-fungible/token.pact")
+(create-table token-table)
+(commit-tx)
+
+;; The cast. All payout accounts are k: principals (the module requires it).
+;;   alice k:1111.. artist #1 (creator of the headline collection)
+;;   dana  k:aaaa.. artist #2 (creator of the token-currency piece)
+;;   bob   k:2222.. collector A     carol k:3333.. collector B
+;;   frank k:6666.. collector C     gina  k:7777.. collector D
+;;   mkt1  k:4444.. marketplace #1  mkt2  k:8888.. marketplace #2
+;;   eve   k:5555.. adversary       gov   k:9999.. governance
+(begin-tx "personas + funding")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "mkt1":  { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+  , "eve":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "frank": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+  , "gina":  { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "mkt2":  { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" }
+  , "gov":   { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "dana":  { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+;; coin funding — TOTAL 4132.0 (the global-conservation constant)
+(test-capability (coin.CREDIT "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(coin.credit "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") 10.0)
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob") 1000.0)
+(test-capability (coin.CREDIT "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(coin.credit "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol") 1000.0)
+(test-capability (coin.CREDIT "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(coin.credit "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 10.0)
+(test-capability (coin.CREDIT "k:5555555555555555555555555555555555555555555555555555555555555555"))
+(coin.credit "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset "eve") 2.0)
+(test-capability (coin.CREDIT "k:6666666666666666666666666666666666666666666666666666666666666666"))
+(coin.credit "k:6666666666666666666666666666666666666666666666666666666666666666" (read-keyset "frank") 1000.0)
+(test-capability (coin.CREDIT "k:7777777777777777777777777777777777777777777777777777777777777777"))
+(coin.credit "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset "gina") 1000.0)
+(test-capability (coin.CREDIT "k:8888888888888888888888888888888888888888888888888888888888888888"))
+(coin.credit "k:8888888888888888888888888888888888888888888888888888888888888888" (read-keyset "mkt2") 10.0)
+(test-capability (coin.CREDIT "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+(coin.credit "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset "dana") 100.0)
+;; token (currency #2) funding: gov mints to the two token-side buyers.
+;; TOTAL 1300.0 (the token-side conservation constant)
+(env-sigs [ { "key": "9999999999999999999999999999999999999999999999999999999999999999", "caps": [] } ])
+(token.mint "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol") 1000.0)
+(token.mint "k:6666666666666666666666666666666666666666666666666666666666666666" (read-keyset "frank") 300.0)
+(commit-tx)
+
+(begin-tx "deploy royalty-sale")
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "free" (read-keyset "gov") (read-keyset "gov"))
+(namespace "free")
+(define-keyset "free.royalty-sale-gov" (read-keyset "gov"))
+(load "../royalty-sale.pact")
+(create-table free.royalty-sale.tokens)
+(create-table free.royalty-sale.listings)
+(commit-tx)
+
+;; REPL-only fixture: the REPL event log RESETS at each transaction, so the
+;; accounting act cannot read the whole history from (env-events) directly.
+;; This little indexer persists each sale tx's SOLD / TRANSFERRED events into
+;; a table — exactly what an off-chain marketplace indexer does — and ACT 8
+;; reconstructs ownership + royalty totals from it, from events alone.
+(begin-tx "load sim-indexer (event-history accumulator)")
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-keyset "sim-gov" (read-keyset "gov"))
+(module sim-indexer GOV
+  (defcap GOV () (enforce-guard (keyset-ref-guard "sim-gov")))
+  (defconst SOLD-EV:string "free.royalty-sale.SOLD")
+  (defconst MOVED-EV:string "free.royalty-sale.TRANSFERRED")
+  (defschema move
+    seq:integer name:string token:string from:string to:string
+    price:decimal royalty:decimal fee:decimal)
+  (deftable moves:{move})
+  (defun record (e)
+    (let* ((p (at 'params e))
+           (sold (= SOLD-EV (at 'name e)))
+           (n (length (keys moves))))
+      (insert moves (format "{}" [n])
+        { 'seq: n
+        , 'name: (if sold "SOLD" "TRANSFERRED")
+        , 'token: (at 0 p), 'from: (at 1 p), 'to: (at 2 p)
+        , 'price: (if sold (at 3 p) 0.0)
+        , 'royalty: (if sold (at 4 p) 0.0)
+        , 'fee: (if sold (at 5 p) 0.0) })))
+  (defun ingest (evs)
+    (map (record)
+         (filter (lambda (e) (contains (at 'name e) [SOLD-EV MOVED-EV])) evs)))
+  (defun all-moves:[object{move}] ()
+    (sort ['seq] (select moves (lambda (r) true))))
+  (defun moves-for:[object{move}] (token:string)
+    (sort ['seq] (select moves (lambda (r) (= token (at 'token r))))))
+  (defun all-sold:[object{move}] ()
+    (sort ['seq] (select moves (lambda (r) (= "SOLD" (at 'name r))))))
+  (defun last-owner:string (token:string)
+    (let ((ms (moves-for token)))
+      (at 'to (at (- (length ms) 1) ms))))
+  (defun sales-of:integer (token:string)
+    (length (filter (lambda (m) (= "SOLD" (at 'name m))) (moves-for token))))
+  (defun royalty-of:decimal (token:string)
+    (fold (+) 0.0 (map (lambda (m) (at 'royalty m)) (moves-for token))))
+  (defun volume-of:decimal (token:string)
+    (fold (+) 0.0 (map (lambda (m) (at 'price m)) (moves-for token))))
+)
+(create-table moves)
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 1 — CREATION & CATALOG
+;;   alice mints: gift-0 (0%, transferable), art-25 (2.5%, transferable),
+;;                chain-1 (5%, SALE-ONLY), art-max (50% max, transferable)
+;;   dana mints:  dna-tok (2.5%, transferable — sold in currency #2)
+;;   bob mints:   fr-1 (owner bob, CREATOR alice, 2.5% — minter != creator)
+;; ===========================================================================
+
+(begin-tx "mint validation — fail closed")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "alice"))] } ])
+(expect-failure "empty id rejected" "id required"
+  (free.royalty-sale.mint "" "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") 0 true "u"))
+(expect-failure "non-ASCII id rejected" "id must be ASCII"
+  (free.royalty-sale.mint "café" "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") 0 true "u"))
+(expect-failure "over-cap royalty (60%) rejected" "royalty-bps must be in [0, 5000]"
+  (free.royalty-sale.mint "t-bad" "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") 6000 true "u"))
+(expect-failure "negative royalty rejected" "royalty-bps must be in [0, 5000]"
+  (free.royalty-sale.mint "t-bad" "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") -1 true "u"))
+(expect-failure "non-principal owner rejected" "owner must be a principal account"
+  (free.royalty-sale.mint "t-bad" "alice-vanity" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") 250 true "u"))
+(expect-failure "non-principal creator rejected" "creator must be a principal account"
+  (free.royalty-sale.mint "t-bad" "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "creator-vanity" (read-keyset "alice") 250 true "u"))
+(rollback-tx)
+
+(begin-tx "the catalog: alice mints four, dana one, bob one (creator alice)")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "alice"))] } ])
+(expect "gift-0 minted (0% royalty, transferable)" "gift-0"
+  (free.royalty-sale.mint "gift-0"
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    0 true "ipfs://gift-0"))
+(expect "art-25 minted (2.5% royalty)" "art-25"
+  (free.royalty-sale.mint "art-25"
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    250 true "ipfs://art-25"))
+(expect "chain-1 minted (5% royalty, SALE-ONLY)" "chain-1"
+  (free.royalty-sale.mint "chain-1"
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    500 false "ipfs://chain-1"))
+(expect "art-max minted (50% royalty — the cap)" "art-max"
+  (free.royalty-sale.mint "art-max"
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    5000 true "ipfs://art-max"))
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "dana"))] } ])
+(expect "dna-tok minted by dana (2.5% royalty)" "dna-tok"
+  (free.royalty-sale.mint "dna-tok"
+    "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset "dana")
+    "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset "dana")
+    250 true "ipfs://dna-tok"))
+;; minter != creator: bob mints to himself, enrolling ALICE as royalty payee
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "bob"))] } ])
+(expect "fr-1 minted by bob with alice as creator" "fr-1"
+  (free.royalty-sale.mint "fr-1"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    250 true "ipfs://fr-1"))
+(expect "six MINTED events on the log" 6
+  (length (filter (lambda (e) (= "free.royalty-sale.MINTED" (at 'name e))) (env-events false))))
+(commit-tx)
+
+(begin-tx "duplicate id rejected (1-of-1 is enforced)")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "eve"))] } ])
+(expect-failure "re-minting an existing id fails" "Value already found while in Insert mode"
+  (free.royalty-sale.mint "chain-1"
+    "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset "eve")
+    "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset "eve")
+    0 true "ipfs://steal"))
+(rollback-tx)
+
+;; ===========================================================================
+;; ACT 2 — PRIMARY SALE (creator == seller merge) + buyer-side attacks
+;;   S1: alice lists art-25 at 40 via mkt1 (2.5%). bob buys.
+;;   royalty 1.0 + proceeds 38.0 merge into ONE 39.0 payout to alice; mkt1 +1.0
+;; ===========================================================================
+
+(begin-tx "S1 list: alice lists art-25 at 40.0, mkt1 fee 2.5%")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.OWNER "art-25")] } ])
+(free.royalty-sale.list-token "art-25" 40.0 coin
+  "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 250)
+(expect "art-25 listed" true (free.royalty-sale.is-listed "art-25"))
+(commit-tx)
+
+(begin-tx "ATTACK: buyer under-scopes the price (fee/price evasion)")
+;; buy has NO money argument — the only lever a buyer has is their TRANSFER
+;; cap. Scoping it below the listed price must abort the whole sale.
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 39.0)] } ])
+(expect-failure "under-scoped TRANSFER cap cannot buy a 40.0 listing" "TRANSFER exceeded"
+  (free.royalty-sale.buy "art-25"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+(rollback-tx)
+
+(begin-tx "ATTACK: broke buyer (eve, balance 2.0) cannot buy a 40.0 listing")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+            , "caps": [(coin.TRANSFER "k:5555555555555555555555555555555555555555555555555555555555555555"
+                                      (free.royalty-sale.get-escrow-account) 40.0)] } ])
+(expect-failure "insufficient balance rejected by the currency" "Insufficient funds"
+  (free.royalty-sale.buy "art-25"
+    "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset "eve")))
+(rollback-tx)
+
+(begin-tx "ATTACK: escrow self-buy (buyer == escrow account)")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(expect-failure "the escrow cannot buy for itself" "sender cannot be the receiver of a transfer"
+  (free.royalty-sale.buy "art-25"
+    (free.royalty-sale.get-escrow-account) (free.royalty-sale.create-escrow-guard)))
+(rollback-tx)
+
+(begin-tx "ATTACK: non-principal buyer rejected")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(expect-failure "vanity buyer account rejected" "buyer must be a principal account"
+  (free.royalty-sale.buy "art-25" "eve-vanity" (read-keyset "eve")))
+(rollback-tx)
+
+(begin-tx "S1 buy: bob buys art-25 — creator==seller pays out as ONE transfer")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 40.0)] } ])
+(expect "S1 settles" "art-25"
+  (free.royalty-sale.buy "art-25"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+(expect "alice: 10 + royalty 1.0 + proceeds 38.0 merged = 49.0" 49.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "mkt1: 10 + fee 1.0 = 11.0" 11.0
+  (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(expect "bob debited exactly the price: 960.0" 960.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "escrow settled to zero" 0.0
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(expect "bob owns art-25" "k:2222222222222222222222222222222222222222222222222222222222222222"
+  (free.royalty-sale.owner-of "art-25"))
+(expect "listing closed" false (free.royalty-sale.is-listed "art-25"))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+(begin-tx "settled listing cannot be re-bought")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                      (free.royalty-sale.get-escrow-account) 40.0)] } ])
+(expect-failure "re-buy of settled S1 rejected" "token is not listed for sale"
+  (free.royalty-sale.buy "art-25"
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")))
+(rollback-tx)
+
+;; ===========================================================================
+;; ACT 3 — THE RESALE CHAIN (the headline feature)
+;;   chain-1: 5% royalty, SALE-ONLY, creator alice.
+;;   S2 alice->bob   100.0  mkt1 2.5%   royalty  5.0  fee 2.5  proceeds  92.5
+;;   S3 bob->carol   160.0  mkt2 5.0%   royalty  8.0  fee 8.0  proceeds 144.0
+;;   S4 carol->frank  80.0  mkt1 2.5%   royalty  4.0  fee 2.0  proceeds  74.0
+;;   S5 frank->gina  250.0  no fee      royalty 12.5  fee 0.0  proceeds 237.5
+;;   Cumulative royalty to alice: 29.5 == 5% x (100+160+80+250) == 5% x 590
+;; ===========================================================================
+
+(begin-tx "sale-only: chain-1 has NO non-paying exit")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
+(expect-failure "creator cannot even gift a sale-only token" "token is sale-only; use buy"
+  (free.royalty-sale.transfer "chain-1"
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+(rollback-tx)
+
+(begin-tx "S2: alice -> bob at 100.0 (mkt1 2.5%)")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
+(free.royalty-sale.list-token "chain-1" 100.0 coin
+  "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 250)
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 100.0)] } ])
+(free.royalty-sale.buy "chain-1"
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob"))
+(expect "hop 1: alice merged royalty(5)+proceeds(92.5): 49 + 97.5 = 146.5" 146.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "hop 1: mkt1 fee 2.5: 11 + 2.5 = 13.5" 13.5
+  (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(expect "hop 1: bob paid 100: 860.0" 860.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "hop 1: escrow -> 0" 0.0 (coin.get-balance (free.royalty-sale.get-escrow-account)))
+;; exact SOLD event: (id seller buyer price royalty fee)
+(let* ((sold (filter (lambda (e) (and (= "free.royalty-sale.SOLD" (at 'name e))
+                                      (= "chain-1" (at 0 (at 'params e)))))
+                     (env-events false)))
+       (last (at (- (length sold) 1) sold)))
+  (expect "hop 1 SOLD event carries the exact economics"
+    ["chain-1"
+     "k:1111111111111111111111111111111111111111111111111111111111111111"
+     "k:2222222222222222222222222222222222222222222222222222222222222222"
+     100.0 5.0 2.5]
+    (at 'params last)))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+(begin-tx "S3: bob -> carol at 160.0 (mkt2 5%) — royalty flows to ALICE, not bob")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
+(free.royalty-sale.list-token "chain-1" 160.0 coin
+  "k:8888888888888888888888888888888888888888888888888888888888888888" (read-keyset "mkt2") 500)
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                      (free.royalty-sale.get-escrow-account) 160.0)] } ])
+(free.royalty-sale.buy "chain-1"
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol"))
+(expect "hop 2: creator alice +8 royalty although bob sold: 154.5" 154.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "hop 2: seller bob nets price-royalty-fee = 144: 1004.0" 1004.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "hop 2: mkt2 fee 8: 18.0" 18.0
+  (coin.get-balance "k:8888888888888888888888888888888888888888888888888888888888888888"))
+(expect "hop 2: carol paid 160: 840.0" 840.0
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "hop 2: escrow -> 0" 0.0 (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+(begin-tx "S4: carol -> frank at 80.0 (mkt1 2.5%)")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
+(free.royalty-sale.list-token "chain-1" 80.0 coin
+  "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 250)
+(env-sigs [ { "key": "6666666666666666666666666666666666666666666666666666666666666666"
+            , "caps": [(coin.TRANSFER "k:6666666666666666666666666666666666666666666666666666666666666666"
+                                      (free.royalty-sale.get-escrow-account) 80.0)] } ])
+(free.royalty-sale.buy "chain-1"
+  "k:6666666666666666666666666666666666666666666666666666666666666666" (read-keyset "frank"))
+(expect "hop 3: alice +4 royalty: 158.5" 158.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "hop 3: seller carol nets 74: 914.0" 914.0
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "hop 3: mkt1 fee 2: 15.5" 15.5
+  (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(expect "hop 3: frank paid 80: 920.0" 920.0
+  (coin.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666"))
+(expect "hop 3: escrow -> 0" 0.0 (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+(begin-tx "S5: frank -> gina at 250.0 (no marketplace)")
+(env-sigs [ { "key": "6666666666666666666666666666666666666666666666666666666666666666", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
+(free.royalty-sale.list-token "chain-1" 250.0 coin "" (read-keyset "frank") 0)
+(env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
+            , "caps": [(coin.TRANSFER "k:7777777777777777777777777777777777777777777777777777777777777777"
+                                      (free.royalty-sale.get-escrow-account) 250.0)] } ])
+(free.royalty-sale.buy "chain-1"
+  "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset "gina"))
+(expect "hop 4: alice +12.5 royalty: 171.0" 171.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "hop 4: seller frank nets 237.5: 1157.5" 1157.5
+  (coin.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666"))
+(expect "hop 4: gina paid 250: 750.0" 750.0
+  (coin.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777"))
+(expect "hop 4: escrow -> 0" 0.0 (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+(begin-tx "RESALE-CHAIN TALLY: creator royalty == rate x SUM(prices), exactly")
+;; Reconstructed from the ingested SOLD events — the data an indexer would use.
+(let ((roy (sim-indexer.royalty-of "chain-1"))
+      (vol (sim-indexer.volume-of "chain-1")))
+  (expect "four hops sold" 4 (sim-indexer.sales-of "chain-1"))
+  (expect "chain volume is 590.0" 590.0 vol)
+  (expect "creator royalty accrued on EVERY hop: 29.5" 29.5 roy)
+  (expect "royalty == 5% x volume, to 12 dp" (floor (* 0.05 vol) 12) roy))
+;; alice's balance agrees: 10 start + 39 (S1) + 92.5 (S2 proceeds) + 29.5 royalty
+(expect "alice's on-ledger balance matches the tally: 171.0" 171.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 4 — FEE MERGES: marketplace==creator, then marketplace==seller
+;;   S6 gina -> bob at 60.0, marketplace = ALICE (creator) at 10%:
+;;      royalty 3 + fee 6 merge into ONE 9.0 payout to alice; gina +51.
+;;   S7 bob -> carol at 50.0, marketplace = BOB (seller) at 3%:
+;;      fee 1.5 + proceeds 46 merge into ONE 47.5 payout to bob; alice +2.5.
+;; ===========================================================================
+
+(begin-tx "S6: marketplace == creator (fee and royalty merge to alice)")
+(env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
+(free.royalty-sale.list-token "chain-1" 60.0 coin
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") 1000)
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 60.0)] } ])
+(free.royalty-sale.buy "chain-1"
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob"))
+(expect "alice got royalty 3 + fee 6 as ONE merged payout: 180.0" 180.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "gina nets 51: 801.0" 801.0
+  (coin.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777"))
+(expect "bob paid 60: 944.0" 944.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "escrow -> 0" 0.0 (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+(begin-tx "S7: marketplace == seller (fee and proceeds merge to bob)")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
+(free.royalty-sale.list-token "chain-1" 50.0 coin
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob") 300)
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                      (free.royalty-sale.get-escrow-account) 50.0)] } ])
+(free.royalty-sale.buy "chain-1"
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol"))
+(expect "bob got fee 1.5 + proceeds 46 as ONE merged payout: 991.5" 991.5
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "alice's royalty still lands: 182.5" 182.5
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "carol paid 50: 864.0" 864.0
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "escrow -> 0" 0.0 (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(expect "carol now owns chain-1" "k:3333333333333333333333333333333333333333333333333333333333333333"
+  (free.royalty-sale.owner-of "chain-1"))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+(begin-tx "sale-only STILL has no exit after six ownership changes")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
+(expect-failure "carol cannot gift chain-1 either" "token is sale-only; use buy"
+  (free.royalty-sale.transfer "chain-1"
+    "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset "eve")))
+(rollback-tx)
+
+;; ===========================================================================
+;; ACT 5 — MULTI-CURRENCY: full primary + secondary sale in currency #2
+;;   (the library token-fungible — a NON-coin fungible-v2)
+;;   T1 dana -> carol  500.0 token, mkt2 5%: royalty 12.5, fee 25, proceeds 462.5
+;;      (creator==seller merge: dana +475 in ONE payout)
+;;   T2 carol -> frank 200.0 token, no fee:  royalty 5 -> dana, proceeds 195
+;;   Royalty accrues in the LISTING currency — the marketplace is
+;;   currency-agnostic.
+;; ===========================================================================
+
+(begin-tx "T1: dana lists dna-tok at 500.0 TOKEN (mkt2 5%); carol buys with token")
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [(free.royalty-sale.OWNER "dna-tok")] } ])
+(free.royalty-sale.list-token "dna-tok" 500.0 token
+  "k:8888888888888888888888888888888888888888888888888888888888888888" (read-keyset "mkt2") 500)
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(token.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                       (free.royalty-sale.get-escrow-account) 500.0)] } ])
+(expect "T1 settles in the non-coin currency" "dna-tok"
+  (free.royalty-sale.buy "dna-tok"
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")))
+(expect "dana (creator==seller) merged payout in TOKEN: 475.0" 475.0
+  (token.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+(expect "mkt2 fee in TOKEN: 25.0" 25.0
+  (token.get-balance "k:8888888888888888888888888888888888888888888888888888888888888888"))
+(expect "carol paid 500 TOKEN: 500.0" 500.0
+  (token.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "token-side escrow settled to zero" 0.0
+  (token.get-balance (free.royalty-sale.get-escrow-account)))
+(expect "carol's COIN was untouched by the token sale: 864.0" 864.0
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+(begin-tx "T2: carol resells dna-tok at 200.0 TOKEN — dana's royalty accrues in token")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [(free.royalty-sale.OWNER "dna-tok")] } ])
+(free.royalty-sale.list-token "dna-tok" 200.0 token "" (read-keyset "carol") 0)
+(env-sigs [ { "key": "6666666666666666666666666666666666666666666666666666666666666666"
+            , "caps": [(token.TRANSFER "k:6666666666666666666666666666666666666666666666666666666666666666"
+                                       (free.royalty-sale.get-escrow-account) 200.0)] } ])
+(free.royalty-sale.buy "dna-tok"
+  "k:6666666666666666666666666666666666666666666666666666666666666666" (read-keyset "frank"))
+(expect "dana's secondary royalty in TOKEN (475 + 5): 480.0" 480.0
+  (token.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+(expect "carol nets 195 TOKEN: 695.0" 695.0
+  (token.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "frank paid 200 TOKEN: 100.0" 100.0
+  (token.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666"))
+(expect "token-side escrow -> 0" 0.0
+  (token.get-balance (free.royalty-sale.get-escrow-account)))
+(expect "frank owns dna-tok" "k:6666666666666666666666666666666666666666666666666666666666666666"
+  (free.royalty-sale.owner-of "dna-tok"))
+(sim-indexer.ingest (env-events false))
+;; the same 2.5% rate, enforced in whatever currency the listing chose
+(let ((roy (sim-indexer.royalty-of "dna-tok"))
+      (vol (sim-indexer.volume-of "dna-tok")))
+  (expect "dana's cumulative TOKEN royalty == 2.5% x 700 volume" (floor (* 0.025 vol) 12) roy)
+  (expect "which is 17.5 TOKEN" 17.5 roy))
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 6 — TRANSFERS & LIFECYCLE
+;;   gift-0 gifted alice -> carol -> dana (free, provenance events exact);
+;;   art-max: list -> delist -> (buy rejected) -> relist -> S8 dana buys at 30
+;;   with the 50%-MAX royalty: royalty 15 + proceeds 13.5 merge to alice (28.5),
+;;   mkt2 fee 1.5.
+;; ===========================================================================
+
+(begin-tx "gift chain: alice -> carol -> dana, events carry true provenance")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "gift-0")] } ])
+(free.royalty-sale.transfer "gift-0"
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol"))
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(free.royalty-sale.OWNER "gift-0")] } ])
+(free.royalty-sale.transfer "gift-0"
+  "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset "dana"))
+(expect "dana owns gift-0" "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  (free.royalty-sale.owner-of "gift-0"))
+(let ((moves (filter (lambda (e) (and (= "free.royalty-sale.TRANSFERRED" (at 'name e))
+                                      (= "gift-0" (at 0 (at 'params e)))))
+                     (env-events false))))
+  (expect "two TRANSFERRED events" 2 (length moves))
+  (expect "first hop: alice -> carol"
+    ["gift-0"
+     "k:1111111111111111111111111111111111111111111111111111111111111111"
+     "k:3333333333333333333333333333333333333333333333333333333333333333"]
+    (at 'params (at 0 moves)))
+  (expect "second hop: carol -> dana"
+    ["gift-0"
+     "k:3333333333333333333333333333333333333333333333333333333333333333"
+     "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    (at 'params (at 1 moves))))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+(begin-tx "art-max: list -> delist; a buy after delist must fail")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "art-max")] } ])
+(free.royalty-sale.list-token "art-max" 20.0 coin "" (read-keyset "alice") 0)
+(expect "listed" true (free.royalty-sale.is-listed "art-max"))
+(expect "delisted" "art-max" (free.royalty-sale.delist "art-max"))
+(expect "no longer listed" false (free.royalty-sale.is-listed "art-max"))
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            , "caps": [(coin.TRANSFER "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                      (free.royalty-sale.get-escrow-account) 20.0)] } ])
+(expect-failure "buy after delist rejected" "token is not listed for sale"
+  (free.royalty-sale.buy "art-max"
+    "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset "dana")))
+(commit-tx)
+
+(begin-tx "delist an inactive listing / a never-listed token")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "art-max"), (free.royalty-sale.OWNER "gift-0")] } ])
+(expect-failure "double delist rejected" "not listed"
+  (free.royalty-sale.delist "art-max"))
+(rollback-tx)
+
+(begin-tx "S8: relist art-max at 30.0 (mkt2 5%); dana buys at the 50%-MAX royalty")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "art-max")] } ])
+(free.royalty-sale.list-token "art-max" 30.0 coin
+  "k:8888888888888888888888888888888888888888888888888888888888888888" (read-keyset "mkt2") 500)
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            , "caps": [(coin.TRANSFER "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                      (free.royalty-sale.get-escrow-account) 30.0)] } ])
+(free.royalty-sale.buy "art-max"
+  "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (read-keyset "dana"))
+;; 50% royalty: 15.0; fee 5% = 1.5; proceeds 13.5. alice is creator AND seller.
+(expect "alice merged 15 + 13.5 = 28.5: 211.0" 211.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "mkt2 + 1.5: 19.5" 19.5
+  (coin.get-balance "k:8888888888888888888888888888888888888888888888888888888888888888"))
+(expect "dana paid 30 coin: 70.0" 70.0
+  (coin.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+(expect "escrow -> 0" 0.0 (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(expect "dana owns art-max" "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  (free.royalty-sale.owner-of "art-max"))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 7 — ADVERSARIAL SWEEP (against LIVE listings from the real flow)
+;; ===========================================================================
+
+(begin-tx "listing validation — fail closed")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "art-25")] } ])
+(expect-failure "zero price rejected" "price must be positive"
+  (free.royalty-sale.list-token "art-25" 0.0 coin "" (read-keyset "bob") 0))
+(expect-failure "negative price rejected" "price must be positive"
+  (free.royalty-sale.list-token "art-25" -5.0 coin "" (read-keyset "bob") 0))
+(expect-failure "over-precision price rejected (13 dp on a 12 dp currency)"
+  "amount violates currency precision"
+  (free.royalty-sale.list-token "art-25" 1.0000000000001 coin "" (read-keyset "bob") 0))
+(expect-failure "fee over 10% rejected" "marketplace-bps must be in [0, 1000]"
+  (free.royalty-sale.list-token "art-25" 10.0 coin
+    "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 1001))
+(expect-failure "negative fee rejected" "marketplace-bps must be in [0, 1000]"
+  (free.royalty-sale.list-token "art-25" 10.0 coin
+    "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") -1))
+(expect-failure "non-principal fee payee rejected" "marketplace must be a principal account"
+  (free.royalty-sale.list-token "art-25" 10.0 coin "mkt-vanity" (read-keyset "mkt1") 250))
+(rollback-tx)
+
+(begin-tx "non-owner cannot list / transfer someone else's token")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+            , "caps": [(free.royalty-sale.OWNER "art-25")] } ])
+(expect-failure "eve cannot list bob's art-25" "Keyset failure"
+  (free.royalty-sale.list-token "art-25" 1.0 coin "" (read-keyset "eve") 0))
+(expect-failure "eve cannot transfer bob's art-25" "Keyset failure"
+  (free.royalty-sale.transfer "art-25"
+    "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset "eve")))
+(rollback-tx)
+
+(begin-tx "buying an unlisted token fails on the missing listing row")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(expect-failure "gift-0 was never listed" "No value found"
+  (free.royalty-sale.buy "gift-0"
+    "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset "eve")))
+(rollback-tx)
+
+;; --- the front-run: seller changes the price after the buyer committed ----
+(begin-tx "bob lists fr-1 at 100.0 — a buyer will commit to THIS price")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "fr-1")] } ])
+(free.royalty-sale.list-token "fr-1" 100.0 coin "" (read-keyset "bob") 0)
+(commit-tx)
+
+(begin-tx "non-owner cannot delist a live listing")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+            , "caps": [(free.royalty-sale.OWNER "fr-1")] } ])
+(expect-failure "eve cannot delist bob's live fr-1 listing" "Keyset failure"
+  (free.royalty-sale.delist "fr-1"))
+(rollback-tx)
+
+(begin-tx "cannot free-transfer a LISTED token")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "fr-1")] } ])
+(expect-failure "listed fr-1 cannot be gifted out from under the listing"
+  "delist before transferring"
+  (free.royalty-sale.transfer "fr-1"
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")))
+(rollback-tx)
+
+(begin-tx "FRONT-RUN: bob repriced to 150 after carol signed for 100")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "fr-1")] } ])
+(free.royalty-sale.list-token "fr-1" 150.0 coin "" (read-keyset "bob") 0)
+(commit-tx)
+
+(begin-tx "carol's stale-price buy aborts — she can never pay more than she signed")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                      (free.royalty-sale.get-escrow-account) 100.0)] } ])
+(expect-failure "the repriced listing exceeds carol's signed cap" "TRANSFER exceeded"
+  (free.royalty-sale.buy "fr-1"
+    "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")))
+(expect "carol's balance untouched by the failed buy: 864.0" 864.0
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "bob still owns fr-1" "k:2222222222222222222222222222222222222222222222222222222222222222"
+  (free.royalty-sale.owner-of "fr-1"))
+(rollback-tx)
+
+;; --- escrow dust griefing --------------------------------------------------
+(begin-tx "eve donates dust straight to the shared escrow")
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+            , "caps": [(coin.TRANSFER "k:5555555555555555555555555555555555555555555555555555555555555555"
+                                      (free.royalty-sale.get-escrow-account) 0.000000000001)] } ])
+(coin.transfer-create "k:5555555555555555555555555555555555555555555555555555555555555555"
+  (free.royalty-sale.get-escrow-account) (free.royalty-sale.create-escrow-guard) 0.000000000001)
+(expect "escrow carries eve's dust" 0.000000000001
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(commit-tx)
+
+(begin-tx "S9: carol accepts the 150 price — sale settles OVER the dust")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                      (free.royalty-sale.get-escrow-account) 150.0)] } ])
+(free.royalty-sale.buy "fr-1"
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol"))
+;; fr-1 creator is ALICE (bob merely minted it): 2.5% of 150 = 3.75
+(expect "alice's royalty on bob's mint: 182.5 -> ... -> 214.75" 214.75
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "bob nets 146.25: 1137.75" 1137.75
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "carol paid 150: 714.0" 714.0
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "escrow returns to the DUST baseline, not zero — conservation held"
+  0.000000000001
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(expect "carol owns fr-1" "k:3333333333333333333333333333333333333333333333333333333333333333"
+  (free.royalty-sale.owner-of "fr-1"))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+;; --- wash trade: self-buy is legal but COSTS the royalty --------------------
+(begin-tx "S10: carol wash-trades fr-1 to herself — the royalty is unavoidable")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(free.royalty-sale.OWNER "fr-1")] } ])
+(free.royalty-sale.list-token "fr-1" 20.0 coin "" (read-keyset "carol") 0)
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                                      (free.royalty-sale.get-escrow-account) 20.0)] } ])
+(free.royalty-sale.buy "fr-1"
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol"))
+(expect "wash trade cost carol exactly the 0.5 royalty: 713.5" 713.5
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "the royalty went to the creator: 215.25" 215.25
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "carol still owns fr-1" "k:3333333333333333333333333333333333333333333333333333333333333333"
+  (free.royalty-sale.owner-of "fr-1"))
+(expect "escrow back at the dust baseline" 0.000000000001
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(sim-indexer.ingest (env-events false))
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 8 — GLOBAL ACCOUNTING & EVENT-LOG RECONSTRUCTION
+;;   10 coin sales: prices 40+100+160+80+250+60+50+30+150+20      = 940.0
+;;   royalties (all to alice)  1+5+8+4+12.5+3+2.5+15+3.75+0.5     =  55.25
+;;   fees 1+2.5+8+2+0+6+1.5+1.5+0+0                               =  22.5
+;;   proceeds                                                      = 862.25
+;;   2 token sales: prices 500+200 = 700; royalty 17.5; fee 25; proceeds 657.5
+;; ===========================================================================
+
+(begin-tx "exact final balance of EVERY participant (coin)")
+(expect "alice  (artist #1)   215.25" 215.25
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "bob    (collector A) 1137.75" 1137.75
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "carol  (collector B) 713.5" 713.5
+  (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "frank  (collector C) 1157.5" 1157.5
+  (coin.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666"))
+(expect "gina   (collector D) 801.0" 801.0
+  (coin.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777"))
+(expect "dana   (artist #2)   70.0" 70.0
+  (coin.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+(expect "mkt1   (fees 1+2.5+2) 15.5" 15.5
+  (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(expect "mkt2   (fees 8+1.5)  19.5" 19.5
+  (coin.get-balance "k:8888888888888888888888888888888888888888888888888888888888888888"))
+(expect "eve    (2 - dust)    1.999999999999" 1.999999999999
+  (coin.get-balance "k:5555555555555555555555555555555555555555555555555555555555555555"))
+(expect "escrow (eve's dust)  0.000000000001" 0.000000000001
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+;; GLOBAL CONSERVATION: the marketplace neither minted nor destroyed a single
+;; unit — every coin funded in ACT 0 is accounted for, to 12 dp.
+(let ((total (fold (+) 0.0
+        [ (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")
+        , (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222")
+        , (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333")
+        , (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444")
+        , (coin.get-balance "k:5555555555555555555555555555555555555555555555555555555555555555")
+        , (coin.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666")
+        , (coin.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777")
+        , (coin.get-balance "k:8888888888888888888888888888888888888888888888888888888888888888")
+        , (coin.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        , (coin.get-balance (free.royalty-sale.get-escrow-account)) ])))
+  (expect "GLOBAL COIN CONSERVATION: sum of all balances == 4132.0 funded" 4132.0 total))
+(commit-tx)
+
+(begin-tx "exact final balance of every participant (token / currency #2)")
+(expect "dana  480.0 (475 primary + 5 secondary royalty)" 480.0
+  (token.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+(expect "carol 695.0" 695.0
+  (token.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(expect "frank 100.0" 100.0
+  (token.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666"))
+(expect "mkt2  25.0" 25.0
+  (token.get-balance "k:8888888888888888888888888888888888888888888888888888888888888888"))
+(let ((total (fold (+) 0.0
+        [ (token.get-balance "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        , (token.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333")
+        , (token.get-balance "k:6666666666666666666666666666666666666666666666666666666666666666")
+        , (token.get-balance "k:8888888888888888888888888888888888888888888888888888888888888888")
+        , (token.get-balance (free.royalty-sale.get-escrow-account)) ])))
+  (expect "GLOBAL TOKEN CONSERVATION: sum == 1300.0 minted" 1300.0 total))
+(commit-tx)
+
+(begin-tx "event-log reconstruction matches on-chain state")
+;; Everything below is computed ONLY from the ingested SOLD / TRANSFERRED
+;; events (both carry the new owner at params index 2) — the exact data an
+;; off-chain indexer has — and must agree with the live tables.
+(let* ((sold (sim-indexer.all-sold))
+       (all (sim-indexer.all-moves)))
+  (expect "12 sales settled in the simulation" 12 (length sold))
+  (expect "2 free transfers" 2 (- (length all) (length sold)))
+  ;; ownership history replayed from events == live table state, per token
+  (expect "replayed owner of gift-0"  (free.royalty-sale.owner-of "gift-0")  (sim-indexer.last-owner "gift-0"))
+  (expect "replayed owner of art-25"  (free.royalty-sale.owner-of "art-25")  (sim-indexer.last-owner "art-25"))
+  (expect "replayed owner of chain-1" (free.royalty-sale.owner-of "chain-1") (sim-indexer.last-owner "chain-1"))
+  (expect "replayed owner of art-max" (free.royalty-sale.owner-of "art-max") (sim-indexer.last-owner "art-max"))
+  (expect "replayed owner of dna-tok" (free.royalty-sale.owner-of "dna-tok") (sim-indexer.last-owner "dna-tok"))
+  (expect "replayed owner of fr-1"    (free.royalty-sale.owner-of "fr-1")    (sim-indexer.last-owner "fr-1"))
+  ;; the creator's total accrual, reconstructed the way an indexer would:
+  (let* ((coin-sold (filter (lambda (m) (!= "dna-tok" (at 'token m))) sold))
+         (roy (fold (+) 0.0 (map (lambda (m) (at 'royalty m)) coin-sold)))
+         (fees (fold (+) 0.0 (map (lambda (m) (at 'fee m)) coin-sold)))
+         (vol (fold (+) 0.0 (map (lambda (m) (at 'price m)) coin-sold))))
+    (expect "coin-side volume from events: 940.0" 940.0 vol)
+    (expect "alice's royalty from events: 55.25 (she created every coin-side token)" 55.25 roy)
+    (expect "fees from events: 22.5" 22.5 fees)
+    ;; (no "royalty+fee+proceeds==price" assert here: proceeds is DEFINED as
+    ;; the difference — that identity is tautological (audit F7). The real
+    ;; conservation proof is the balance table + escrow baseline above.)
+    ;; the full-chain-1 lifetime tally (6 sales incl. the ACT-4 merges):
+    (expect "chain-1 lifetime: 6 sales" 6 (sim-indexer.sales-of "chain-1"))
+    (expect "chain-1 lifetime volume: 700.0" 700.0 (sim-indexer.volume-of "chain-1"))
+    (expect "chain-1 lifetime royalty == 5% x 700 == 35.0, exactly" 35.0
+      (sim-indexer.royalty-of "chain-1"))))
+(commit-tx)
+
+;; ===========================================================================
+;; ACT 9 — GAS under the table model, against the 150k KDA-CE ceiling.
+;;   Measured LAST, on a marketplace already carrying 7 tokens and 6 listing
+;;   rows. Devnet numbers (node-true) live in scripts/devnet-validate.
+;; ===========================================================================
+
+(env-gasmodel "table")
+(env-gaslimit 150000)
+
+(begin-tx "gas: mint")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.royalty-sale.MINT-AUTH (read-keyset "bob"))] } ])
+(env-gas 0)
+(free.royalty-sale.mint "gas-1"
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+  250 true "ipfs://gas-1")
+(let ((g (env-gas)))
+  (print (format "GAS mint: {}" [g]))
+  (expect "mint under the 150k ceiling" true (< g 150000)))
+(commit-tx)
+
+(begin-tx "gas: list-token")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(free.royalty-sale.OWNER "gas-1")] } ])
+(env-gas 0)
+(free.royalty-sale.list-token "gas-1" 60.0 coin
+  "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 250)
+(let ((g (env-gas)))
+  (print (format "GAS list-token: {}" [g]))
+  (expect "list-token under the 150k ceiling" true (< g 150000)))
+(commit-tx)
+
+(begin-tx "gas: buy (worst case — 3 distinct payouts: creator, marketplace, seller)")
+(env-sigs [ { "key": "6666666666666666666666666666666666666666666666666666666666666666"
+            , "caps": [(coin.TRANSFER "k:6666666666666666666666666666666666666666666666666666666666666666"
+                                      (free.royalty-sale.get-escrow-account) 60.0)] } ])
+(env-gas 0)
+(free.royalty-sale.buy "gas-1"
+  "k:6666666666666666666666666666666666666666666666666666666666666666" (read-keyset "frank"))
+(let ((g (env-gas)))
+  (print (format "GAS buy (3-way split): {}" [g]))
+  (expect "buy under the 150k ceiling" true (< g 150000)))
+;; even the gas probe conserves: escrow back to the ACT-7 dust baseline
+(expect "gas-act sale conserved over the dust baseline" 0.000000000001
+  (coin.get-balance (free.royalty-sale.get-escrow-account)))
+(commit-tx)
+
+(begin-tx "gas: transfer + delist")
+(env-sigs [ { "key": "6666666666666666666666666666666666666666666666666666666666666666"
+            , "caps": [(free.royalty-sale.OWNER "gas-1")] } ])
+(env-gas 0)
+(free.royalty-sale.transfer "gas-1"
+  "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset "gina"))
+(let ((g (env-gas)))
+  (print (format "GAS transfer: {}" [g]))
+  (expect "transfer under the 150k ceiling" true (< g 150000)))
+(env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
+            , "caps": [(free.royalty-sale.OWNER "gas-1")] } ])
+(free.royalty-sale.list-token "gas-1" 5.0 coin "" (read-keyset "gina") 0)
+(env-gas 0)
+(free.royalty-sale.delist "gas-1")
+(let ((g (env-gas)))
+  (print (format "GAS delist: {}" [g]))
+  (expect "delist under the 150k ceiling" true (< g 150000)))
+(commit-tx)
+
+(print "royalty-sale-market-sim: all acts settled, conserved, and reconstructed.")
