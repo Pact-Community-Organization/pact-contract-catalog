@@ -60,6 +60,8 @@
 (create-table nft.non-fungible-policy.minted-table)
 (load "../policies/guarded-uri-policy.pact")
 (create-table nft.guarded-uri-policy.uri-guards)
+(load "../policies/guard-policy.pact")
+(create-table nft.guard-policy.op-guards)
 (commit-tx)
 
 ;; --- token X: royalty (transferable) + 1/1 + guarded uri, created on chain 0 ---
@@ -273,6 +275,92 @@
       [{ "policy": "nft.royalty-policy", "state": { "bps": 0 } }]))
   (expect-failure "a policy's xchain hook is not directly callable" "not granted"
     (nft.royalty-policy.enforce-xchain-send fake "k:a" "k:b" (read-keyset 'alice) "1" 1.0)))
+(rollback-tx)
+
+;; ===========================================================================
+;; TRANSFER-GUARD PARITY — an x-chain ownership change is a free transfer in
+;; two hops: guard-policy's transfer-guard must authorize it exactly as it
+;; authorizes a same-chain transfer; a self-relocation changes no ownership
+;; and stays ungated
+;; ===========================================================================
+(begin-tx "create + mint token G (guard-policy, restricted transfer) on chain 0")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "operation_guards":
+      { "mint-guard":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+      , "burn-guard":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+      , "sale-guard":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+      , "transfer-guard": { "keys": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"], "pred": "keys-all" } } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://guarded" [nft.guard-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "an x-chain ownership change without the transfer-guard rejects")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "xc-guard-1"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  ;; alice (the OWNER) authorizes the debit, but the transfer-guard (dddd…)
+  ;; does not sign — the two-hop free transfer must fail like a same-chain one
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" "1" 1.0) ] } ])
+  (expect-failure "the transfer-guard gates an x-chain ownership change" "Keyset failure"
+    (nft.ledger.transfer-crosschain id
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      "k:2222222222222222222222222222222222222222222222222222222222222222"
+      (read-keyset 'bob) "1" 1.0)))
+(rollback-tx)
+
+(begin-tx "with the transfer-guard the x-chain ownership change proceeds")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "xc-guard-2"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" "1" 1.0) ] }
+            , { "key": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "caps": [] } ])
+  (expect "the transfer-guard authorizes the x-chain ownership change (step 0)" true
+    (nft.ledger.transfer-crosschain id
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      "k:2222222222222222222222222222222222222222222222222222222222222222"
+      (read-keyset 'bob) "1" 1.0)))
+(rollback-tx)
+
+(begin-tx "a self-relocation needs no transfer-guard (no ownership change)")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "xc-guard-3"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:1111111111111111111111111111111111111111111111111111111111111111" "1" 1.0) ] } ])
+  (expect "the owner relocates to themselves without the transfer-guard (step 0)" true
+    (nft.ledger.transfer-crosschain id
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'alice) "1" 1.0)))
 (rollback-tx)
 
 (print "")

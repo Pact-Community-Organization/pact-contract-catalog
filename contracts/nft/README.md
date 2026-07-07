@@ -43,8 +43,8 @@ proving-ground record.
 
 | Path | Contents |
 |---|---|
-| `interfaces/` | `token-policy` (the hook surface + payout schema), `poly-fungible` (the multi-token accounting standard), `ledger-iface` (the `-CALL` handshake), `sale` (price-discovery sale contracts), `updatable-uri-policy`, `account-protocols` |
-| `core/` | `ledger` (identity + balances + the offer/withdraw/buy sale defpact + policy-mediated `update-uri`), `policy-manager` (dispatch, the single conservation-asserted settlement, the governance-registered sale-contract whitelist, the updatable-uri handler registry) |
+| `interfaces/` | `token-policy` (the hook surface + payout schema + uri stance + the cross-chain passport hooks), `poly-fungible` (the multi-token accounting standard), `ledger-iface` (the `-CALL` handshake), `sale` (price-discovery sale contracts), `account-protocols` |
+| `core/` | `ledger` (identity + balances + the offer/withdraw/buy sale defpact + policy-mediated `update-uri` + the `transfer-crosschain` defpact), `policy-manager` (dispatch, the single conservation-asserted settlement, the governance-registered sale-contract whitelist, the attachment-authoritative uri-update routing) |
 | `policies/` | `royalty-policy`, `guard-policy`, `non-fungible-policy` (strict 1/1, minted once ever), `collection-policy`, `guarded-uri-policy` (guard-bound uri updates), `non-updatable-uri-policy` (unconditional uri veto) |
 | `sale/` | `conventional-auction` (escrowed ascending bids, increment-enforced outbidding with full refunds, winner-only settlement, grace-windowed withdrawal), `dutch-auction` (interval-stepped declining curve) |
 | `test/` | one adversarial suite per policy and per sale contract + `identity`, `settlement`, `composition`, `update-uri` (incl. the veto composition case), `xchain` (the passport mechanics) and `marketplace-sim` (create on chain 0 -> sell on marketplace A -> relocate to chain 1 -> auction on marketplace B, all legs reconciled) |

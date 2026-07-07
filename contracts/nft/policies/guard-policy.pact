@@ -129,7 +129,14 @@
   (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
-    (read op-guards (at 'id token)))
+    ;; a relocation that CHANGES the owner is a free transfer in two hops, so
+    ;; the transfer-guard must authorize it (same-chain parity); an owner
+    ;; relocating to themselves changes no ownership and stays ungated
+    (let ((gs:object{operation-guards} (read op-guards (at 'id token))))
+      (if (= sender receiver)
+        true
+        (enforce-guard (at 'transfer-guard gs)))
+      gs))
 
   (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object)
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
