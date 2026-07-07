@@ -136,6 +136,67 @@
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
+;; CANONICAL POLICY ORDER — the same policy SET derives the same id no matter
+;; the order passed (plain `sort` is a no-op on modrefs — the ledger
+;; canonicalizes by policy NAME), and a duplicate policy is rejected.
+;; ---------------------------------------------------------------------------
+(begin-tx "canonical policy order")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+;; alice signs (creation guard); the ns key signs (module deploys into `nft`)
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
+          , { "key": "9999999999999999999999999999999999999999999999999999999999999999", "caps": [] } ])
+(namespace "nft")
+;; two no-op fixture policies, names chosen to differ from creation order
+(module fixture-pol-b GOV
+  (defcap GOV () (enforce-keyset "nft.admin"))
+  (implements token-policy)
+  (use token-policy [token-info])
+  (defun enforce-init:bool (token:object{token-info}) true)
+  (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal) true)
+  (defun enforce-burn:bool (token:object{token-info} account:string amount:decimal) true)
+  (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-buy:bool (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) true)
+  (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true))
+(module fixture-pol-a GOV
+  (defcap GOV () (enforce-keyset "nft.admin"))
+  (implements token-policy)
+  (use token-policy [token-info])
+  (defun enforce-init:bool (token:object{token-info}) true)
+  (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal) true)
+  (defun enforce-burn:bool (token:object{token-info} account:string amount:decimal) true)
+  (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-buy:bool (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) true)
+  (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true))
+
+(expect "the id is order-independent (canonical policy order)"
+  (nft.ledger.create-token-id
+    { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-b] }
+    (read-keyset 'alice))
+  (nft.ledger.create-token-id
+    { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-b nft.fixture-pol-a] }
+    (read-keyset 'alice)))
+
+;; create with one order, id derived from the OTHER order — canonical end-to-end
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-b] }
+            (read-keyset 'alice))))
+  (expect "create-token accepts the id whichever order the list is passed in" true
+    (nft.ledger.create-token id 0 "ipfs://ordered"
+      [nft.fixture-pol-b nft.fixture-pol-a] (read-keyset 'alice))))
+
+(expect-failure "a duplicate policy in the list is rejected" "duplicate policy"
+  (let ((id (nft.ledger.create-token-id
+              { 'uri: "ipfs://dup", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-a] }
+              (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://dup"
+      [nft.fixture-pol-a nft.fixture-pol-a] (read-keyset 'alice))))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
 ;; THE HANDSHAKE — policy hooks cannot be invoked directly with fake token-info
 ;; ---------------------------------------------------------------------------
 (begin-tx "manager handshake")
