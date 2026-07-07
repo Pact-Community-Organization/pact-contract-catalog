@@ -365,8 +365,15 @@
   ;; The NFT escrows into the sale-account (a capability-pact-guarded principal)
   ;; at offer, and moves to the buyer at buy. The FUNGIBLE settlement (payment +
   ;; the conservation-asserted split) is the hardened policy-manager's job — this
-  ;; ledger only moves the token. Timeout is a unix-seconds deadline (0 = the
-  ;; seller may withdraw anytime; otherwise withdrawal is only after expiry).
+  ;; ledger only moves the token.
+  ;;
+  ;; TIMEOUT SEMANTICS (unix seconds): the timeout gates WITHDRAWAL, not buying.
+  ;;   * 0 — the seller may withdraw anytime (guard-checked);
+  ;;   * t>0 — the offer is withdraw-LOCKED until t; after t, ANYONE may trigger
+  ;;     the withdraw rollback (the token can only return to the seller).
+  ;; An offer that has not been withdrawn remains BUYABLE — also after t. A
+  ;; seller who no longer wants the quoted price must withdraw; a policy may
+  ;; impose stricter offer-expiry semantics via enforce-buy.
 
   (defpact sale:string (id:string seller:string amount:decimal timeout:integer)
     (step-with-rollback

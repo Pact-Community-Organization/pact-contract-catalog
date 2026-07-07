@@ -18,6 +18,18 @@
 ;;
 ;; Same-payee legs are merged (creator==seller, fee==seller, …) so a collision
 ;; can never brick a managed-transfer install.
+;;
+;; TRUST BOUNDARY — the quote's fungible: settlement necessarily executes the
+;; quote fungible's own code while the per-sale ESCROW capability is in scope.
+;; That capability is scoped to THIS sale-id (its escrow principal is
+;; sale-unique and holds only this sale's funds) and the conservation assert
+;; closes the ledger over exactly the quoted price — so a hostile fungible can
+;; only misbehave inside the sale its own participants opted into. Policy hooks
+;; run BEFORE the escrow capability is acquired, never inside it.
+;;
+;; Quote rows are permanent: a settled or withdrawn sale keeps its quote row
+;; (Pact has no row deletion; the one-shot sale defpact steps make replay
+;; impossible). Treat `quotes` as the immutable sale-economics history.
 
 (namespace (read-string 'ns))
 
@@ -119,7 +131,12 @@
     (map (lambda (p:module{token-policy}) (p::enforce-transfer token sender guard receiver amount)) (at 'policies token))
     true)
 
-  ;; --- OFFER: bind the quote in state, create the fungible escrow -------------
+  ;; --- OFFER: bind the quote in state --------------------------------------
+  ;; The fungible escrow account is NOT pre-created here: its principal + guard
+  ;; are publicly computable from the mempool-visible offer, so a pre-create
+  ;; could be front-run into a duplicate-insert abort of the seller's offer.
+  ;; The buy step's transfer-create creates the account (or enforces the guard
+  ;; of a pre-existing one) — same fail-closed guarantee, no grief surface.
   (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string)
     (let ((l:module{ledger-iface} (retrieve-ledger)))
       (require-capability (l::OFFER-CALL (at 'id token) seller amount timeout sale-id)))
@@ -132,9 +149,6 @@
         , 'seller-account: (at 'seller-account q), 'seller-guard: (at 'seller-guard q)
         , 'fee-account: (at 'fee-account q), 'fee-guard: (at 'fee-guard q)
         , 'fee-bps: (at 'fee-bps q) })
-      ;; create the fungible escrow principal for this sale
-      (let ((fungible:module{fungible-v2} (at 'fungible q)))
-        (fungible::create-account (escrow-account sale-id) (escrow-guard sale-id)))
       (emit-event (QUOTE sale-id (at 'id token) (at 'price q) (at 'fee-bps q))))
     ;; run policy enforce-offer hooks
     (map (lambda (p:module{token-policy}) (p::enforce-offer token seller amount timeout sale-id)) (at 'policies token))
