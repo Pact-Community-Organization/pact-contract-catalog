@@ -1,0 +1,213 @@
+;; Conformance suite — royalty-sale vs the Kadena NFT standard.
+;;
+;; Every operation goes through conformance-driver, which knows only
+;; module{nft-asset-v1} / module{nft-market-v1}. royalty-sale is named exactly
+;; ONCE per driver call (as the modref argument) and NOWHERE else — the
+;; assertions never touch a royalty-sale-specific function. If this suite
+;; passes, royalty-sale's surface is polymorphically usable through the
+;; standard, which is the whole point.
+;;
+;; Scope: the REPL-observable S-clauses (S1 fail-closed, S2 conservation /
+;; dust-floor, S3 economics-from-state, S4 sale-only). Cross-chain (S5/S6) is
+;; not applicable — royalty-sale does not implement nft-xchain-v1.
+;;
+;; Run: pact contracts/standards/conformance/royalty-sale-conformance.repl
+
+;; --- dependencies ----------------------------------------------------------
+(begin-tx "coin + interfaces + driver")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(load "../nft-asset-v1.pact")
+(load "../nft-market-v1.pact")
+(env-data { "cg": { "keys": ["ck"], "pred": "keys-all" } })
+(define-keyset "conformance-gov" (read-keyset "cg"))
+(load "conformance-driver.pact")
+(commit-tx)
+
+;; --- personas --------------------------------------------------------------
+;; k: principals require the account name to equal the single 64-char key.
+(begin-tx "keysets + funding")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "gov":   { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob") 1000.0)
+(test-capability (coin.CREDIT "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(coin.credit "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol") 1000.0)
+(commit-tx)
+
+;; --- deploy the CANDIDATE (named here, and only here) ----------------------
+(begin-tx "deploy candidate: royalty-sale")
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "free" (read-keyset "gov") (read-keyset "gov"))
+(namespace "free")
+(define-keyset "free.royalty-sale-gov" (read-keyset "gov"))
+(load "../../library/royalty-sale/royalty-sale.pact")
+(create-table free.royalty-sale.tokens)
+(create-table free.royalty-sale.listings)
+(commit-tx)
+
+;; From here the candidate is referenced ONLY as `free.royalty-sale` passed to
+;; the driver. To retarget this suite at another implementation, change the two
+;; lines above and the modref below — nothing else.
+
+;; ===========================================================================
+;; ASSET SURFACE (nft-asset-v1)
+;; ===========================================================================
+
+;; S1 — mint fails closed on a non-principal owner (through the modref)
+(begin-tx "S1: non-principal owner rejected")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect-failure "non-principal owner rejected at mint"
+  "owner must be a principal"
+  (conformance-driver.d-mint free.royalty-sale
+    "c-bad" "alice-not-a-principal" (read-keyset "alice")
+    "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") 500 true "ipfs://x"))
+(rollback-tx)
+
+;; mint two tokens through the driver: a sale-only (royalty 5%) and a transferable.
+;; MINT-AUTH requires each minter to control the OWNER guard, so both alice (c-so
+;; owner) and bob (c-tr owner) sign this tx.
+(begin-tx "mint via driver")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
+          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect "mint sale-only returns id" "c-so"
+  (conformance-driver.d-mint free.royalty-sale
+    "c-so" "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    500 false "ipfs://so"))
+(expect "mint transferable returns id" "c-tr"
+  (conformance-driver.d-mint free.royalty-sale
+    "c-tr" "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob") "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+    250 true "ipfs://tr"))
+(commit-tx)
+
+;; views project the interface schema
+(begin-tx "asset views through the modref")
+(expect "owner-of (modref) = alice" "k:1111111111111111111111111111111111111111111111111111111111111111" (conformance-driver.d-owner-of free.royalty-sale "c-so"))
+(expect "royalty-bps projected via get-token" 500 (conformance-driver.d-royalty-bps free.royalty-sale "c-so"))
+(expect "transferable projected via get-token" false (conformance-driver.d-transferable free.royalty-sale "c-so"))
+(expect "is-listed total on unlisted token" false (conformance-driver.d-is-listed free.royalty-sale "c-so"))
+;; get-token returns exactly the interface's token schema (5 named fields we probe)
+(let ((tk (conformance-driver.d-get-token free.royalty-sale "c-tr")))
+  (expect "get-token owner" "k:2222222222222222222222222222222222222222222222222222222222222222" (at 'owner tk))
+  (expect "get-token creator" "k:1111111111111111111111111111111111111111111111111111111111111111" (at 'creator tk))
+  (expect "get-token royalty" 250 (at 'royalty-bps tk))
+  (expect "get-token uri" "ipfs://tr" (at 'uri tk)))
+(commit-tx)
+
+;; S4 — sale-only token rejects free transfer (through the modref)
+(begin-tx "S4: sale-only rejects transfer")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.OWNER "c-so")] } ])
+(expect-failure "sale-only token cannot be free-transferred"
+  "token is sale-only"
+  (conformance-driver.d-transfer free.royalty-sale "c-so" "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")))
+(rollback-tx)
+
+;; transferable token CAN be gifted through the modref
+(begin-tx "transferable gift via modref")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.royalty-sale.OWNER "c-tr")] } ])
+(expect "gift returns id" "c-tr"
+  (conformance-driver.d-transfer free.royalty-sale "c-tr" "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")))
+(expect "carol now owns c-tr" "k:3333333333333333333333333333333333333333333333333333333333333333" (conformance-driver.d-owner-of free.royalty-sale "c-tr"))
+(commit-tx)
+
+;; ===========================================================================
+;; MARKET SURFACE (nft-market-v1)
+;; ===========================================================================
+
+;; S2 — a royalty-bearing token cannot be listed at a dust price (royalty floors
+;; to zero). c-so has 5% royalty; a price of 0.00000000001 floors royalty to 0.
+(begin-tx "S2: dust-price listing rejected")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.OWNER "c-so")] } ])
+(expect-failure "dust price whose royalty floors to zero is rejected"
+  "royalty"
+  (conformance-driver.d-list free.royalty-sale "c-so" 0.00000000001 coin))
+(rollback-tx)
+
+;; list c-so via the STANDARD 3-arg list-token (no marketplace fee)
+(begin-tx "list c-so (standard, fee-free) via modref")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.OWNER "c-so")] } ])
+(expect "standard list returns id" "c-so"
+  (conformance-driver.d-list free.royalty-sale "c-so" 100.0 coin))
+(expect "is-listed true after list" true (conformance-driver.d-is-listed free.royalty-sale "c-so"))
+;; listing projects the 5-field interface schema
+(let ((lst (conformance-driver.d-get-listing free.royalty-sale "c-so")))
+  (expect "listing price" 100.0 (at 'price lst))
+  (expect "listing fee-bps 0 (standard fee-free)" 0 (at 'fee-bps lst))
+  (expect "listing active" true (at 'active lst))
+  (expect "listing seller" "k:1111111111111111111111111111111111111111111111111111111111111111" (at 'seller lst)))
+(expect "escrow account is published" true
+  (> (length (conformance-driver.d-escrow free.royalty-sale)) 0))
+(commit-tx)
+
+;; S3 + S2 — buy through the modref: economics come from state, escrow conserves.
+;; c-so: price 100, royalty 5% = 5 to alice(creator), no fee, 95 to alice(seller).
+;; creator == seller (both alice) so payouts merge; alice nets +100 - the coin
+;; she doesn't pay (she's not the buyer). bob is the buyer.
+(begin-tx "S3: buy reads economics from state (modref)")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                (conformance-driver.d-escrow free.royalty-sale) 100.0)] } ])
+;; alice has no coin account before the sale (she was never funded) — her
+;; account is created by the payout, so baseline is 0.
+(expect "buy via modref returns id" "c-so"
+  (conformance-driver.d-buy free.royalty-sale "c-so" "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob")))
+(expect "bob owns c-so after buy" "k:2222222222222222222222222222222222222222222222222222222222222222" (conformance-driver.d-owner-of free.royalty-sale "c-so"))
+(expect "is-listed false after sale" false (conformance-driver.d-is-listed free.royalty-sale "c-so"))
+;; alice was creator AND seller: she receives royalty(5) + proceeds(95) = 100
+(expect "seller+creator (alice) received the full price" 100.0
+  (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+;; escrow returned to baseline (0) — conservation, asserted inside buy too
+(expect "escrow empty after settlement" 0.0
+  (coin.get-balance (conformance-driver.d-escrow free.royalty-sale)))
+(commit-tx)
+
+;; ===========================================================================
+;; S3 ADVERSARIAL — economics MUST come from state, NEVER the buy transaction.
+;;   A signature cannot forbid a (read-msg) inside buy; the HARNESS must. We
+;;   drive buy with a malicious env-data payload of economic overrides (a fee,
+;;   a higher royalty, a lower price) that a cheating-but-conforming impl might
+;;   honor, and assert the split is the STATE-derived one. A conforming impl
+;;   ignores the payload entirely.
+;; ===========================================================================
+(begin-tx "mint + list c-s3 (10% royalty to carol, price 200)")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(conformance-driver.d-mint free.royalty-sale
+  "c-s3" "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")
+  "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")
+  1000 true "ipfs://s3")
+(commit-tx)
+(begin-tx "carol lists c-s3 at 200, fee-free")
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [(free.royalty-sale.OWNER "c-s3")] } ])
+(conformance-driver.d-list free.royalty-sale "c-s3" 200.0 coin)
+(commit-tx)
+
+(begin-tx "S3-ADV: buy c-s3 with a MALICIOUS economic override payload")
+;; the buyer (bob) injects bogus economics into the tx. A state-honoring impl
+;; ignores every one of these keys.
+(env-data
+  { "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  ;; --- the attack surface: overrides a cheating impl might read from the tx ---
+  , "fee": 0.0, "marketplace_fee": 0.0, "marketplace-bps": 0
+  , "royalty-bps": 0, "royalty": 0.0, "price": 1.0
+  , "marketplace": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                (conformance-driver.d-escrow free.royalty-sale) 200.0)] } ])
+(let ((carol-before (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333")))
+  (conformance-driver.d-buy free.royalty-sale "c-s3" "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob"))
+  ;; carol is creator+seller: STATE says royalty 10% of 200 = 20, proceeds 180,
+  ;; total 200. If the impl had honored the payload (royalty 0, price 1) she'd
+  ;; net far less. The full 200 proves economics came from STATE.
+  (expect "S3: payout is the STATE-derived 200 (tx economic overrides ignored)" 200.0
+    (- (coin.get-balance "k:3333333333333333333333333333333333333333333333333333333333333333") carol-before)))
+(expect "S3: escrow still conserves under the adversarial payload" 0.0
+  (coin.get-balance (conformance-driver.d-escrow free.royalty-sale)))
+(commit-tx)
+
+(print "")
+(print "=== ROYALTY-SALE CONFORMANCE: nft-asset-v1 + nft-market-v1 — PASS ===")
+(print "    (every call dispatched through a module{nft-*-v1} reference)")

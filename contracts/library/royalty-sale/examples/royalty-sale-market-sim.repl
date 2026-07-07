@@ -97,6 +97,11 @@
 (token.mint "k:6666666666666666666666666666666666666666666666666666666666666666" (read-keyset "frank") 300.0)
 (commit-tx)
 
+(begin-tx "load NFT standard interfaces")
+(load "../../../standards/nft-asset-v1.pact")
+(load "../../../standards/nft-market-v1.pact")
+(commit-tx)
+
 (begin-tx "deploy royalty-sale")
 (env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
 (define-namespace "free" (read-keyset "gov") (read-keyset "gov"))
@@ -242,7 +247,7 @@
 
 (begin-tx "S1 list: alice lists art-25 at 40.0, mkt1 fee 2.5%")
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.OWNER "art-25")] } ])
-(free.royalty-sale.list-token "art-25" 40.0 coin
+(free.royalty-sale.list-token-with-fee "art-25" 40.0 coin
   "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 250)
 (expect "art-25 listed" true (free.royalty-sale.is-listed "art-25"))
 (commit-tx)
@@ -330,7 +335,7 @@
 
 (begin-tx "S2: alice -> bob at 100.0 (mkt1 2.5%)")
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
-(free.royalty-sale.list-token "chain-1" 100.0 coin
+(free.royalty-sale.list-token-with-fee "chain-1" 100.0 coin
   "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 250)
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
@@ -360,7 +365,7 @@
 
 (begin-tx "S3: bob -> carol at 160.0 (mkt2 5%) — royalty flows to ALICE, not bob")
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
-(free.royalty-sale.list-token "chain-1" 160.0 coin
+(free.royalty-sale.list-token-with-fee "chain-1" 160.0 coin
   "k:8888888888888888888888888888888888888888888888888888888888888888" (read-keyset "mkt2") 500)
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
             , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
@@ -381,7 +386,7 @@
 
 (begin-tx "S4: carol -> frank at 80.0 (mkt1 2.5%)")
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
-(free.royalty-sale.list-token "chain-1" 80.0 coin
+(free.royalty-sale.list-token-with-fee "chain-1" 80.0 coin
   "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 250)
 (env-sigs [ { "key": "6666666666666666666666666666666666666666666666666666666666666666"
             , "caps": [(coin.TRANSFER "k:6666666666666666666666666666666666666666666666666666666666666666"
@@ -402,7 +407,7 @@
 
 (begin-tx "S5: frank -> gina at 250.0 (no marketplace)")
 (env-sigs [ { "key": "6666666666666666666666666666666666666666666666666666666666666666", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
-(free.royalty-sale.list-token "chain-1" 250.0 coin "" (read-keyset "frank") 0)
+(free.royalty-sale.list-token-with-fee "chain-1" 250.0 coin "" (read-keyset "frank") 0)
 (env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
             , "caps": [(coin.TRANSFER "k:7777777777777777777777777777777777777777777777777777777777777777"
                                       (free.royalty-sale.get-escrow-account) 250.0)] } ])
@@ -441,7 +446,7 @@
 
 (begin-tx "S6: marketplace == creator (fee and royalty merge to alice)")
 (env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
-(free.royalty-sale.list-token "chain-1" 60.0 coin
+(free.royalty-sale.list-token-with-fee "chain-1" 60.0 coin
   "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice") 1000)
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
@@ -460,7 +465,7 @@
 
 (begin-tx "S7: marketplace == seller (fee and proceeds merge to bob)")
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [(free.royalty-sale.OWNER "chain-1")] } ])
-(free.royalty-sale.list-token "chain-1" 50.0 coin
+(free.royalty-sale.list-token-with-fee "chain-1" 50.0 coin
   "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob") 300)
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
             , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
@@ -499,7 +504,7 @@
 
 (begin-tx "T1: dana lists dna-tok at 500.0 TOKEN (mkt2 5%); carol buys with token")
 (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [(free.royalty-sale.OWNER "dna-tok")] } ])
-(free.royalty-sale.list-token "dna-tok" 500.0 token
+(free.royalty-sale.list-token-with-fee "dna-tok" 500.0 token
   "k:8888888888888888888888888888888888888888888888888888888888888888" (read-keyset "mkt2") 500)
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
             , "caps": [(token.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
@@ -522,7 +527,7 @@
 
 (begin-tx "T2: carol resells dna-tok at 200.0 TOKEN — dana's royalty accrues in token")
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [(free.royalty-sale.OWNER "dna-tok")] } ])
-(free.royalty-sale.list-token "dna-tok" 200.0 token "" (read-keyset "carol") 0)
+(free.royalty-sale.list-token-with-fee "dna-tok" 200.0 token "" (read-keyset "carol") 0)
 (env-sigs [ { "key": "6666666666666666666666666666666666666666666666666666666666666666"
             , "caps": [(token.TRANSFER "k:6666666666666666666666666666666666666666666666666666666666666666"
                                        (free.royalty-sale.get-escrow-account) 200.0)] } ])
@@ -585,7 +590,7 @@
 (begin-tx "art-max: list -> delist; a buy after delist must fail")
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
             , "caps": [(free.royalty-sale.OWNER "art-max")] } ])
-(free.royalty-sale.list-token "art-max" 20.0 coin "" (read-keyset "alice") 0)
+(free.royalty-sale.list-token-with-fee "art-max" 20.0 coin "" (read-keyset "alice") 0)
 (expect "listed" true (free.royalty-sale.is-listed "art-max"))
 (expect "delisted" "art-max" (free.royalty-sale.delist "art-max"))
 (expect "no longer listed" false (free.royalty-sale.is-listed "art-max"))
@@ -607,7 +612,7 @@
 (begin-tx "S8: relist art-max at 30.0 (mkt2 5%); dana buys at the 50%-MAX royalty")
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
             , "caps": [(free.royalty-sale.OWNER "art-max")] } ])
-(free.royalty-sale.list-token "art-max" 30.0 coin
+(free.royalty-sale.list-token-with-fee "art-max" 30.0 coin
   "k:8888888888888888888888888888888888888888888888888888888888888888" (read-keyset "mkt2") 500)
 (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             , "caps": [(coin.TRANSFER "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -635,27 +640,27 @@
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(free.royalty-sale.OWNER "art-25")] } ])
 (expect-failure "zero price rejected" "price must be positive"
-  (free.royalty-sale.list-token "art-25" 0.0 coin "" (read-keyset "bob") 0))
+  (free.royalty-sale.list-token-with-fee "art-25" 0.0 coin "" (read-keyset "bob") 0))
 (expect-failure "negative price rejected" "price must be positive"
-  (free.royalty-sale.list-token "art-25" -5.0 coin "" (read-keyset "bob") 0))
+  (free.royalty-sale.list-token-with-fee "art-25" -5.0 coin "" (read-keyset "bob") 0))
 (expect-failure "over-precision price rejected (13 dp on a 12 dp currency)"
   "amount violates currency precision"
-  (free.royalty-sale.list-token "art-25" 1.0000000000001 coin "" (read-keyset "bob") 0))
+  (free.royalty-sale.list-token-with-fee "art-25" 1.0000000000001 coin "" (read-keyset "bob") 0))
 (expect-failure "fee over 10% rejected" "marketplace-bps must be in [0, 1000]"
-  (free.royalty-sale.list-token "art-25" 10.0 coin
+  (free.royalty-sale.list-token-with-fee "art-25" 10.0 coin
     "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 1001))
 (expect-failure "negative fee rejected" "marketplace-bps must be in [0, 1000]"
-  (free.royalty-sale.list-token "art-25" 10.0 coin
+  (free.royalty-sale.list-token-with-fee "art-25" 10.0 coin
     "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") -1))
 (expect-failure "non-principal fee payee rejected" "marketplace must be a principal account"
-  (free.royalty-sale.list-token "art-25" 10.0 coin "mkt-vanity" (read-keyset "mkt1") 250))
+  (free.royalty-sale.list-token-with-fee "art-25" 10.0 coin "mkt-vanity" (read-keyset "mkt1") 250))
 (rollback-tx)
 
 (begin-tx "non-owner cannot list / transfer someone else's token")
 (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
             , "caps": [(free.royalty-sale.OWNER "art-25")] } ])
 (expect-failure "eve cannot list bob's art-25" "Keyset failure"
-  (free.royalty-sale.list-token "art-25" 1.0 coin "" (read-keyset "eve") 0))
+  (free.royalty-sale.list-token-with-fee "art-25" 1.0 coin "" (read-keyset "eve") 0))
 (expect-failure "eve cannot transfer bob's art-25" "Keyset failure"
   (free.royalty-sale.transfer "art-25"
     "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset "eve")))
@@ -672,7 +677,7 @@
 (begin-tx "bob lists fr-1 at 100.0 — a buyer will commit to THIS price")
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(free.royalty-sale.OWNER "fr-1")] } ])
-(free.royalty-sale.list-token "fr-1" 100.0 coin "" (read-keyset "bob") 0)
+(free.royalty-sale.list-token-with-fee "fr-1" 100.0 coin "" (read-keyset "bob") 0)
 (commit-tx)
 
 (begin-tx "non-owner cannot delist a live listing")
@@ -694,7 +699,7 @@
 (begin-tx "FRONT-RUN: bob repriced to 150 after carol signed for 100")
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(free.royalty-sale.OWNER "fr-1")] } ])
-(free.royalty-sale.list-token "fr-1" 150.0 coin "" (read-keyset "bob") 0)
+(free.royalty-sale.list-token-with-fee "fr-1" 150.0 coin "" (read-keyset "bob") 0)
 (commit-tx)
 
 (begin-tx "carol's stale-price buy aborts — she can never pay more than she signed")
@@ -746,7 +751,7 @@
 (begin-tx "S10: carol wash-trades fr-1 to herself — the royalty is unavoidable")
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
             , "caps": [(free.royalty-sale.OWNER "fr-1")] } ])
-(free.royalty-sale.list-token "fr-1" 20.0 coin "" (read-keyset "carol") 0)
+(free.royalty-sale.list-token-with-fee "fr-1" 20.0 coin "" (read-keyset "carol") 0)
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
             , "caps": [(coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
                                       (free.royalty-sale.get-escrow-account) 20.0)] } ])
@@ -885,7 +890,7 @@
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(free.royalty-sale.OWNER "gas-1")] } ])
 (env-gas 0)
-(free.royalty-sale.list-token "gas-1" 60.0 coin
+(free.royalty-sale.list-token-with-fee "gas-1" 60.0 coin
   "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt1") 250)
 (let ((g (env-gas)))
   (print (format "GAS list-token: {}" [g]))
@@ -918,7 +923,7 @@
   (expect "transfer under the 150k ceiling" true (< g 150000)))
 (env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
             , "caps": [(free.royalty-sale.OWNER "gas-1")] } ])
-(free.royalty-sale.list-token "gas-1" 5.0 coin "" (read-keyset "gina") 0)
+(free.royalty-sale.list-token-with-fee "gas-1" 5.0 coin "" (read-keyset "gina") 0)
 (env-gas 0)
 (free.royalty-sale.delist "gas-1")
 (let ((g (env-gas)))

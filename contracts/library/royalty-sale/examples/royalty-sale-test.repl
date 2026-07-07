@@ -35,6 +35,12 @@
 (coin.credit "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol") 1000.0)
 (commit-tx)
 
+;; NFT standard interfaces (royalty-sale implements nft-asset-v1 + nft-market-v1)
+(begin-tx "load NFT standard interfaces")
+(load "../../../standards/nft-asset-v1.pact")
+(load "../../../standards/nft-market-v1.pact")
+(commit-tx)
+
 (begin-tx "load royalty-sale")
 (env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
 (define-namespace "free" (read-keyset "gov") (read-keyset "gov"))
@@ -124,19 +130,19 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
             , "caps": [(free.royalty-sale.OWNER "t-so")] } ])
 (expect-failure "zero price rejected" "price must be positive"
-  (free.royalty-sale.list-token "t-so" 0.0 coin "" (read-keyset "alice") 0))
+  (free.royalty-sale.list-token-with-fee "t-so" 0.0 coin "" (read-keyset "alice") 0))
 (expect-failure "fee over 10% rejected" "marketplace-bps must be in [0, 1000]"
-  (free.royalty-sale.list-token "t-so" 100.0 coin
+  (free.royalty-sale.list-token-with-fee "t-so" 100.0 coin
     "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt") 2000))
 (expect-failure "non-principal marketplace with a fee rejected" "marketplace must be a principal account"
-  (free.royalty-sale.list-token "t-so" 100.0 coin "mkt-vanity" (read-keyset "mkt") 250))
+  (free.royalty-sale.list-token-with-fee "t-so" 100.0 coin "mkt-vanity" (read-keyset "mkt") 250))
 (rollback-tx)
 
 (begin-tx "non-owner cannot list")
 (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
             , "caps": [(free.royalty-sale.OWNER "t-so")] } ])
 (expect-failure "stranger cannot list someone's token" "Keyset failure"
-  (free.royalty-sale.list-token "t-so" 100.0 coin "" (read-keyset "alice") 0))
+  (free.royalty-sale.list-token-with-fee "t-so" 100.0 coin "" (read-keyset "alice") 0))
 (rollback-tx)
 
 ;; ===========================================================================
@@ -148,7 +154,7 @@
 (begin-tx "bob lists t-tr at 100, 2.5% marketplace fee")
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(free.royalty-sale.OWNER "t-tr")] } ])
-(free.royalty-sale.list-token "t-tr" 100.0 coin
+(free.royalty-sale.list-token-with-fee "t-tr" 100.0 coin
   "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt") 250)
 (expect "listed" true (free.royalty-sale.is-listed "t-tr"))
 (commit-tx)
@@ -202,7 +208,7 @@
   1000 true "ipfs://primary")
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
             , "caps": [(free.royalty-sale.OWNER "t-p")] } ])
-(free.royalty-sale.list-token "t-p" 50.0 coin "" (read-keyset "alice") 0)
+(free.royalty-sale.list-token-with-fee "t-p" 50.0 coin "" (read-keyset "alice") 0)
 (commit-tx)
 
 (begin-tx "bob buys alice's primary listing — creator==seller merges cleanly")
@@ -235,7 +241,7 @@
   0 true "ipfs://dust")
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
             , "caps": [(free.royalty-sale.OWNER "t-d")] } ])
-(free.royalty-sale.list-token "t-d" 10.000000000001 coin
+(free.royalty-sale.list-token-with-fee "t-d" 10.000000000001 coin
   "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset "mkt") 333)
 (commit-tx)
 
@@ -270,7 +276,7 @@
 (begin-tx "list then delist; buy rejected after delist")
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
             , "caps": [(free.royalty-sale.OWNER "t-so")] } ])
-(free.royalty-sale.list-token "t-so" 100.0 coin "" (read-keyset "alice") 0)
+(free.royalty-sale.list-token-with-fee "t-so" 100.0 coin "" (read-keyset "alice") 0)
 (expect "delisted" "t-so" (free.royalty-sale.delist "t-so"))
 (expect "no longer listed" false (free.royalty-sale.is-listed "t-so"))
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
@@ -288,7 +294,7 @@
 (begin-tx "sale-only token sells only via buy (royalty always paid)")
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
             , "caps": [(free.royalty-sale.OWNER "t-so")] } ])
-(free.royalty-sale.list-token "t-so" 200.0 coin "" (read-keyset "alice") 0)
+(free.royalty-sale.list-token-with-fee "t-so" 200.0 coin "" (read-keyset "alice") 0)
 (commit-tx)
 
 (begin-tx "carol buys the sale-only token; alice's 5% royalty is unavoidable")
@@ -337,7 +343,7 @@
 (begin-tx "cannot free-transfer a listed token")
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
-(free.royalty-sale.list-token "t-prov" 10.0 coin "" (read-keyset "bob") 0)
+(free.royalty-sale.list-token-with-fee "t-prov" 10.0 coin "" (read-keyset "bob") 0)
 (expect-failure "listed token cannot be gifted" "delist before transferring"
   (free.royalty-sale.transfer "t-prov"
     "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol")))
@@ -346,7 +352,7 @@
 (begin-tx "non-owner cannot delist")
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
-(free.royalty-sale.list-token "t-prov" 10.0 coin "" (read-keyset "bob") 0)
+(free.royalty-sale.list-token-with-fee "t-prov" 10.0 coin "" (read-keyset "bob") 0)
 (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
             , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
 (expect-failure "stranger cannot delist someone's listing" "Keyset failure"
@@ -364,7 +370,7 @@
 (begin-tx "marketplace == seller merge")
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
             , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
-(free.royalty-sale.list-token "t-prov" 100.0 coin
+(free.royalty-sale.list-token-with-fee "t-prov" 100.0 coin
   "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob") 300)
 (commit-tx)
 
@@ -402,7 +408,7 @@
 (begin-tx "carol lists t-prov, alice buys; sale conserves despite the dust")
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
             , "caps": [(free.royalty-sale.OWNER "t-prov")] } ])
-(free.royalty-sale.list-token "t-prov" 20.0 coin "" (read-keyset "carol") 0)
+(free.royalty-sale.list-token-with-fee "t-prov" 20.0 coin "" (read-keyset "carol") 0)
 (commit-tx)
 
 (begin-tx "buy over a dust-carrying escrow")
@@ -416,4 +422,46 @@
   (coin.get-balance (free.royalty-sale.get-escrow-account)))
 (expect "bob owns t-prov after buying over dust" "k:2222222222222222222222222222222222222222222222222222222222222222"
   (free.royalty-sale.owner-of "t-prov"))
+(commit-tx)
+
+;; ===========================================================================
+;; STANDARD SURFACE — the 3-arg nft-market-v1.list-token (no marketplace fee)
+;;   Proves the interface entry point works and get-listing projects onto the
+;;   5-field nft-market-v1.listing (fee-bps 0), independent of the richer
+;;   list-token-with-fee extension exercised above.
+;; ===========================================================================
+(begin-tx "mint t-std to alice (2% royalty to alice)")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [] } ])
+(free.royalty-sale.mint "t-std"
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+  "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset "alice")
+  200 true "ipfs://std")
+(commit-tx)
+
+(begin-tx "alice lists t-std via the STANDARD 3-arg list-token")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [(free.royalty-sale.OWNER "t-std")] } ])
+(free.royalty-sale.list-token "t-std" 100.0 coin)
+(expect "standard listing is active" true (free.royalty-sale.is-listed "t-std"))
+(let ((l (free.royalty-sale.get-listing "t-std")))
+  (expect "projected listing has no fee (fee-bps 0)" 0 (at 'fee-bps l))
+  (expect "projected listing price" 100.0 (at 'price l))
+  (expect "projected listing seller is alice" "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (at 'seller l))
+  (expect "projected listing active" true (at 'active l))
+  ;; the 5-field interface projection carries no marketplace payee/guard —
+  ;; those stay private to the module (accessing them on the projection fails)
+  (expect-failure "projection hides the private marketplace column" "not found"
+    (at 'marketplace l)))
+(commit-tx)
+
+(begin-tx "bob buys t-std over the standard listing; royalty still paid, no fee leg")
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [(coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                                      (free.royalty-sale.get-escrow-account) 100.0)] } ])
+(free.royalty-sale.buy "t-std"
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset "bob"))
+(expect "bob owns t-std" "k:2222222222222222222222222222222222222222222222222222222222222222"
+  (free.royalty-sale.owner-of "t-std"))
 (commit-tx)
