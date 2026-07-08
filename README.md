@@ -6,7 +6,7 @@ The catalog ships four clearly separated products:
 
 - **[`contracts/library/`](contracts/library/) — the Library**: PCO-authored, deployable templates. Start here.
 - **[`contracts/registry/`](contracts/registry/) — the Registry**: an observatory of contracts that already exist on-chain, catalogued verbatim for reference.
-- **[`contracts/standards/`](contracts/standards/) — the Standards**: the Kadena NFT interface standard v1 — a normative [SPEC](contracts/standards/SPEC.md), three un-upgradeable interfaces, and a runnable conformance suite that independent marketplaces implement to stay compatible.
+- **[`contracts/standards/`](contracts/standards/) — the Standards**: the Kadena NFT interface standard v1 — a normative [SPEC](contracts/standards/SPEC.md), three un-upgradeable interfaces, and a runnable conformance suite. PCO owns the standard on-chain: the interfaces are published once per network into the PCO principal namespace, and independent marketplaces implement them fully qualified from there to stay compatible.
 - **[`contracts/nft/`](contracts/nft/) — the NFT Framework**: **the catalog's NFT architecture** — one hardened ledger anchoring token identity (forgery/double-mint structurally impossible), a conservation-asserted settlement engine, a composable policy set (royalties, guards, 1/1, collections, uri rules), auctions, and cross-chain relocation where a token's rules travel with it. For anything NFT, start here.
 
 ## The Library

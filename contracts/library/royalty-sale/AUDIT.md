@@ -135,3 +135,17 @@ The economic follow-up — a full-marketplace simulation (resale chain,
 multi-currency, adversarial sweep, global conservation) — is documented in
 [SIMULATION.md](SIMULATION.md) (`examples/royalty-sale-market-sim.repl` +
 `npm run royalty-sale-sim`).
+
+## Addendum — PCO-namespace qualification (2026-07-08)
+
+The two `implements` lines and the two projected schema types were re-pointed
+from bare interface names to the PCO-namespace-qualified form
+(`n_e82dd10f74b7e8c253553de95629fdfa35cf8379.nft-asset-v1` / `.nft-market-v1`),
+matching where the standard is published on testnet06. **No logic, guard,
+settlement, or schema change** — a qualification-only diff, so no new audit
+pass was required. All evidence re-run green against the qualified source with
+the real two-namespace topology (interfaces in one namespace, module in
+another): `royalty-sale-test.repl`, `royalty-sale-market-sim.repl` (149
+assertions), the standard conformance suite, static gate 0 VIOLATIONs, and the
+on-node devnet validations (`npm run royalty-sale` 13 txs, `npm run
+royalty-sale-sim` 32 txs, gas max 13,939 vs the 150k ceiling).

@@ -33,8 +33,9 @@ Each hardened property maps directly to a finding in the analysis:
 ## Deployment checklist
 
 1. Wrap the module in your namespace; replace the `"royalty-sale-gov"` keyset with your deployed, namespace-qualified governance keyset (**multi-sig recommended**; governance is upgrade-only and touches no funds).
-2. Deploy and `create-table` (`tokens`, `listings`).
-3. Validate on **devnet** before mainnet — **mandatory** (the auth capability reads on-chain tables; that class of bug is invisible in the REPL).
+2. The `implements` lines (and the two projected schema types) are qualified against the PCO namespace the NFT standard is published in — `n_e82dd10f74b7e8c253553de95629fdfa35cf8379` on testnet06. On another network, patch that one literal to that network's published PCO namespace (see [contracts/standards/SPEC.md](../../standards/SPEC.md)); never deploy a private copy of the interfaces — same-text interfaces in different namespaces are different Pact types.
+3. Deploy and `create-table` (`tokens`, `listings`).
+4. Validate on **devnet** before mainnet — **mandatory** (the auth capability reads on-chain tables; that class of bug is invisible in the REPL).
 
 ## Usage
 

@@ -95,7 +95,9 @@ policy is immutable by default.
 ## Relationship to the rest of the catalog
 
 - **`contracts/standards/` (NFT interface standard v1)** — the compatibility standard for
-  *standalone* marketplaces, each custodying its own tokens (the `fungible-v2` model). This
+  *standalone* marketplaces, each custodying its own tokens (the `fungible-v2` model). PCO owns
+  the standard on-chain: the three interfaces are published once per network into the PCO
+  principal namespace and marketplaces implement them fully qualified from there. This
   framework is the **shared-ledger track** that SPEC.md explicitly scopes out of v1: tokens live in
   one ledger, marketplaces are sale contracts, portability is native. The two coexist; conforming
   standalone marketplaces and this framework emit compatible economics by construction (state-bound

@@ -108,10 +108,13 @@ Library — Deployable Templates (contracts/library/)
     (see contracts/library/README.md for the full table)
 
 Standards — Kadena NFT Interface Standard v1 (contracts/standards/)
-  PCO-authored, normative. Outside the registry layer stack.
+  PCO-authored, PCO-owned, normative. Outside the registry layer stack.
   Three un-upgradeable interfaces (nft-asset-v1, nft-market-v1,
   nft-xchain-v1) + a normative SPEC + a modref-driven conformance
-  suite. royalty-sale is the reference implementation.
+  suite. Published once per network into the PCO-owned principal
+  namespace (testnet06: n_e82dd10f74b7e8c253553de95629fdfa35cf8379);
+  every marketplace implements them fully qualified from there.
+  royalty-sale is the reference implementation.
 
 NFT Framework (contracts/nft/)
   The catalog's NFT architecture: a PCO-authored shared-ledger NFT
@@ -214,7 +217,7 @@ keywords: ['pact', 'smart-contract']
 | `registry/ecosystem/` | Third-party projects | Various (see each module's `metadata.yaml`) — verified from mainnet01 blockchain census Jan 2025 / Mar 2026 |
 | `registry/community/` | Community projects | Census-observed free-namespace modules (see each module's `metadata.yaml`) |
 | `library/` | PCO contributors | [Pact-Community-Organization/pact-contract-catalog](https://github.com/Pact-Community-Organization/pact-contract-catalog) |
-| `standards/` | PCO-authored | This repository (normative interface standard, un-upgradeable once deployed) |
+| `standards/` | PCO-authored & PCO-owned on-chain | This repository (normative interface standard, un-upgradeable; published in the PCO principal namespace per network) |
 | `nft/` | PCO-authored | This repository (original, independent implementation) |
 
 > All `registry/` entries are **observed entries** — verbatim snapshots of upstream or on-chain code, catalogued to document what community modules build upon and integrate with. PCO makes no security claim beyond the recorded audit status. Only `library/` entries are authored, maintained, and quality-gated by PCO.
@@ -227,6 +230,6 @@ keywords: ['pact', 'smart-contract']
 - Additions to `registry/ecosystem/` and `registry/community/` require evidence of deployment on mainnet01 (module hash, describe-module output, or block explorer link) plus a PR matching the census methodology in `contracts/registry/ecosystem/README.md`.
 - Additions to `library/` require a PR linking a GitHub issue, passing CI (including the library quality gate: schema-A metadata, co-located `.repl` tests, `audit_status` of `self-reviewed` or better), and approval per `CONTRIBUTING.md`.
 - Entries with an open CRITICAL finding live in `registry/`, never `library/`.
-- `contracts/standards/` is normative: the three interfaces are un-upgradeable (`CannotUpgradeInterface`) and the SPEC's clauses are versioned — breaking changes ship as `-v2`, never as edits. Changes go through maintainer PRs.
+- `contracts/standards/` is normative and canonical: the three interfaces are un-upgradeable (`CannotUpgradeInterface`) and the SPEC's clauses are versioned — breaking changes ship as `-v2`, never as edits. On-chain the standard lives in the PCO-owned principal namespace (one publication per network; consumers implement fully qualified); every vendored copy elsewhere is a byte-identical fixture of this directory. Changes go through maintainer PRs.
 - `contracts/nft/` changes require every suite under `contracts/nft/test/` green and the static gate at 0 violations (see the Gates section of [contracts/nft/README.md](contracts/nft/README.md)); cross-chain behavior classes additionally require multi-chain devnet evidence.
 - Audit promotions follow the ladder in `docs/CONTRACT_POLICIES.md` §3.1 (`reference` / `unaudited` / `self-reviewed` / `community-reviewed` / `independently-audited`) and require evidence in `AUDIT.md`.

@@ -8,6 +8,7 @@
 // creator+marketplace+seller payout split end to end.
 import {
   send, localCall, coinBalance, fund, persona, loadTemplate, saveResults, CHAIN,
+  ensureStandardInterfaces, substPcoNs,
 } from './lib.js';
 
 const SLUG = 'royalty-sale';
@@ -26,7 +27,8 @@ const main = async () => {
   const MOD = await pickName('royalty-sale');
   const { code, govKeyset } = loadTemplate(SLUG, 'royalty-sale.pact', 'royalty-sale-gov', MOD);
   const M = `free.${MOD}`;
-  const src = code.replace('(module royalty-sale GOV', `(module ${MOD} GOV`);
+  // 4 = the two implements lines + the two projected schema types
+  const src = substPcoNs(code, 4).replace('(module royalty-sale GOV', `(module ${MOD} GOV`);
 
   const gov = persona('gov');
   const creator = persona('creator');   // mints + is the primary seller
@@ -36,6 +38,9 @@ const main = async () => {
   for (const kp of [gov, creator, mkt]) await fund(kp, 5.0);
   await fund(buyer1, 60.0);  // pays for a purchase
   await fund(buyer2, 60.0);
+
+  // the standard interfaces must exist before a qualified implements can load
+  await ensureStandardInterfaces(gov);
 
   await send({
     code: `(namespace "free") (define-keyset "${govKeyset}" (read-keyset "g"))`,
@@ -59,7 +64,7 @@ const main = async () => {
 
   // list at 40 with a 2.5% marketplace fee to mkt
   await send({
-    code: `(${M}.list-token "art-1" 40.0 coin "${mkt.account}" (read-keyset "m") 250)`,
+    code: `(${M}.list-token-with-fee "art-1" 40.0 coin "${mkt.account}" (read-keyset "m") 250)`,
     label: 'list art-1 at 40 (2.5% fee)',
     signers: [{ kp: creator, caps: (wc) => [wc(`${M}.OWNER`, 'art-1'), wc('coin.GAS')] }],
     data: { m: { keys: [mkt.publicKey], pred: 'keys-all' } },
@@ -100,7 +105,7 @@ const main = async () => {
 
   // buyer1 (now owner) lists, buyer2 buys — over the DUST-carrying escrow.
   await send({
-    code: `(${M}.list-token "art-1" 20.0 coin "" (read-keyset "b1") 0)`,
+    code: `(${M}.list-token-with-fee "art-1" 20.0 coin "" (read-keyset "b1") 0)`,
     label: 'buyer1 re-lists art-1 at 20 (no fee)',
     signers: [{ kp: buyer1, caps: (wc) => [wc(`${M}.OWNER`, 'art-1'), wc('coin.GAS')] }],
     data: { b1: { keys: [buyer1.publicKey], pred: 'keys-all' } },

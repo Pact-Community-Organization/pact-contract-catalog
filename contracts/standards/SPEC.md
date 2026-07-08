@@ -1,11 +1,51 @@
 # Kadena NFT Standard v1 — Normative Specification
 
-**Status:** proposed · **Version:** 1 · **Language:** Pact 5.4ce / KDA-CE
+**Status:** frozen for v1 publication (freeze review 2026-07-08) · **Version:** 1 · **Language:** Pact 5.4ce / KDA-CE
 
 Three interfaces define a 1-of-1 NFT with enforceable creator royalties,
 trustless fixed-price sales, and cross-chain portability, such that independent
 marketplaces built by different teams are **compatible**: one wallet, one
 indexer, and one aggregator work across every conforming implementation.
+
+## Canonical source and on-chain home
+
+**This directory is the single canonical source of the standard.** Every copy
+of these interfaces anywhere else — vendored into a marketplace repo, embedded
+in a test fixture — is a **fixture**: byte-identical to the files here
+(verify with `sha256sum`), re-snapshotted from this directory, never hand-edited.
+
+**On-chain, the standard has exactly one home per network: the PCO-owned
+principal namespace.** PCO publishes the three interfaces once per chain, and
+every implementation — including PCO's own — references them there. This is the
+`fungible-v2` model applied to namespaces: one authoritative interface
+deployment that all token contracts share (KDA-CE locks the root namespace, so
+a governed principal namespace is the strongest available equivalent).
+
+| Network | PCO namespace |
+|---|---|
+| testnet06 | `n_e82dd10f74b7e8c253553de95629fdfa35cf8379` |
+| mainnet | not yet published |
+
+Consumers implement the interfaces **fully qualified**:
+
+```pact
+(module my-marketplace GOV
+  (implements n_e82dd10f74b7e8c253553de95629fdfa35cf8379.nft-asset-v1)
+  (implements n_e82dd10f74b7e8c253553de95629fdfa35cf8379.nft-market-v1)
+  ...)
+```
+
+This matters because **same-text interfaces in different namespaces are
+different types** in Pact. A module implementing a private copy of
+`nft-asset-v1` is *not* compatible with tooling that dispatches
+`module{<pco-ns>.nft-asset-v1}` — it merely looks similar. Deploying your own
+copy of these interfaces produces an island, not a conforming marketplace.
+
+The interface signatures are **frozen**: interfaces cannot be upgraded
+(`CannotUpgradeInterface`), so what PCO publishes is permanent per network. A
+freeze review (2026-07-08) checked every signature against the reference
+implementation, the production implementation, and the conformance drivers
+before publication; any future change ships as `-v2`.
 
 | Interface | File | Role | Required? |
 |---|---|---|---|

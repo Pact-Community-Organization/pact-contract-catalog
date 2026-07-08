@@ -41,8 +41,8 @@
   ;; surface (token, ownership, royalty, event vocabulary) and the fixed-price
   ;; market surface. No cross-chain (single-chain template) — nft-xchain-v1 is
   ;; not implemented. See contracts/standards/SPEC.md.
-  (implements nft-asset-v1)
-  (implements nft-market-v1)
+  (implements n_e82dd10f74b7e8c253553de95629fdfa35cf8379.nft-asset-v1)
+  (implements n_e82dd10f74b7e8c253553de95629fdfa35cf8379.nft-market-v1)
 
   ;; -----------------------------
   ;; Governance (upgrade-only; no fund paths)
@@ -378,12 +378,12 @@
 
   ;; nft-asset-v1.token is exactly this module's 7 token columns, so get-token
   ;; returns the interface schema directly.
-  (defun get-token:object{nft-asset-v1.token} (id:string) (read tokens id))
+  (defun get-token:object{n_e82dd10f74b7e8c253553de95629fdfa35cf8379.nft-asset-v1.token} (id:string) (read tokens id))
 
   ;; nft-market-v1.listing is the currency-agnostic 5-field public projection;
   ;; the seller-named marketplace payee/guard stay private to this module.
   ;; fee-bps is the marketplace rate (0 for a standard fee-free listing).
-  (defun get-listing:object{nft-market-v1.listing} (id:string)
+  (defun get-listing:object{n_e82dd10f74b7e8c253553de95629fdfa35cf8379.nft-market-v1.listing} (id:string)
     (with-read listings id
       { 'seller := seller, 'price := price, 'currency := currency:module{fungible-v2}
       , 'marketplace-bps := mk-bps, 'active := active }
