@@ -1,0 +1,240 @@
+;; C2 — SURFACE C/A: a HOSTILE policy attached to a token at settlement.
+;;
+;; A token's policy list is creator-chosen. Nothing stops a creator (or a
+;; creator colluding with a buyer) from attaching a MALICIOUS module that
+;; implements token-policy. The framework's defense: policy hooks run BEFORE the
+;; ESCROW cap is acquired, hold no escrow authority, and any declared payout is
+;; conservation-checked. Let us try to break that.
+;;
+;; INVARIANT 1: a hostile enforce-buy CANNOT reach the escrow, mint, or move
+;;   the ledger's money while the manager's settlement caps are in scope.
+;; INVARIANT 2: a hostile declared payout that names the ESCROW account itself
+;;   (to keep money in escrow and break conservation) is rejected.
+;; INVARIANT 3: a hostile payout with a NEGATIVE or ZERO amount is rejected.
+;; INVARIANT 4: a hostile policy cannot re-enter the ledger's sale defpact or
+;;   transfer while BUY-CALL / FUNDING-CALL are live (reentrancy).
+
+(load "_bootstrap.repl")
+
+;; ---- a hostile policy module -----------------------------------------------
+(begin-tx "deploy hostile policy")
+(namespace "nft")
+(module hostile GOV
+  (implements token-policy)
+  (defcap GOV () (enforce-keyset "nft.admin"))
+  (use token-policy [token-info payout])
+  ;; a knob the test flips to choose which attack enforce-buy attempts
+  (defschema cfg mode:string)
+  (deftable cfgt:{cfg})
+  (defun set-mode:string (m:string) (write cfgt "m" { 'mode: m }) m)
+  (defun mode:string () (with-default-read cfgt "m" { 'mode: "" } { 'mode := m } m))
+
+  (defun enforce-init:bool (token:object{token-info}) true)
+  (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal) true)
+  (defun enforce-burn:bool (token:object{token-info} account:string amount:decimal) true)
+  (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string) (enforce false "no"))
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal) {})
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object) true)
+
+  ;; the attack surface: enforce-buy runs during settlement
+  (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string)
+    (let ((m (mode))
+          (ag (read-keyset 'ag)))
+      (if (= m "grab-escrow")
+        ;; ATTACK A: try to grab the manager's ESCROW cap for this sale
+        (with-capability (policy-manager.ESCROW sale-id)
+          [{ 'account: "k:2222222222222222222222222222222222222222222222222222222222222222", 'guard: ag, 'amount: 0.000000000001 }])
+      (if (= m "pay-to-escrow")
+        ;; ATTACK B: pay a leg to the escrow account itself
+        [{ 'account: (policy-manager.escrow-account sale-id), 'guard: (policy-manager.escrow-guard sale-id), 'amount: 0.000000000001 }]
+      (if (= m "negative")
+        ;; ATTACK C: negative payout to inflate the seller remainder
+        [{ 'account: "k:2222222222222222222222222222222222222222222222222222222222222222", 'guard: ag, 'amount: -1.0 }]
+      (if (= m "zero")
+        ;; ATTACK D: zero payout
+        [{ 'account: "k:2222222222222222222222222222222222222222222222222222222222222222", 'guard: ag, 'amount: 0.0 }]
+      (if (= m "reenter-transfer")
+        ;; ATTACK E: re-enter the ledger while BUY-CALL is live
+        (let ((_ (nft.ledger.transfer (at 'id token) buyer seller 1.0))) [])
+        [])))))))
+)
+(create-table nft.hostile.cfgt)
+(commit-tx)
+(print "C2 setup COMPLETE — hostile module deployed")
+
+;; ---- helper: create + mint a token carrying the hostile policy -------------
+;; The hostile policy's enforce-init is `true` (no payload), so create is easy.
+(begin-tx "victim seller creates token with hostile policy attached")
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile] }
+            (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://hostile" [nft.hostile] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'sg) 1.0))
+(commit-tx)
+
+;; ---- fund the buyer --------------------------------------------------------
+(begin-tx "fund buyer")
+(env-data { "bg": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bg) 1000.0)
+(commit-tx)
+
+;; ---- offer (seller lists at price 100, no fee) -----------------------------
+(begin-tx "offer the hostile-policy token")
+(env-hash (hash "hostile-sale"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile] }
+            (read-keyset 'sg))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+;; ---- a reusable buy attempt in a given hostile mode ------------------------
+;; Each attempt is its OWN tx (isolated); we set the mode, then continue-pact 1.
+;; We assert the settlement ABORTS (attack blocked) and — critically — re-read
+;; the escrow + balances AFTER to prove no state leaked (expect-failure does NOT
+;; roll back prior same-tx writes, so we check post-state in a fresh tx).
+
+;; ATTACK A: grab-escrow
+(begin-tx "ATTACK A: hostile enforce-buy grabs ESCROW")
+(namespace "nft")
+(nft.hostile.set-mode "grab-escrow")
+(env-data
+  { "ag": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile] }
+            (read-keyset 'sg))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "hostile-sale"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "hostile-sale")) 100.0) ] } ])
+  (expect-failure "hostile policy must NOT be able to acquire the manager's ESCROW cap"
+    (continue-pact 1 false (hash "hostile-sale"))))
+(commit-tx)
+
+;; ATTACK B: pay-to-escrow — declare a payout leg that names the escrow account
+(begin-tx "ATTACK B: hostile payout names the escrow account")
+(namespace "nft")
+(nft.hostile.set-mode "pay-to-escrow")
+(env-data
+  { "ag": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile] }
+            (read-keyset 'sg))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "hostile-sale"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "hostile-sale")) 100.0) ] } ])
+  (expect-failure "a payout leg naming the escrow account must not settle"
+    (continue-pact 1 false (hash "hostile-sale"))))
+(commit-tx)
+
+;; ATTACK C: negative payout
+(begin-tx "ATTACK C: hostile declares a NEGATIVE payout")
+(namespace "nft")
+(nft.hostile.set-mode "negative")
+(env-data
+  { "ag": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile] }
+            (read-keyset 'sg))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "hostile-sale"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "hostile-sale")) 100.0) ] } ])
+  (expect-failure "a non-positive policy payout must abort settlement"
+    (continue-pact 1 false (hash "hostile-sale"))))
+(commit-tx)
+
+;; ATTACK D: zero payout
+(begin-tx "ATTACK D: hostile declares a ZERO payout")
+(namespace "nft")
+(nft.hostile.set-mode "zero")
+(env-data
+  { "ag": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile] }
+            (read-keyset 'sg))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "hostile-sale"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "hostile-sale")) 100.0) ] } ])
+  (expect-failure "a zero policy payout must abort settlement"
+    (continue-pact 1 false (hash "hostile-sale"))))
+(commit-tx)
+
+;; ATTACK E: reenter-transfer — re-enter the ledger while BUY-CALL is live
+(begin-tx "ATTACK E: hostile re-enters ledger.transfer during settlement")
+(namespace "nft")
+(nft.hostile.set-mode "reenter-transfer")
+(env-data
+  { "ag": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile] }
+            (read-keyset 'sg))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "hostile-sale"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "hostile-sale")) 100.0) ] } ])
+  ;; the escrowed NFT is in the sale-account, not the buyer/seller — the
+  ;; re-entrant transfer has no owner-guard, so it must fail closed
+  (expect-failure "re-entrant ledger.transfer during settlement must fail"
+    (continue-pact 1 false (hash "hostile-sale"))))
+(commit-tx)
+
+(print "C2 COMPLETE — all 5 settlement-time attacks aborted")

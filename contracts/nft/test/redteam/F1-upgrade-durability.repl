@@ -1,0 +1,97 @@
+;; F1 — SURFACE F: upgrade durability + table preservation.
+;;
+;; INV-1: a module UPGRADE (redeploy) preserves its tables — the token/quote
+;;   rows written before the upgrade are still readable after.
+;; INV-2: re-running (create-table) on an existing table on upgrade would BRICK
+;;   it ("table already exists") — the upgrade path must NOT recreate tables.
+;; INV-3: an in-flight sale defpact (offer done, buy pending) survives an
+;;   upgrade of the manager and can still be completed.
+
+(load "_bootstrap.repl")
+
+;; ---- fund + create + mint + OFFER (leave an in-flight sale) -----------------
+(begin-tx "fund buyer")
+(env-data { "bg": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bg) 1000.0)
+(commit-tx)
+
+(begin-tx "create + mint + offer")
+(env-hash (hash "f1-sale"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 0, "sale-only": false }
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://f1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://f1" [nft.royalty-policy] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+;; ---- UPGRADE the ledger module (redeploy same source, upgrade=true) --------
+;; No (create-table) in this tx — the upgrade preserves the existing tables.
+(begin-tx "UPGRADE ledger (redeploy, no create-table)")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(namespace "nft")
+(load "../../core/ledger.pact")
+(commit-tx)
+
+;; ---- INV-1: state survived the upgrade -------------------------------------
+(begin-tx "post-upgrade: rows survived")
+(env-data { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://f1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (expect "token row survived the ledger upgrade" "ipfs://f1"
+    (at 'uri (nft.ledger.get-token-info id)))
+  (expect "the NFT is still escrowed (in-flight sale intact)" 0.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect "the quote row survived (settlement economics intact)" 100.0
+    (nft.policy-manager.get-quote-price (hash "f1-sale"))))
+(commit-tx)
+
+;; ---- INV-2: re-running create-table on the live table BRICKS (must fail) ----
+(begin-tx "re-create-table on an existing table fails")
+(namespace "nft")
+(expect-failure "re-running create-table on a live table must fail (do NOT do this on upgrade)"
+  (create-table nft.ledger.tokens))
+(commit-tx)
+
+;; ---- INV-3: the in-flight sale still completes after the upgrade -----------
+(begin-tx "complete the pending buy post-upgrade")
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://f1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "f1-sale"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "f1-sale")) 100.0) ] } ])
+  (continue-pact 1 false (hash "f1-sale"))
+  (expect "the pending sale completed after the upgrade — buyer owns the NFT" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (expect "seller paid post-upgrade" 100.0
+    (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(commit-tx)
+
+(print "F1 COMPLETE")

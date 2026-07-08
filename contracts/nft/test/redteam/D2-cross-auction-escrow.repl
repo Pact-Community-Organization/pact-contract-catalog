@@ -1,0 +1,184 @@
+;; D2 — SURFACE D/A: cross-auction bid-escrow theft + user-guard out-of-context.
+;;
+;; The conventional-auction bid escrow is a create-user-guard over
+;; (bid-escrow-auth sale-id): it passes iff (REFUND sale-id) OR
+;; (policy-manager.FUNDING-CALL sale-id) is in scope. Both are sale-id-scoped.
+;;
+;; INV-1: an attacker cannot move funds out of a bid escrow by satisfying its
+;;        user guard directly (no REFUND / FUNDING-CALL of that sale in scope).
+;; INV-2: auction B's settlement (FUNDING-CALL for sale-B) cannot pull auction
+;;        A's escrow — the guard is keyed by sale-id, so B's FUNDING-CALL does
+;;        not satisfy A's bid-escrow-auth.
+
+;; --- deploy coin + framework + royalty + auction (registered) ---------------
+(begin-tx "coin")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+(begin-tx "deploy framework + auction")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../../interfaces/account-protocols.pact")
+(load "../../interfaces/token-policy.pact")
+(load "../../interfaces/poly-fungible.pact")
+(load "../../interfaces/ledger-iface.pact")
+(load "../../interfaces/sale.pact")
+(load "../../core/util.pact")
+(load "../../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(load "../../sale/conventional-auction.pact")
+(create-table nft.conventional-auction.auctions)
+(nft.policy-manager.register-sale-contract nft.conventional-auction)
+(commit-tx)
+
+;; --- fund an attacker who will also place a real bid ------------------------
+(begin-tx "fund")
+(env-data { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+;; --- alice sets up auction A with a live 20-coin bid from bob ----------------
+(begin-tx "auction A: create + bob bids 20")
+(env-hash (hash "d2-A"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 0, "sale-only": false }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://A", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://A" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (nft.conventional-auction.create-auction (hash "d2-A") id 1767225700 1767226600 10.0 5.0 500))
+;; bob bids 20 into auction A's escrow
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 800) })
+(env-data { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [ (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                          (nft.conventional-auction.bid-escrow-account (hash "d2-A")) 20.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'bob)) ] } ])
+(nft.conventional-auction.place-bid (hash "d2-A") "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 20.0)
+(expect "auction A escrow holds bob's 20" 20.0
+  (coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "d2-A"))))
+(commit-tx)
+
+;; --- INV-1: attacker tries to drain A's escrow by direct transfer -----------
+;; The escrow is a principal guarded by the user-guard; a plain coin.transfer
+;; from it requires satisfying that guard. Attacker has no REFUND / FUNDING-CALL
+;; for sale d2-A in scope, so the guard must reject.
+(begin-tx "INV-1: direct drain of A's bid escrow rejected")
+(env-data { "mal": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(namespace "nft")
+(let ((escrow (nft.conventional-auction.bid-escrow-account (hash "d2-A"))))
+  ;; try to install + transfer out of the escrow to the attacker
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (coin.TRANSFER escrow "k:3333333333333333333333333333333333333333333333333333333333333333" 20.0) ] } ])
+  (expect-failure "attacker cannot satisfy the bid-escrow user guard"
+    (coin.transfer-create escrow "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'mal) 20.0)))
+(commit-tx)
+
+;; --- INV-1b: attacker tries to satisfy the guard by calling refund-escrow ---
+(begin-tx "INV-1b: refund-escrow requires REFUND scope the attacker lacks")
+(namespace "nft")
+(expect-failure "refund-escrow needs (REFUND sale-id) which is unacquirable externally"
+  (nft.conventional-auction.refund-escrow (hash "d2-A") coin "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(commit-tx)
+
+;; --- INV-2: cross-auction — auction B settlement pulls A's escrow -----------
+;; Stand up a SECOND auction B (fresh token/sale-id). Bob wins B with a 5 bid.
+;; Then at B's settlement, name A's bid escrow as the paying account. B's
+;; FUNDING-CALL is for sale-B, so A's escrow guard (keyed to sale-A) must reject.
+(begin-tx "auction B: create + bob bids 5")
+(env-hash (hash "d2-B"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 0, "sale-only": false }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://B", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://B" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (nft.conventional-auction.create-auction (hash "d2-B") id 1767225700 1767226600 5.0 5.0 500))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 800) })
+(env-data { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [ (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                          (nft.conventional-auction.bid-escrow-account (hash "d2-B")) 5.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'bob)) ] } ])
+(nft.conventional-auction.place-bid (hash "d2-B") "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 5.0)
+(commit-tx)
+
+;; settle B but try to name A's escrow as the paying account
+(begin-tx "INV-2: settle B pulling from A's escrow rejected")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1100) })
+(env-data
+  (let ((escrowA (nft.conventional-auction.bid-escrow-account (hash "d2-A"))))
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    ;; the malicious paying account: auction A's escrow (should be rejected —
+    ;; the auction B enforce-quote-update requires paying == B's escrow)
+    , "buyer_fungible_account": escrowA
+    , "quoted_price": 5.0 }))
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://B", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "d2-B"))
+                        , (coin.TRANSFER (nft.conventional-auction.bid-escrow-account (hash "d2-A"))
+                            (nft.policy-manager.escrow-account (hash "d2-B")) 5.0) ] } ])
+  (expect-failure "auction B cannot fund from auction A's escrow"
+    (continue-pact 1 false (hash "d2-B"))))
+;; and A's escrow is untouched
+(expect "auction A's escrow still holds bob's full 20" 20.0
+  (coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "d2-A"))))
+(commit-tx)
+
+(print "D2 COMPLETE")

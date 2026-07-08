@@ -1,0 +1,137 @@
+;; A1 — SURFACE A: value conservation / settlement rounding & fee stacking.
+;;
+;; INVARIANT (conservation): for EVERY sale that settles, escrow-in == Σ payouts
+;;   at the fungible's full precision — no dust created or lost, no leg double-
+;;   paid, no leg dropped.
+;; INVARIANT (fee cap): fee-bps > MAX-FEE-BPS (10%) is rejected at offer.
+;; INVARIANT (no negative proceeds): royalty + fee that exceed the price abort
+;;   the sale (DoS acceptable — better than paying a negative seller remainder).
+;; INVARIANT (dust royalty): a price whose floored royalty is 0 is rejected
+;;   (royalty-evasion via round-to-zero).
+;;
+;; We use the REAL royalty-policy and coin (12dp). Attacks target the arithmetic.
+
+(load "_bootstrap.repl")
+
+;; ---- fund a buyer generously -----------------------------------------------
+(begin-tx "fund buyer")
+(env-data { "bg": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bg) 1000000.0)
+(commit-tx)
+
+;; ---- ATTACK 1: fee-bps above the 10% cap must be rejected at offer ---------
+(begin-tx "create token (royalty 25%) for fee-cap test")
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 2500, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://a1" [nft.royalty-policy] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
+  (env-data { "a1id": id }))
+(commit-tx)
+
+(begin-tx "offer with fee-bps 1500 (>10% cap) must fail")
+(env-hash (hash "a1-feecap"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 1500, "sale-contract": "" } })
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (expect-failure "fee-bps must be in [0, 1000]"
+    (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)))
+(commit-tx)
+
+;; ---- ATTACK 2: dust royalty — price so low the 25% royalty floors to 0 -----
+;; token precision 0, but the fungible (coin) is 12dp. royalty of a tiny price
+;; at coin precision must be caught. Use a fresh token with a small price.
+(begin-tx "offer at a price whose royalty floors to zero (evasion)")
+(env-hash (hash "a1-dust"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.000000000001
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (expect-failure "price too low: the royalty would floor to zero"
+    (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)))
+(commit-tx)
+
+;; ---- ATTACK 3: conservation on an AWKWARD price (royalty+fee+proceeds must
+;;      reconcile to the last dp). royalty 25% of 33.333333333333 + fee 10% ---
+(begin-tx "conservation on an awkward price")
+(env-hash (hash "a1-awkward"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 33.333333333333
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 1000, "sale-contract": "" } })
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+(begin-tx "settle the awkward price and reconcile every leg")
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a1", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'sg)))
+      (esc (nft.policy-manager.escrow-account (hash "a1-awkward")))
+      (mkt-before (try 0.0 (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444")))
+      (seller-before (try 0.0 (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "a1-awkward"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            esc 33.333333333333) ] } ])
+  (continue-pact 1 false (hash "a1-awkward"))
+  ;; price = 33.333333333333 ; royalty 25% = floor(8.33333333333325, 12) = 8.333333333333
+  ;; fee 10% = floor(3.3333333333333, 12) = 3.333333333333
+  ;; proceeds = 33.333333333333 - 8.333333333333 - 3.333333333333 = 21.666666666667
+  ;; seller == creator -> royalty + proceeds merge into the seller account
+  (expect "escrow fully drained (conservation)" 0.0 (coin.get-balance esc))
+  (expect "marketplace fee exact" 3.333333333333
+    (- (coin.get-balance "k:4444444444444444444444444444444444444444444444444444444444444444") mkt-before))
+  ;; seller nets royalty(8.333333333333) + proceeds(21.666666666667) = 30.0
+  (expect "seller (==creator) nets royalty+proceeds, no dust lost" 30.0
+    (- (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111") seller-before)))
+(commit-tx)
+
+(print "A1 COMPLETE")
