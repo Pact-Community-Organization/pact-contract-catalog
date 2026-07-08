@@ -9,7 +9,7 @@
 
 `ns` is the on-chain **namespace registry** for KDA-CE. It governs who can create and rotate namespaces, enforces namespace naming rules, and provides the policy hooks that control namespace access.
 
-All modules and keysets in the `free`, `user`, `kip`, `marmalade-v2`, `marmalade-sale`, and `util` namespaces are registered through `ns`. Without this module, namespaced contracts cannot be deployed.
+All modules and keysets in named namespaces (`free`, `user`, `kip`, `util`, …) are registered through `ns`. Without this module, namespaced contracts cannot be deployed.
 
 `ns` is the most-used infrastructure module for **contract deployment** — every named-namespace deployment calls it.
 

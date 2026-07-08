@@ -60,7 +60,9 @@ ALL_CHAINS = list(range(20))
 # Kadena: ~1 block every 30s per chain = 2/min × 60min × 24h × 90d
 BLOCKS_PER_CHAIN_90D = 259_200
 
-# Modules / interfaces already present in the catalog (excluded from results by default)
+# Modules / interfaces excluded from census results by default: either already
+# present in the catalog, or excluded by policy (the marmalade stack is not
+# catalogued — the catalog's NFT architecture is contracts/nft)
 ALREADY_CATALOGED: set[str] = {
     # kip — standard interfaces
     "fungible-v2",
@@ -69,7 +71,7 @@ ALREADY_CATALOGED: set[str] = {
     "poly-fungible-v1",
     # core
     "coin",
-    # marmalade base
+    # marmalade stack — excluded by policy, not catalogued
     "marmalade-v2.ledger",
     "marmalade-v2.policy-manager",
     "marmalade-v2.guard-policy-v1",

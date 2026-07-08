@@ -53,7 +53,6 @@ Each run writes `results/<template>.json` (deployed module name, source hash, an
 
 ## Not covered
 
-- **`nft-collection-policy`** requires the full marmalade-v2 stack (ledger, policy-manager, kip interfaces) deployed on the target devnet, which this shared devnet does not carry. Its REPL suite already runs against the **real** marmalade sources from the registry tree (stronger than a mock), and its specific devnet mandate — an on-chain **buy** through the sale defpact — is a follow-on for a marmalade-provisioned devnet. See that template's `AUDIT.md`.
 - **`hello-world`** carries no node-only behavior (no table-read-in-enforce, no managed caps), so a devnet run adds nothing its REPL suite doesn't already show.
 - **`property-lease`** — deployable but not yet driven; its `AUDIT.md` names the devnet run (a `give-notice` by either party plus the full lifecycle) as required evidence before any production use.
 - The **token template's `TRANSFER_XCHAIN`** path still needs its own multi-chain SPV exercise; the single-chain template campaigns do not cover it (the NFT Framework campaign above proves SPV for the framework, not for this template).

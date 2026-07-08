@@ -17,8 +17,6 @@ Pact interfaces are the foundation of composability on KDA-CE. Any code that acc
 | [fungible-v2](fungible-v2/README.md) | `fungible-v2` | `coin`, any KDA-CE fungible token |
 | [fungible-xchain-v1](fungible-xchain-v1/README.md) | `fungible-xchain-v1` | `coin` (cross-chain transfer protocol) |
 | [gas-payer-v1](gas-payer-v1/README.md) | `gas-payer-v1` | any gas station module |
-| [token-policy-v2](token-policy-v2/README.md) | `kip.token-policy-v2` | all Marmalade v2 policy modules |
-| [token-manifest](token-manifest/README.md) | `kip.token-manifest` | `marmalade-v2.ledger` (token creation) |
 
 ---
 
@@ -28,8 +26,6 @@ Pact interfaces are the foundation of composability on KDA-CE. Any code that acc
 fungible-v2          (no deps)
 fungible-xchain-v1   (no deps — co-implements with fungible-v2)
 gas-payer-v1         (no deps)
-token-policy-v2      (no deps)
-token-manifest       (no deps — module, not just interface)
 ```
 
 ---
@@ -46,11 +42,3 @@ To implement `fungible-v2` in your token:
 )
 ```
 
-To write a Marmalade policy:
-
-```pact
-(module my-policy GOVERNANCE
-  (implements kip.token-policy-v2)
-  ;; ... must satisfy all 7 enforce-* functions
-)
-```

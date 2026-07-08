@@ -7,11 +7,11 @@ The catalog ships four clearly separated products:
 - **[`contracts/library/`](contracts/library/) — the Library**: PCO-authored, deployable templates. Start here.
 - **[`contracts/registry/`](contracts/registry/) — the Registry**: an observatory of contracts that already exist on-chain, catalogued verbatim for reference.
 - **[`contracts/standards/`](contracts/standards/) — the Standards**: the Kadena NFT interface standard v1 — a normative [SPEC](contracts/standards/SPEC.md), three un-upgradeable interfaces, and a runnable conformance suite that independent marketplaces implement to stay compatible.
-- **[`contracts/nft/`](contracts/nft/) — the NFT Framework**: the shared-ledger track — one hardened ledger anchoring token identity (forgery/double-mint structurally impossible), a conservation-asserted settlement engine, a composable policy set (royalties, guards, 1/1, collections, uri rules), auctions, and cross-chain relocation where a token's rules travel with it.
+- **[`contracts/nft/`](contracts/nft/) — the NFT Framework**: **the catalog's NFT architecture** — one hardened ledger anchoring token identity (forgery/double-mint structurally impossible), a conservation-asserted settlement engine, a composable policy set (royalties, guards, 1/1, collections, uri rules), auctions, and cross-chain relocation where a token's rules travel with it. For anything NFT, start here.
 
 ## The Library
 
-Ten production-grade templates covering the foundations most projects need. Every one shipped through the same three gates: a **blocking CI test suite**, a **static-analysis pass**, and an **independent adversarial security review** whose findings and fixes are documented in the entry's `AUDIT.md` — including the attacks that were tried and defeated.
+Nine production-grade templates covering the foundations most projects need. Every one shipped through the same three gates: a **blocking CI test suite**, a **static-analysis pass**, and an **independent adversarial security review** whose findings and fixes are documented in the entry's `AUDIT.md` — including the attacks that were tried and defeated.
 
 | Template | What it is |
 |---|---|
@@ -20,7 +20,6 @@ Ten production-grade templates covering the foundations most projects need. Ever
 | [multisig-treasury](contracts/library/multisig-treasury/) | M-of-N treasury: KDA in a capability-guarded vault, asynchronous propose/approve/execute, rotation that revokes stale approvals. |
 | [vesting](contracts/library/vesting/) | Cliff + linear vesting, escrowed upfront: the beneficiary never depends on the funder's solvency; revoke returns only the unvested part; governance has zero fund paths. |
 | [dao-voting](contracts/library/dao-voting/) | Membership voting with quorum + threshold: per-proposal snapshot of the passage bar, rotation revokes a compromised member's in-flight votes. Pairs with the treasury. |
-| [nft-collection-policy](contracts/library/nft-collection-policy/) | A marmalade-v2 concrete policy: creator-gated collections with size caps and a strict one-of-one NFT invariant, tested against the real marmalade ledger. |
 | [oracle-feed](contracts/library/oracle-feed/) | Median data/price feed with fail-closed consumption: chain-assigned timestamps, staleness windows, publisher rotation as instant revocation, plus a worked consumer pattern. |
 | [property-lease](contracts/library/property-lease/) | Rental rails: escrowed deposit, rent buckets with a revenue split, party-authenticated notice, and vault conservation across every mutating path. |
 | [royalty-sale](contracts/library/royalty-sale/) | A conservation-checked NFT marketplace: 1-of-1 tokens with immutable creator royalties, state-bound listing economics, one atomic settlement. The reference implementation of the [NFT interface standard](contracts/standards/). |
@@ -38,7 +37,7 @@ All entries currently carry `audit_status: self-reviewed` — a defined claim, n
 
 ### Testing
 
-Library test suites are **self-contained** — they load their dependencies (coin, kip interfaces, marmalade) from this repo's registry tree. With a [Pact 5 binary](https://github.com/kadena-io/pact-5) on your PATH:
+Library test suites are **self-contained** — they load their dependencies (coin, kip interfaces) from this repo's registry tree. With a [Pact 5 binary](https://github.com/kadena-io/pact-5) on your PATH:
 
 ```bash
 cd contracts/library/multisig-treasury/examples
@@ -49,7 +48,7 @@ CI runs every library suite as a blocking check on every PR, plus the catalog va
 
 ## The Registry
 
-[`contracts/registry/`](contracts/registry/) catalogues contracts that already exist, grouped by dependency layer: `kip/` (standard interfaces), `core/` (pre-deployed chain infrastructure), `marmalade/` (the deployed Marmalade v2 NFT stack — verbatim reference), `ecosystem/` (census-selected third-party mainnet modules), and `community/`. These are **verbatim snapshots** — read-only reference for integration, education, and due diligence, not starting points. See [ARCHITECTURE.md](ARCHITECTURE.md) for the layer model and the census methodology.
+[`contracts/registry/`](contracts/registry/) catalogues contracts that already exist, grouped by dependency layer: `kip/` (standard interfaces), `core/` (pre-deployed chain infrastructure), `ecosystem/` (census-selected third-party mainnet modules), and `community/`. These are **verbatim snapshots** — read-only reference for integration, education, and due diligence, not starting points. See [ARCHITECTURE.md](ARCHITECTURE.md) for the layer model and the census methodology.
 
 ## Contributing
 

@@ -115,38 +115,6 @@
 }
 ,
 {
-  "name": "NFT Collection Policy (marmalade-v2)",
-  "slug": "nft-collection-policy",
-  "version": "1.0.0",
-  "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
-  "license": "Apache-2.0",
-  "authors": [
-    {
-      "name": "Pact Community Organization",
-      "email": "info@pact-community.org"
-    }
-  ],
-  "audit_status": "self-reviewed",
-  "tags": [
-    "nft",
-    "marmalade",
-    "collection",
-    "token-policy",
-    "template",
-    "library"
-  ],
-  "keywords": [
-    "pact",
-    "smart-contract",
-    "nft",
-    "marmalade-v2",
-    "token-policy-v2",
-    "collection",
-    "mint"
-  ]
-}
-,
-{
   "name": "Oracle Feed (median, staleness-guarded)",
   "slug": "oracle-feed",
   "version": "1.0.0",
@@ -236,8 +204,7 @@
     "nft",
     "royalty",
     "sale",
-    "conservation",
-    "marmalade"
+    "conservation"
   ]
 }
 ,
@@ -855,68 +822,6 @@
 }
 ,
 {
-  "name": "marmalade-sale.conventional-auction",
-  "namespace": "marmalade-sale",
-  "module": "conventional-auction",
-  "version": "1.0",
-  "layer": "ecosystem",
-  "project": "Marmalade (Kadena)",
-  "category": "nft-auction",
-  "status": "production",
-  "chains_deployed": 20,
-  "network": "mainnet01",
-  "blockchain_hash": "CRTIH0nyjQlEfqWNtptmDT4p1XFMh6pRvVqdFbq2HKg",
-  "tx_hash": "5mv3aylv-6wU78uvKs1c1yvyzOFZIAoAM5qIypP99Qg",
-  "implements": [
-    "marmalade-v2.sale-v2"
-  ],
-  "dependencies": [
-    "marmalade-v2.ledger",
-    "marmalade-v2.policy-manager",
-    "marmalade-v2.sale-v2"
-  ],
-  "source": {
-    "url": "https://github.com/marmalade-io/marmalade",
-    "license": "BUSL-1.1"
-  },
-  "description": "The conventional-auction contract implements marmalade-v2.sale-v2 to provide a fixed-price (English-style) auction for NFTs in the Marmalade v2 framework. Sellers list NFTs at a starting price; buyers bid in a standard ascending auction. Deployed on all 20 chains as the primary NFT sale mechanism.\n",
-  "maturity": "stable",
-  "audit_status": "community-reviewed",
-  "census_date": "2025-01"
-}
-,
-{
-  "name": "marmalade-sale.dutch-auction",
-  "namespace": "marmalade-sale",
-  "module": "dutch-auction",
-  "version": "1.0",
-  "layer": "ecosystem",
-  "project": "Marmalade (Kadena)",
-  "category": "nft-auction",
-  "status": "production",
-  "chains_deployed": 20,
-  "network": "mainnet01",
-  "blockchain_hash": "tXavhdiFeIFFPHklwz2AaxYzodtmcKL3V_cVFYqynPI",
-  "tx_hash": "M09AhpncRnGPWBuSfDLOtLJGz73QUKnjj7R39yPPtE8",
-  "implements": [
-    "marmalade-v2.sale-v2"
-  ],
-  "dependencies": [
-    "marmalade-v2.ledger",
-    "marmalade-v2.policy-manager",
-    "marmalade-v2.sale-v2"
-  ],
-  "source": {
-    "url": "https://github.com/marmalade-io/marmalade",
-    "license": "BUSL-1.1"
-  },
-  "description": "The dutch-auction contract implements marmalade-v2.sale-v2 to provide descending-price (Dutch) auctions for NFTs. Price starts high and decreases at each block interval until a buyer accepts. Deployed on all 20 chains.\n",
-  "maturity": "stable",
-  "audit_status": "community-reviewed",
-  "census_date": "2025-01"
-}
-,
-{
   "name": "mok.token",
   "namespace": "mok",
   "module": "token",
@@ -1055,113 +960,6 @@
     "gas-station",
     "meta",
     "core",
-    "pre-deployed"
-  ]
-}
-,
-{
-  "name": "kip.token-manifest",
-  "slug": "kip-token-manifest",
-  "version": "1.0.0",
-  "repository": "https://github.com/kda-community/chainweb-node",
-  "license": "BSD-3-Clause",
-  "authors": [
-    {
-      "name": "Kadena LLC",
-      "email": ""
-    },
-    {
-      "name": "KDA Community Edition",
-      "email": ""
-    }
-  ],
-  "audit_status": "reference",
-  "tags": [
-    "nft",
-    "kip",
-    "marmalade",
-    "manifest",
-    "metadata",
-    "pre-deployed"
-  ]
-}
-,
-{
-  "name": "kip.token-policy-v2",
-  "slug": "kip-token-policy-v2",
-  "version": "2.0.0",
-  "repository": "https://github.com/kda-community/chainweb-node",
-  "license": "BSD-3-Clause",
-  "authors": [
-    {
-      "name": "Kadena LLC",
-      "email": ""
-    },
-    {
-      "name": "KDA Community Edition",
-      "email": ""
-    }
-  ],
-  "audit_status": "reference",
-  "tags": [
-    "interface",
-    "nft",
-    "kip",
-    "marmalade",
-    "policy",
-    "pre-deployed"
-  ]
-}
-,
-{
-  "name": "marmalade-v2.ledger",
-  "slug": "marmalade-v2-ledger",
-  "version": "2.0.0",
-  "repository": "https://github.com/kda-community/chainweb-node",
-  "license": "BSD-3-Clause",
-  "authors": [
-    {
-      "name": "Kadena LLC",
-      "email": ""
-    },
-    {
-      "name": "KDA Community Edition",
-      "email": ""
-    }
-  ],
-  "audit_status": "reference",
-  "tags": [
-    "nft",
-    "marmalade",
-    "ledger",
-    "token",
-    "poly-fungible",
-    "pre-deployed"
-  ]
-}
-,
-{
-  "name": "marmalade-v2.policy-manager",
-  "slug": "marmalade-v2-policy-manager",
-  "version": "2.0.0",
-  "repository": "https://github.com/kda-community/chainweb-node",
-  "license": "BSD-3-Clause",
-  "authors": [
-    {
-      "name": "Kadena LLC",
-      "email": ""
-    },
-    {
-      "name": "KDA Community Edition",
-      "email": ""
-    }
-  ],
-  "audit_status": "reference",
-  "tags": [
-    "nft",
-    "marmalade",
-    "policy",
-    "manager",
     "pre-deployed"
   ]
 }
