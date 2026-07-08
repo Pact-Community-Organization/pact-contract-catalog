@@ -8,6 +8,11 @@ settlement and policy layers that analysis found unsound. This is an original, i
 implementation: it shares no code with and does not depend on that stack, which this catalog does
 not carry.
 
+> **Deep technical reference:** [TECHNICAL.md](TECHNICAL.md) — every mechanism down to the code:
+> identity derivation, the policy system and its `-CALL` handshake, the conservation-asserted
+> settlement worked to 12 dp, defpacts, auctions, cross-chain passports, the marketplace
+> integration surface, the full capability inventory, and the test that proves each claim.
+
 ## Identity: why a shared ledger
 
 A token id is `n:{hash([token-details, chain-id, creation-guard])}` — derived from the creator's
