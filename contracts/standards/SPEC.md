@@ -21,10 +21,19 @@ every implementation — including PCO's own — references them there. This is 
 deployment that all token contracts share (KDA-CE locks the root namespace, so
 a governed principal namespace is the strongest available equivalent).
 
-| Network | PCO namespace |
+| Network | PCO namespace | Published |
+|---|---|---|
+| testnet06 | `n_e82dd10f74b7e8c253553de95629fdfa35cf8379` | 2026-07-08, all 20 chains |
+| mainnet | not yet published | — |
+
+Deployed interface hashes on testnet06 (identical on every chain; verify with
+`(at 'hash (describe-module "<ns>.<interface>"))`):
+
+| Interface | Hash (×20 chains) |
 |---|---|
-| testnet06 | `n_e82dd10f74b7e8c253553de95629fdfa35cf8379` |
-| mainnet | not yet published |
+| `nft-asset-v1` | `FN2KePeCEVyRqsFf-24ea3eivOER5EfjgSE12d_YoTQ` |
+| `nft-market-v1` | `bu-QsoCUuKKwViFtYsjX6kElPN8IkXJVx5ZNk5ohAog` |
+| `nft-xchain-v1` | `8l_UOlpbDKgfxdY8aA2pKWA_Fzu3iuxz_PMOifsrVK8` |
 
 Consumers implement the interfaces **fully qualified**:
 
