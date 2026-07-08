@@ -35,8 +35,23 @@
 (coin.credit "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset "carol") 1000.0)
 (commit-tx)
 
-;; NFT standard interfaces (royalty-sale implements nft-asset-v1 + nft-market-v1)
-(begin-tx "load NFT standard interfaces")
+;; NFT standard interfaces, in the PCO-owned principal namespace (testnet06:
+;; n_e82dd10f…) — royalty-sale implements them FULLY QUALIFIED, so the suite
+;; loads them into that namespace exactly as they live on-chain.
+(begin-tx "load NFT standard interfaces (PCO namespace)")
+;; env-data REPLACES the whole map — carry the personas forward for later txs
+(env-data
+  { "pco-sim": { "keys": ["pco"], "pred": "keys-all" }
+  , "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "mkt":   { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+  , "eve":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "gov":   { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" } })
+(env-sigs [ { "key": "pco", "caps": [] } ])
+(define-namespace "n_e82dd10f74b7e8c253553de95629fdfa35cf8379"
+  (read-keyset "pco-sim") (read-keyset "pco-sim"))
+(namespace "n_e82dd10f74b7e8c253553de95629fdfa35cf8379")
 (load "../../../standards/nft-asset-v1.pact")
 (load "../../../standards/nft-market-v1.pact")
 (commit-tx)

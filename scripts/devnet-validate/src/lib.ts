@@ -177,6 +177,44 @@ export function loadTemplate(slug: string, file: string, govConst: string, uniq:
   return { code: `(namespace "free")\n${patched}`, govKeyset };
 }
 
+// The NFT standard interfaces live in the PCO-owned principal namespace on
+// real networks (testnet06: n_e82dd10f…). The recap devnet cannot create that
+// namespace (its `ns` module lacks create-principal-namespace, and past the
+// height-700 migration the ns keysets are no longer open), so the devnet
+// rehearsal substitutes the pre-existing open `user` namespace — the same
+// cross-namespace topology: interfaces in one namespace, module in another,
+// implements/dispatch fully qualified.
+export const PCO_NS = 'n_e82dd10f74b7e8c253553de95629fdfa35cf8379';
+export const DEVNET_IFACE_NS = 'user';
+
+// Substitute the PCO namespace literal for the devnet interface namespace,
+// asserting the exact occurrence count so a source drift is caught, not masked.
+export function substPcoNs(code: string, expected: number): string {
+  const hits = code.split(PCO_NS).length - 1;
+  if (hits !== expected) {
+    throw new Error(`expected ${expected} PCO-ns literal occurrence(s), found ${hits} — review before deploying`);
+  }
+  return code.split(PCO_NS).join(DEVNET_IFACE_NS);
+}
+
+// Deploy nft-asset-v1 + nft-market-v1 into the devnet interface namespace.
+// Idempotent: interfaces are frozen (CannotUpgradeInterface), so if a prior
+// run already published them we must skip, not redeploy.
+export async function ensureStandardInterfaces(signer: Keypair): Promise<void> {
+  try {
+    await localCall(`(describe-module "${DEVNET_IFACE_NS}.nft-asset-v1")`);
+    console.log(`  standard interfaces already present in ${DEVNET_IFACE_NS}/ — skipping deploy`);
+    return;
+  } catch { /* not deployed yet */ }
+  const asset = readFileSync(join(ROOT, 'contracts', 'standards', 'nft-asset-v1.pact'), 'utf8');
+  const market = readFileSync(join(ROOT, 'contracts', 'standards', 'nft-market-v1.pact'), 'utf8');
+  await send({
+    code: `(namespace "${DEVNET_IFACE_NS}")\n${asset}\n${market}`,
+    label: `deploy nft-asset-v1 + nft-market-v1 into ${DEVNET_IFACE_NS}/`,
+    signers: [{ kp: signer }],
+  });
+}
+
 // Fund a persona account from sender00.
 export async function fund(kp: Keypair, amount: number): Promise<void> {
   await send({

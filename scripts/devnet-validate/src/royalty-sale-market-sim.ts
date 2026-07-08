@@ -19,6 +19,7 @@
 import {
   send, sendExpectFail, localCall, coinBalance, fund, persona, ksData,
   loadTemplate, saveResults, recordSteps,
+  ensureStandardInterfaces, substPcoNs,
 } from './lib.js';
 
 const SLUG = 'royalty-sale-market-sim';
@@ -46,7 +47,8 @@ const main = async () => {
   const T = `free.${TOK}`;
 
   const rs = loadTemplate('royalty-sale', 'royalty-sale.pact', 'royalty-sale-gov', MOD);
-  const rsSrc = rs.code.replace('(module royalty-sale GOV', `(module ${MOD} GOV`);
+  // 4 = the two implements lines + the two projected schema types
+  const rsSrc = substPcoNs(rs.code, 4).replace('(module royalty-sale GOV', `(module ${MOD} GOV`);
   const tk = loadTemplate('token-fungible', 'token.pact', 'token-gov', TOK);
   const tkSrc = tk.code.replace('(module token GOV', `(module ${TOK} GOV`);
 
@@ -65,6 +67,9 @@ const main = async () => {
   await fund(bob, 120.0); await fund(carol, 210.0); await fund(frank, 120.0);
   await fund(gina, 300.0); await fund(mkt1, 2.0); await fund(mkt2, 2.0);
   await fund(eve, 3.0);
+
+  // the standard interfaces must exist before a qualified implements can load
+  await ensureStandardInterfaces(gov);
 
   // ---- deploy both templates under free/ ----------------------------------
   await send({
@@ -118,8 +123,8 @@ const main = async () => {
   for (const [i, h] of hops.entries()) {
     const n = i + 1;
     const listCode = h.mkt
-      ? `(${M}.list-token "chain-1" ${h.price.toFixed(1)} coin "${h.mkt.account}" (read-keyset "m") ${h.bps})`
-      : `(${M}.list-token "chain-1" ${h.price.toFixed(1)} coin "" (read-keyset "m") 0)`;
+      ? `(${M}.list-token-with-fee "chain-1" ${h.price.toFixed(1)} coin "${h.mkt.account}" (read-keyset "m") ${h.bps})`
+      : `(${M}.list-token-with-fee "chain-1" ${h.price.toFixed(1)} coin "" (read-keyset "m") 0)`;
     await send({
       code: listCode,
       label: `hop ${n}: list chain-1 at ${h.price} (${h.mkt ? `${h.mktName} ${h.bps} bps` : 'no fee'})`,
@@ -175,7 +180,7 @@ const main = async () => {
     data: { ...ksData('c', carol), ...ksData('f', frank) },
   });
   await send({
-    code: `(${M}.list-token "dna-tok" 500.0 ${T} "${mkt2.account}" (read-keyset "m") 500)`,
+    code: `(${M}.list-token-with-fee "dna-tok" 500.0 ${T} "${mkt2.account}" (read-keyset "m") 500)`,
     label: `dana lists dna-tok at 500.0 ${TOK} (mkt2 5%)`,
     signers: [{ kp: dana, caps: (wc) => [wc(`${M}.OWNER`, 'dna-tok'), wc('coin.GAS')] }],
     data: ksData('m', mkt2),
@@ -193,7 +198,7 @@ const main = async () => {
   assert(near(await tokBal(escrow), 0.0), `token-side escrow settled to 0 on-node`);
 
   await send({
-    code: `(${M}.list-token "dna-tok" 200.0 ${T} "" (read-keyset "m") 0)`,
+    code: `(${M}.list-token-with-fee "dna-tok" 200.0 ${T} "" (read-keyset "m") 0)`,
     label: `carol re-lists dna-tok at 200.0 ${TOK} (no fee)`,
     signers: [{ kp: carol, caps: (wc) => [wc(`${M}.OWNER`, 'dna-tok'), wc('coin.GAS')] }],
     data: ksData('m', carol),
@@ -217,7 +222,7 @@ const main = async () => {
   // =====================================================================
   // gina (current owner) lists chain-1 at 30 — a buyer will commit to this
   await send({
-    code: `(${M}.list-token "chain-1" 30.0 coin "" (read-keyset "m") 0)`,
+    code: `(${M}.list-token-with-fee "chain-1" 30.0 coin "" (read-keyset "m") 0)`,
     label: 'gina lists chain-1 at 30.0',
     signers: [{ kp: gina, caps: (wc) => [wc(`${M}.OWNER`, 'chain-1'), wc('coin.GAS')] }],
     data: ksData('m', gina),
@@ -235,7 +240,7 @@ const main = async () => {
   }, 'sale-only');
   // FRONT-RUN: gina reprices to 40 AFTER carol signed a 30-cap
   await send({
-    code: `(${M}.list-token "chain-1" 40.0 coin "" (read-keyset "m") 0)`,
+    code: `(${M}.list-token-with-fee "chain-1" 40.0 coin "" (read-keyset "m") 0)`,
     label: 'FRONT-RUN: gina reprices the live listing to 40.0',
     signers: [{ kp: gina, caps: (wc) => [wc(`${M}.OWNER`, 'chain-1'), wc('coin.GAS')] }],
     data: ksData('m', gina),

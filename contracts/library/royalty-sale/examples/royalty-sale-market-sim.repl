@@ -97,7 +97,26 @@
 (token.mint "k:6666666666666666666666666666666666666666666666666666666666666666" (read-keyset "frank") 300.0)
 (commit-tx)
 
-(begin-tx "load NFT standard interfaces")
+;; Interfaces live in the PCO-owned principal namespace (testnet06:
+;; n_e82dd10f…); royalty-sale implements them fully qualified.
+(begin-tx "load NFT standard interfaces (PCO namespace)")
+;; env-data REPLACES the whole map — carry the personas forward for later txs
+(env-data
+  { "pco-sim": { "keys": ["pco"], "pred": "keys-all" }
+  , "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "mkt1":  { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+  , "eve":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "frank": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+  , "gina":  { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "mkt2":  { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" }
+  , "gov":   { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "dana":  { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-sigs [ { "key": "pco", "caps": [] } ])
+(define-namespace "n_e82dd10f74b7e8c253553de95629fdfa35cf8379"
+  (read-keyset "pco-sim") (read-keyset "pco-sim"))
+(namespace "n_e82dd10f74b7e8c253553de95629fdfa35cf8379")
 (load "../../../standards/nft-asset-v1.pact")
 (load "../../../standards/nft-market-v1.pact")
 (commit-tx)

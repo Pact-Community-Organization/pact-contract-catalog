@@ -71,7 +71,13 @@ flaws each mechanism exists to fix — the framework sources carry the same name
 [`contracts/standards/`](../standards/SPEC.md) is the **Kadena NFT interface
 standard v1**: three deliberately un-upgradeable interfaces (`nft-asset-v1`,
 `nft-market-v1`, `nft-xchain-v1`) plus normative clauses S1–S6 and a
-modref-driven conformance suite. In that model each marketplace is its **own
+modref-driven conformance suite. PCO owns the standard on-chain: the three
+interfaces are published once per network into the **PCO-owned principal
+namespace** (testnet06: `n_e82dd10f74b7e8c253553de95629fdfa35cf8379`), and
+every marketplace implements them **fully qualified** from there — same-text
+interfaces in different namespaces are different Pact types, so one shared
+publication is what makes independent implementations actually compatible.
+In that model each marketplace is its **own
 module custodying its own tokens** — the `fungible-v2` model of compatibility:
 every token contract is its own ledger, yet one wallet, one indexer, and one
 aggregator work across all of them, because every implementation exposes the
@@ -98,11 +104,11 @@ flowchart TB
         MGR --> AUC
     end
     subgraph STANDALONE["Standalone track — contracts/standards"]
-        SPEC["Kadena NFT standard v1<br/>nft-asset-v1 · nft-market-v1 · nft-xchain-v1<br/>+ SPEC.md S1–S6 + conformance driver"]
+        SPEC["Kadena NFT standard v1<br/>nft-asset-v1 · nft-market-v1 · nft-xchain-v1<br/>+ SPEC.md S1–S6 + conformance driver<br/>published in the PCO namespace<br/>(testnet06: n_e82dd10f…)"]
         RS["royalty-sale<br/>(reference implementation,<br/>contracts/library)"]
         GAL["smartpacts-gallery<br/>(production implementation,<br/>Smart Pacts)"]
-        SPEC -->|implements + passes<br/>the same modref suite| RS
-        SPEC -->|implements + passes<br/>the same modref suite| GAL
+        SPEC -->|"implements FULLY QUALIFIED +<br/>passes the same modref suite"| RS
+        SPEC -->|"implements FULLY QUALIFIED +<br/>passes the same modref suite"| GAL
     end
     FEE["A standalone marketplace can ALSO be a framework marketplace:<br/>a fee identity in framework quotes — zero contract changes, no custody.<br/>Gallery is the first."]
     GAL -.-> FEE

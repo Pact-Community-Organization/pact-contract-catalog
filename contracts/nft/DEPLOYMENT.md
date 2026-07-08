@@ -31,6 +31,14 @@ interface name, not an edit. Validate the full train on a devnet first, always.
 
 ## Order, per chain
 
+0. **The v1 standard interfaces come first (separate train).** PCO publishes
+   the Kadena NFT interface standard v1 (`contracts/standards/`:
+   `nft-asset-v1`, `nft-market-v1`, `nft-xchain-v1`) into the PCO-owned
+   principal namespace **before** any framework or marketplace deployment on
+   that network — standalone marketplaces implement those interfaces fully
+   qualified, so they must already exist everywhere a marketplace can deploy.
+   The framework's own interfaces (step 2 below) are a separate, internal set;
+   the two trains are independent, but the standard-v1 train runs first.
 1. **Admin keyset** — `(namespace "<ns>") (define-keyset "<ns>.<admin>" ...)`.
    This keyset is the framework governance gate; on a real network it should be
    hardware-backed.
