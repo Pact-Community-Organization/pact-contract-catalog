@@ -71,6 +71,31 @@ interface name, not an edit. Validate the full train on a devnet first, always.
   150k KDA-CE ceiling; full-module deploys are the largest transactions and
   still clear the ceiling comfortably.
 
+## Published deployments
+
+**testnet06** (2026-07-08): the full framework is live on **all 20 chains** in the
+PCO principal namespace `n_e82dd10f74b7e8c253553de95629fdfa35cf8379`, deployed in
+the order above (standard-v1 interfaces first, framework train after). Hashes are
+identical on every chain — verify with `(at 'hash (describe-module "<ns>.<module>"))`:
+
+| Module | Hash (×20 chains) |
+|---|---|
+| `util` | `gZTHFQtoSLAIvBMWZsTP3j5lSXJ5Hgea6ysOFSUM7aU` |
+| `policy-manager` | `YThA21JyYQQccu2oozH8ZwKFlekK9R_N4JeZqN9diFE` |
+| `ledger` | `dC0OstQbZ4VMTR9x83H1EaCKKlXOmwoJpMJvgD9jT-A` |
+| `royalty-policy` | `PInIBNpp562xTfPERC_wZ4lCSORmZUwpeaRoqeN8yQE` |
+| `non-fungible-policy` | `DfT5iDc9yX9e_Jaq4iPQ9YpiL9UB4KjUtIreAmOxSsU` |
+| `collection-policy` | `cKuPk4E4eCTPBf4sU6tkam-1Gj6pi7DJ-iUEsQBmxyI` |
+| `guard-policy` | `4mIXFB6rSw-Xe9kZqbfnDlm5-P3810Klh6im26zvD8o` |
+| `guarded-uri-policy` | `K-yA78Ptw5dzsyeq8GD0C36kfPDaB86OOBO3qv0In8k` |
+| `non-updatable-uri-policy` | `l4x3acxV4NejUbWCj1cFcFkeoenp-YOjpI1cRAFAB8o` |
+| `conventional-auction` | `RMLGEY1-9VxoDQEaKgLraOSh8b0H3WyAMFOez2qftkA` |
+| `dutch-auction` | `_NstxLsBlul172SUSCq67RL0NXgYI2cG_AZWKsnT4Qo` |
+
+Both auctions are registered sale contracts (`policy-manager.init` + registration
+executed as the train's final step per chain). This is a test-network deployment:
+real mechanics, test value.
+
 ## Upgrades
 
 Every upgrade must `bless` the previous module hash — in-flight sales and
