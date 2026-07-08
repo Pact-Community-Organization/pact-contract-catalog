@@ -1,0 +1,94 @@
+;; C1 — SURFACE C: weak-cap free-mint / handshake bypass.
+;;
+;; INVARIANT: no external caller can mint, credit, or move balances without the
+;; genuine ledger lifecycle path. The -CALL caps (MINT-CALL, CREDIT, etc.) have
+;; weak bodies (true); they are safe ONLY if unreachable outside the ledger.
+;;
+;; ATTACK: from an attacker tx, try to acquire the weak-body caps directly and
+;; call the internal money movers. If ANY of these succeeds, it is a CRITICAL
+;; free-mint / drain.
+
+(load "_bootstrap.repl")
+
+;; ---- create + mint a real token legitimately (so a token id exists) --------
+(begin-tx "create + mint a real token")
+(env-data
+  { "cg": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "royalty_spec":
+    { "creator": "k:7777777777777777777777777777777777777777777777777777777777777777"
+    , "creator-guard": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+    , "bps": 500, "sale-only": false } })
+(env-keys ["7777777777777777777777777777777777777777777777777777777777777777"])
+(namespace "nft")
+(let ((tid (nft.ledger.create-token-id
+              { 'uri: "ipfs://real", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'cg))))
+  (nft.ledger.create-token tid 0 "ipfs://real" [nft.royalty-policy] (read-keyset 'cg))
+  (nft.ledger.create-account tid "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'cg))
+  (nft.ledger.mint tid "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'cg) 1.0)
+  true)
+(commit-tx)
+
+;; ---- ATTACK 1: acquire MINT-CALL, call manager.enforce-mint directly -------
+(begin-tx "ATTACK: fabricate MINT-CALL")
+(env-data
+  { "ag": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "cg7": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-keys ["2222222222222222222222222222222222222222222222222222222222222222"])
+(let ((tid (nft.ledger.create-token-id
+              { 'uri: "ipfs://real", 'precision: 0, 'policies: [nft.royalty-policy] }
+              (read-keyset 'cg7))))
+  (expect-failure
+    "Module admin necessary for operation but has not been acquired:nft.ledger"
+    (with-capability (nft.ledger.MINT-CALL tid "k:2222222222222222222222222222222222222222222222222222222222222222" 1000000.0)
+      (nft.policy-manager.enforce-mint
+        { 'id: tid, 'supply: 0.0, 'precision: 0, 'uri: "x", 'policies: [] }
+        "k:2222222222222222222222222222222222222222222222222222222222222222"
+        (read-keyset 'ag) 1000000.0))))
+(commit-tx)
+
+;; ---- ATTACK 2: acquire CREDIT weak cap, call internal credit ---------------
+(begin-tx "ATTACK: fabricate CREDIT to mint balance from nothing")
+(env-data
+  { "ag": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "cg7": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-keys ["2222222222222222222222222222222222222222222222222222222222222222"])
+(let ((tid (nft.ledger.create-token-id
+              { 'uri: "ipfs://real", 'precision: 0, 'policies: [nft.royalty-policy] }
+              (read-keyset 'cg7))))
+  (expect-failure
+    "Module admin necessary for operation but has not been acquired:nft.ledger"
+    (with-capability (nft.ledger.CREDIT tid "k:2222222222222222222222222222222222222222222222222222222222222222")
+      (nft.ledger.credit tid "k:2222222222222222222222222222222222222222222222222222222222222222"
+        (read-keyset 'ag) 999999.0))))
+(commit-tx)
+
+;; ---- ATTACK 3: acquire MINT scope directly (composes CREDIT+UPDATE_SUPPLY) --
+(begin-tx "ATTACK: acquire MINT cap directly and mint")
+(env-data
+  { "ag": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "cg7": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-keys ["2222222222222222222222222222222222222222222222222222222222222222"])
+(let ((tid (nft.ledger.create-token-id
+              { 'uri: "ipfs://real", 'precision: 0, 'policies: [nft.royalty-policy] }
+              (read-keyset 'cg7))))
+  (expect-failure
+    "Module admin necessary for operation but has not been acquired:nft.ledger"
+    (with-capability (nft.ledger.MINT tid "k:2222222222222222222222222222222222222222222222222222222222222222" 999999.0)
+      (nft.ledger.credit tid "k:2222222222222222222222222222222222222222222222222222222222222222"
+        (read-keyset 'ag) 999999.0))))
+(commit-tx)
+
+;; ---- ATTACK 4: acquire UPDATE_SUPPLY and inflate supply --------------------
+(begin-tx "ATTACK: fabricate UPDATE_SUPPLY")
+(env-data { "cg7": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-keys ["2222222222222222222222222222222222222222222222222222222222222222"])
+(let ((tid (nft.ledger.create-token-id
+              { 'uri: "ipfs://real", 'precision: 0, 'policies: [nft.royalty-policy] }
+              (read-keyset 'cg7))))
+  (expect-failure
+    "Module admin necessary for operation but has not been acquired:nft.ledger"
+    (with-capability (nft.ledger.UPDATE_SUPPLY)
+      (nft.ledger.update-supply tid 999999.0))))
+(commit-tx)
+
+(print "C1 COMPLETE — all expect-failures passing means the weak caps held")

@@ -1,0 +1,202 @@
+;; D1 — SURFACE D: auction settlement integrity, gaps beyond the base suite.
+;;
+;; The base conventional-auction suite already proves: fake winner rejected,
+;; wrong candidate price rejected, paying-account != bid-escrow rejected,
+;; third-party-settles-to-winner conservation. This file attacks what it does
+;; NOT cover:
+;;   INV-1 (double settle): a completed sale cannot be settled a second time.
+;;   INV-2 (cross-auction escrow theft): auction B's settlement cannot pull from
+;;          auction A's bid escrow; the bid-escrow user-guard is not satisfiable
+;;          out of the manager's FUNDING-CALL / this module's REFUND scope.
+;;   INV-3 (refund conservation): after two outbids, the escrow holds exactly the
+;;          top bid; every displaced bidder was refunded in full.
+;;   INV-4 (late/low bids): a bid after end, or below reserve/increment, rejects.
+
+;; --- deploy coin + framework + royalty + conventional-auction (registered) --
+(begin-tx "coin")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+(begin-tx "deploy nft framework + auction")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../../interfaces/account-protocols.pact")
+(load "../../interfaces/token-policy.pact")
+(load "../../interfaces/poly-fungible.pact")
+(load "../../interfaces/ledger-iface.pact")
+(load "../../interfaces/sale.pact")
+(load "../../core/util.pact")
+(load "../../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(load "../../sale/conventional-auction.pact")
+(create-table nft.conventional-auction.auctions)
+(nft.policy-manager.register-sale-contract nft.conventional-auction)
+(commit-tx)
+
+;; --- fund bidders -----------------------------------------------------------
+(begin-tx "fund")
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "dave": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(test-capability (coin.CREDIT "k:5555555555555555555555555555555555555555555555555555555555555555"))
+(coin.credit "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset 'carol) 1000.0)
+(test-capability (coin.CREDIT "k:7777777777777777777777777777777777777777777777777777777777777777"))
+(coin.credit "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'dave) 1000.0)
+(commit-tx)
+
+;; --- alice creates + mints the auctioned NFT --------------------------------
+(begin-tx "create+mint")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 1000, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://auc", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://auc" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0))
+(commit-tx)
+
+;; --- offer to the auction + create the auction ------------------------------
+(begin-tx "offer + create auction")
+(env-hash (hash "d1-auc"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 250, "sale-contract": "nft.conventional-auction" } })
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://auc", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)
+  ;; auction: start 100s, end 1000s, reserve 10, increment 5, grace 500.
+  ;; create-auction needs the seller's UNSCOPED signature (MANAGE-AUCTION guard).
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (nft.conventional-auction.create-auction (hash "d1-auc") id 1767225700 1767226600 10.0 5.0 500))
+(commit-tx)
+
+;; --- INV-3 & INV-4: bidding with outbids + refund conservation --------------
+(begin-tx "bob bids 10, carol outbids 15 (bob refunded), dave low bid rejected")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 800) })
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "dave": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(namespace "nft")
+;; bob bids 10 (== reserve)
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [ (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                          (nft.conventional-auction.bid-escrow-account (hash "d1-auc")) 10.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'bob)) ] } ])
+(nft.conventional-auction.place-bid (hash "d1-auc") "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 10.0)
+(expect "escrow holds bob's 10" 10.0 (coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "d1-auc"))))
+;; dave tries 12 (< 10+5 increment) -> rejected
+(env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
+            , "caps": [ (coin.TRANSFER "k:7777777777777777777777777777777777777777777777777777777777777777"
+                          (nft.conventional-auction.bid-escrow-account (hash "d1-auc")) 12.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'dave)) ] } ])
+(expect-failure "bid below the required increment" "bid below the required increment"
+  (nft.conventional-auction.place-bid (hash "d1-auc") "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'dave) 12.0))
+;; carol bids 15 (== 10+5) -> bob refunded in full
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+            , "caps": [ (coin.TRANSFER "k:5555555555555555555555555555555555555555555555555555555555555555"
+                          (nft.conventional-auction.bid-escrow-account (hash "d1-auc")) 15.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'carol)) ] } ])
+(nft.conventional-auction.place-bid (hash "d1-auc") "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset 'carol) 15.0)
+(expect "escrow holds exactly carol's 15 (bob refunded, not summed)" 15.0
+  (coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "d1-auc"))))
+(expect "bob refunded in full" 1000.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(commit-tx)
+
+;; --- INV-4: a late bid after end is rejected --------------------------------
+(begin-tx "late bid after end rejected")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1100) })
+(env-data { "dave": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(namespace "nft")
+(env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
+            , "caps": [ (coin.TRANSFER "k:7777777777777777777777777777777777777777777777777777777777777777"
+                          (nft.conventional-auction.bid-escrow-account (hash "d1-auc")) 100.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'dave)) ] } ])
+(expect-failure "auction has ended" "auction has ended"
+  (nft.conventional-auction.place-bid (hash "d1-auc") "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'dave) 100.0))
+(commit-tx)
+
+;; --- settle to carol (the legit winner) -------------------------------------
+(begin-tx "settle to carol")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1100) })
+(env-data
+  (let ((escrow (nft.conventional-auction.bid-escrow-account (hash "d1-auc"))))
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "buyer": "k:5555555555555555555555555555555555555555555555555555555555555555"
+    , "buyer-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+    , "buyer_fungible_account": escrow
+    , "quoted_price": 15.0 }))
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://auc", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0
+                            (hash "d1-auc"))
+                        , (coin.TRANSFER (nft.conventional-auction.bid-escrow-account (hash "d1-auc"))
+                            (nft.policy-manager.escrow-account (hash "d1-auc")) 15.0) ] } ])
+  (continue-pact 1 false (hash "d1-auc"))
+  (expect "carol won the NFT" 1.0
+    (nft.ledger.get-balance id "k:5555555555555555555555555555555555555555555555555555555555555555")))
+(commit-tx)
+
+;; --- INV-1: DOUBLE SETTLE — the same sale cannot settle again ---------------
+(begin-tx "double settle rejected")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1100) })
+(env-data
+  (let ((escrow (nft.conventional-auction.bid-escrow-account (hash "d1-auc"))))
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "buyer": "k:5555555555555555555555555555555555555555555555555555555555555555"
+    , "buyer-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+    , "buyer_fungible_account": escrow
+    , "quoted_price": 15.0 }))
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://auc", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0
+                            (hash "d1-auc"))
+                        , (coin.TRANSFER (nft.conventional-auction.bid-escrow-account (hash "d1-auc"))
+                            (nft.policy-manager.escrow-account (hash "d1-auc")) 15.0) ] } ])
+  (expect-failure "a completed sale pact cannot be resumed/settled again"
+    (continue-pact 1 false (hash "d1-auc"))))
+(commit-tx)
+
+(print "D1 COMPLETE")

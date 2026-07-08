@@ -1,0 +1,43 @@
+;; red-team shared bootstrap — deploy coin + the full nft framework + the
+;; REAL hardened policies (not the fixture). Loaded via (load "_bootstrap.repl")
+;; at the top of each attack repl. Mirrors settlement.repl's setup exactly.
+
+;; --- coin (payment fungible) ------------------------------------------------
+(begin-tx "coin")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- the nft framework ------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../../interfaces/account-protocols.pact")
+(load "../../interfaces/token-policy.pact")
+(load "../../interfaces/poly-fungible.pact")
+(load "../../interfaces/ledger-iface.pact")
+(load "../../interfaces/sale.pact")
+(load "../../core/util.pact")
+(load "../../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(commit-tx)
+
+;; --- real hardened policies -------------------------------------------------
+(begin-tx "deploy policies")
+(namespace "nft")
+(load "../../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(commit-tx)

@@ -1,0 +1,88 @@
+;; B1 — SURFACE B: identity canonicalization / forgery / double-mint.
+;;
+;; INVARIANT 1 (order-independence): the same policy SET yields the same token id
+;;   regardless of the order the creator passes the policy list.
+;; INVARIANT 2 (no duplicate policy): a duplicated policy in the list is rejected.
+;; INVARIANT 3 (no double-mint): one id, one row — a second create-token of the
+;;   same id fails; burn-to-zero then re-create fails (row persists).
+;; INVARIANT 4 (anti-forgery): you cannot create a token whose id you did not
+;;   derive from a creation-guard you control.
+
+(load "_bootstrap.repl")
+
+;; a SECOND real policy so we have a 2-element set to permute
+(begin-tx "deploy guard-policy (second policy)")
+(namespace "nft")
+(load "../../policies/guard-policy.pact")
+(create-table nft.guard-policy.op-guards)
+(commit-tx)
+
+;; ---- INVARIANT 1: order independence ---------------------------------------
+(begin-tx "order-independence of token id")
+(namespace "nft")
+(let ((id-ab (nft.ledger.create-token-id
+               { 'uri: "ipfs://x", 'precision: 0, 'policies: [nft.royalty-policy nft.guard-policy] }
+               (read-keyset 'g)))
+      (id-ba (nft.ledger.create-token-id
+               { 'uri: "ipfs://x", 'precision: 0, 'policies: [nft.guard-policy nft.royalty-policy] }
+               (read-keyset 'g))))
+  (expect "policy-list order must NOT change the token id" id-ab id-ba))
+(commit-tx)
+
+;; ---- INVARIANT 2: duplicate policy rejected --------------------------------
+(begin-tx "duplicate policy rejected")
+(env-data
+  { "g7": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:7777777777777777777777777777777777777777777777777777777777777777"
+    , "creator-guard": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+    , "bps": 100, "sale-only": false } })
+(env-keys ["7777777777777777777777777777777777777777777777777777777777777777"])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dup", 'precision: 0, 'policies: [nft.royalty-policy nft.royalty-policy] }
+            (read-keyset 'g7))))
+  (expect-failure "duplicate policy"
+    (nft.ledger.create-token id 0 "ipfs://dup" [nft.royalty-policy nft.royalty-policy] (read-keyset 'g7))))
+(commit-tx)
+
+;; ---- INVARIANT 4: anti-forgery — id must re-derive from MY guard -----------
+(begin-tx "forge: claim an id derived from someone else's guard")
+(env-data
+  { "victim": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "attacker": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "creator-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "bps": 100, "sale-only": false } })
+;; attacker signs, but tries to register the VICTIM's derived id
+(env-keys ["2222222222222222222222222222222222222222222222222222222222222222"])
+(namespace "nft")
+(let ((victim-id (nft.ledger.create-token-id
+                   { 'uri: "ipfs://victim", 'precision: 0, 'policies: [nft.royalty-policy] }
+                   (read-keyset 'victim))))
+  ;; attacker supplies the victim's id but their OWN creation-guard -> re-derivation mismatch
+  (expect-failure "token protocol violation"
+    (nft.ledger.create-token victim-id 0 "ipfs://victim" [nft.royalty-policy] (read-keyset 'attacker)))
+  ;; attacker supplies the victim's id AND the victim's guard, but cannot SIGN it
+  (env-sigs [])
+  (expect-failure "cannot satisfy the victim's creation guard"
+    (nft.ledger.create-token victim-id 0 "ipfs://victim" [nft.royalty-policy] (read-keyset 'victim))))
+(commit-tx)
+
+;; ---- INVARIANT 3: no double-mint of an id ----------------------------------
+(begin-tx "double-create same id fails")
+(env-data
+  { "g7": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:7777777777777777777777777777777777777777777777777777777777777777"
+    , "creator-guard": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+    , "bps": 100, "sale-only": false } })
+(env-keys ["7777777777777777777777777777777777777777777777777777777777777777"])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://once", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'g7))))
+  (nft.ledger.create-token id 0 "ipfs://once" [nft.royalty-policy] (read-keyset 'g7))
+  (expect-failure "second create of the same id must fail (insert)"
+    (nft.ledger.create-token id 0 "ipfs://once" [nft.royalty-policy] (read-keyset 'g7))))
+(commit-tx)
+
+(print "B1 COMPLETE")

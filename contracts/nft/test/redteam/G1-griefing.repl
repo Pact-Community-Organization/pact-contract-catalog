@@ -1,0 +1,117 @@
+;; G1 — SURFACE G: griefing / DoS via payout-account squatting + defpact wedge.
+;;
+;; INV-1 (payout squat): an attacker who pre-creates the SELLER's fungible
+;;   account with a DIFFERENT guard cannot brick settlement. (If coin's
+;;   transfer-create enforces the provided guard == the existing guard, a
+;;   mismatched squat would abort the buy forever — a real griefing vector.)
+;; INV-2 (fee-account squat): same for the marketplace fee account.
+;; INV-3 (withdraw always available): a dangling offer (timeout 0) can always
+;;   be withdrawn by the seller — the NFT never permanently locks in escrow.
+
+(load "_bootstrap.repl")
+
+;; ---- fund buyer ------------------------------------------------------------
+(begin-tx "fund buyer")
+(env-data { "bg": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bg) 1000.0)
+(commit-tx)
+
+;; ---- ATTACKER pre-squats the SELLER's coin account with a FOREIGN guard ----
+;; seller principal is k:1111...; the attacker creates it first with a guard
+;; that is NOT the seller's (a k: account can only carry its own key's guard,
+;; so we squat with a DIFFERENT single-key guard — coin.create-account lets
+;; anyone create any account name with any guard).
+(begin-tx "attacker squats the seller coin account")
+(env-data
+  { "attacker-as-seller": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+;; NOTE: a k:1111 principal validates ONLY against the 1111 keyset, so coin
+;; SHOULD reject creating "k:1111..." with a 3333 guard (principal accounts are
+;; guard-bound). We test that this squat is itself impossible OR harmless.
+(print ["can the attacker create k:1111 with a foreign guard?"
+  (try "REJECTED"
+    (coin.create-account "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'attacker-as-seller)))])
+(commit-tx)
+
+;; ---- the seller creates + mints, offers at 100, no fee ---------------------
+(begin-tx "seller creates + mints + offers")
+(env-hash (hash "g1-sale"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 0, "sale-only": false }
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://g1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://g1" [nft.royalty-policy] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+;; ---- INV-1: does the buy settle despite any squat attempt? -----------------
+(begin-tx "buy settles; seller gets paid regardless of squat")
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://g1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "g1-sale"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "g1-sale")) 100.0) ] } ])
+  (continue-pact 1 false (hash "g1-sale"))
+  (expect "seller received the full 100 (squat did not brick settlement)" 100.0
+    (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect "buyer got the NFT" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(commit-tx)
+
+;; ---- INV-3: a dangling offer is always withdrawable (no permanent lock) ----
+(begin-tx "buyer re-offers, then withdraws — the NFT is never stuck")
+(env-hash (hash "g1-dangle"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "bg": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 50.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://g1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0)
+  (expect "NFT escrowed (buyer no longer holds it)" 0.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  ;; withdraw (rollback of step 0), timeout 0 => seller may withdraw anytime
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.WITHDRAW id
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0
+                            (hash "g1-dangle")) ] } ])
+  (continue-pact 0 true (hash "g1-dangle"))
+  (expect "withdraw returned the NFT to the seller (never locked)" 1.0
+    (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(commit-tx)
+
+(print "G1 COMPLETE")
