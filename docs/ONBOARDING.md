@@ -22,7 +22,7 @@ This guide outlines the process for onboarding a new Pact smart contract to the 
 
 3. **Validate Locally**:
    - Run `bash scripts/validate_contract.sh <contract-dir>` — the same gate CI enforces.
-   - Run your test suite directly: `cd <contract-dir>/examples && pact <name>-test.repl`. Library suites must be **self-contained**: load any dependencies (coin, kip interfaces, marmalade) from this repo's `contracts/registry/` tree by relative path, never from an external checkout.
+   - Run your test suite directly: `cd <contract-dir>/examples && pact <name>-test.repl`. Library suites must be **self-contained**: load any dependencies (coin, kip interfaces) from this repo's `contracts/registry/` tree by relative path, never from an external checkout.
 
 4. **Submit Pull Request**:
    - Create a PR with a clear description.

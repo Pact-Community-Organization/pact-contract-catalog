@@ -1,11 +1,12 @@
 # The `nft` framework — a shared-ledger NFT standard, hardened
 
 A complete NFT framework for Kadena (Pact 5.4ce / KDA-CE), authored by the PCO as a neutral
-community standard in the `nft` namespace. It keeps the **one architectural idea worth keeping**
-from the deployed Marmalade V2 stack — token identity anchored in a shared ledger — and re-authors
-the settlement/policy layer around five principles the analysis of that stack produced. This is an
-original implementation, not a fork; the Marmalade sources under `contracts/registry/marmalade/`
-are read-only reference.
+community standard in the `nft` namespace — **the catalog's NFT architecture**. It anchors token
+identity in one shared ledger and builds the settlement/policy layer around five principles
+produced by the PCO's security analysis of the previously deployed NFT stack (Marmalade V2), whose
+settlement and policy layers that analysis found unsound. This is an original, independent
+implementation: it shares no code with and does not depend on that stack, which this catalog does
+not carry.
 
 ## Identity: why a shared ledger
 
@@ -97,8 +98,6 @@ policy is immutable by default.
 - **`contracts/library/royalty-sale/`** — the standalone hardened marketplace template and v1
   reference implementation. This framework generalizes its settlement discipline (dust guard,
   merged legs, conservation assert) behind a policy architecture.
-- **`contracts/registry/marmalade/`** — the deployed stack whose analysis produced the principles
-  above; reference only.
 
 ## Gates
 

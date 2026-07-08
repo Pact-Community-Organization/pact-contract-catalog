@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # generate_index.sh - Build an index from contracts/**/metadata.yaml
-# Two-tree layout per ADR-001:
-#   contracts/registry/{kip,core,marmalade,ecosystem,community}
+# Catalog layout:
+#   contracts/registry/{kip,core,ecosystem,community}
 #   contracts/library/
 # Census sections (ecosystem, registry community) render a 6-column table
 # with a Chains column; curated sections render a 5-column table with Tags.
@@ -91,7 +91,6 @@ emit_section() {
 emit_section "contracts/library"            "Library — Deployable Templates (\`library/\`)"                       "tags"
 emit_section "contracts/registry/kip"       "Registry — KIP Standards (\`registry/kip/\`)"                        "tags"
 emit_section "contracts/registry/core"      "Registry — Core Infrastructure (\`registry/core/\`)"                 "tags"
-emit_section "contracts/registry/marmalade" "Registry — Marmalade v2 NFT Stack (\`registry/marmalade/\`)"        "tags"
 emit_section "contracts/registry/ecosystem" "Registry — Ecosystem Modules (\`registry/ecosystem/\`) — census"     "census"
 emit_section "contracts/registry/community" "Registry — Community On-Chain Modules (\`registry/community/\`) — census" "census"
 

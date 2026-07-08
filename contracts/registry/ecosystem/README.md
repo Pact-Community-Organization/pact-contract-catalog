@@ -8,9 +8,11 @@ and were selected based on live blockchain census data from `mainnet01`.
 
 1. Called `(list-modules)` on all 20 chains via the `/local` API.
 2. Counted cross-chain deployment frequency (max 20/20).
-3. Excluded modules already in `core/`, `kip/`, or `marmalade/` layers.
+3. Excluded modules already in the `core/` or `kip/` layers.
 4. Excluded coin, meme tokens, and test modules.
-5. Selected the top 10 by frequency + ecosystem significance.
+5. Selected the top 10 by frequency + ecosystem significance. (The two
+   Marmalade-stack entries originally selected have since been removed from
+   the catalog — the catalog's NFT architecture is `contracts/nft/`.)
 
 ## Modules
 
@@ -22,8 +24,6 @@ and were selected based on live blockchain census data from `mainnet01`.
 | [`lago.kwUSDC`](lago/kwUSDC/) | Lago Bridge | Wrapped USDC | 20/20 |
 | [`lago.USD2`](lago/USD2/) | Lago Bridge | USD stablecoin | 20/20 |
 | [`kadena.spirekey`](kadena/spirekey/) | Kadena Inc. | WebAuthn auth / gas payer | 20/20 |
-| [`marmalade-sale.conventional-auction`](marmalade-sale/conventional-auction/) | Marmalade | NFT fixed-price auction | 20/20 |
-| [`marmalade-sale.dutch-auction`](marmalade-sale/dutch-auction/) | Marmalade | NFT Dutch auction | 20/20 |
 | [`mok.token`](mok/mok-token/) | Momentum | Governance token | 20/20 |
 | [`arkade.token`](arkade/arkade-token/) | Arkade | Gaming utility token | 20/20 |
 
@@ -40,9 +40,6 @@ runonflux.flux────────implements──────► fungible-v
 lago.kwBTC / kwUSDC / USD2──────────── (standalone, bridge-managed)
 
 kadena.spirekey───────implements──────► gas-payer-v1
-
-marmalade-sale.conventional-auction──► marmalade-v2.sale-v2
-marmalade-sale.dutch-auction─────────► marmalade-v2.sale-v2
 
 mok.token─────────────implements──────► fungible-v2
                                       ► fungible-xchain-v1

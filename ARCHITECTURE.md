@@ -29,7 +29,6 @@ contracts/
   registry/            — observed contracts, grouped by dependency layer
     kip/               — KIP standard interfaces (no executable logic)
     core/              — Pre-deployed KDA-CE chain infrastructure
-    marmalade/         — Marmalade v2 NFT stack (pre-deployed, verbatim reference)
     ecosystem/         — production third-party modules (deployment breadth + call-frequency census)
     community/         — census-observed community free-namespace modules
   standards/           — Kadena NFT interface standard v1 (normative SPEC + conformance suite)
@@ -52,8 +51,6 @@ Layer 0 — KIP Standards (registry/kip/)
     kip/fungible-v2            ◄─── implemented by coin, custom tokens
     kip/fungible-xchain-v1     ◄─── implemented by coin (cross-chain)
     kip/gas-payer-v1           ◄─── implemented by gas station modules
-    kip/token-policy-v2        ◄─── implemented by all Marmalade policies
-    kip/token-manifest              module (not interface); used by ledger
 
 Layer 1 — Core Infrastructure (registry/core/)
   Pre-deployed production modules on all chains (0–19).
@@ -63,20 +60,11 @@ Layer 1 — Core Infrastructure (registry/core/)
     core/ns                    namespace registry; called by define-namespace
     core/fungible-util         implements kip.account-protocols-v1; used by coin
 
-Layer 2 — Marmalade v2 NFT Stack (registry/marmalade/)
-  Marmalade v2 pre-deployed NFT stack.
-  Depends on kip/ interfaces and core/coin for payments.
-
-    marmalade/ledger            implements ledger-v2 + kip.poly-fungible-v3
-                                    uses  kip/token-manifest
-                                    delegates to  marmalade/policy-manager
-    marmalade/policy-manager    calls kip/token-policy-v2 on each policy
-                                    uses  core/coin (royalty payments)
-
-Layer 3 — Ecosystem (registry/ecosystem/)
+Layer 2 — Ecosystem (registry/ecosystem/)
   Production modules from major KDA-CE ecosystem projects.
   Two selection cohorts:
     Cohort A (PR#15): top-10 by deployment breadth — (list-modules) on all 20 chains, Jan 2025
+                      (the two Marmalade-stack entries have since been removed from the catalog)
     Cohort B (PR#17): top-10 by function call frequency — block-payload-sampling census,
                       stride=1000, 90-day window, all 20 chains, March 2026
 
@@ -87,8 +75,6 @@ Layer 3 — Ecosystem (registry/ecosystem/)
     ecosystem/lago/kwUSDC                    (governance shell — namespace reservation only)
     ecosystem/lago/USD2                      (governance shell — namespace reservation only)
     ecosystem/kadena/spirekey                implements gas-payer-v1
-    ecosystem/marmalade-sale/conventional-auction  implements marmalade-v2.sale-v2
-    ecosystem/marmalade-sale/dutch-auction         implements marmalade-v2.sale-v2
     ecosystem/mok/mok-token                  implements fungible-v2 + fungible-xchain-v1
     ecosystem/arkade/arkade-token            implements fungible-v2 + fungible-xchain-v1
 
@@ -101,7 +87,7 @@ Layer 3 — Ecosystem (registry/ecosystem/)
     ecosystem/brothers-dao/bro               BRO governance token (fungible-v2)
     ecosystem/heron/heron                    community utility token (fungible-v2, mass conservation FV)
 
-Layer 4 — Community On-Chain (registry/community/)
+Layer 3 — Community On-Chain (registry/community/)
   Census-observed community free-namespace modules (verbatim snapshots).
   Implements interfaces from Layer 0. Depends on Layer 1 for runtime calls.
 
@@ -116,9 +102,9 @@ Library — Deployable Templates (contracts/library/)
   audit_status self-reviewed or better. Entries with open CRITICAL
   findings can never live here.
 
-    Ten templates: hello-world, token-fungible, gas-station,
-    multisig-treasury, vesting, dao-voting, nft-collection-policy,
-    oracle-feed, property-lease, royalty-sale
+    Nine templates: hello-world, token-fungible, gas-station,
+    multisig-treasury, vesting, dao-voting, oracle-feed,
+    property-lease, royalty-sale
     (see contracts/library/README.md for the full table)
 
 Standards — Kadena NFT Interface Standard v1 (contracts/standards/)
@@ -128,8 +114,9 @@ Standards — Kadena NFT Interface Standard v1 (contracts/standards/)
   suite. royalty-sale is the reference implementation.
 
 NFT Framework (contracts/nft/)
-  PCO-authored shared-ledger NFT ecosystem. Outside the registry
-  layer stack; an original implementation (not a Marmalade fork).
+  The catalog's NFT architecture: a PCO-authored shared-ledger NFT
+  ecosystem. Outside the registry layer stack; an original,
+  independent implementation.
   One hardened ledger (token identity), a policy-manager with a
   single conservation-asserted settlement, six policies, two
   auction sale contracts, cross-chain relocation via policy
@@ -141,10 +128,7 @@ NFT Framework (contracts/nft/)
 ```
 kip/fungible-v2 ◄──────────────── core/coin ◄──── core/ns
 kip/fungible-xchain-v1 ◄─────────┘          ◄──── core/fungible-util
-kip/gas-payer-v1                                      │
-kip/token-manifest ◄──────────── marmalade/ledger ◄───┤
-kip/token-policy-v2 ◄────────── marmalade/policy-mgr  │
-                                      └── core/coin ───┘
+kip/gas-payer-v1
 library/* + registry/community/* ── kip/* + core/*
 
 ecosystem/kaddex.kdx──────────── kip/fungible-v2
@@ -156,8 +140,6 @@ ecosystem/mok.token───────────── kip/fungible-v2 + kip
 ecosystem/arkade.token────────── kip/fungible-v2 + kip/fungible-xchain-v1
 ecosystem/kadena.spirekey──────── kip/gas-payer-v1
 ecosystem/lago.*──────────────── (governance shells — no fungible logic deployed on-chain)
-ecosystem/marmalade-sale.*───────► marmalade/policy-manager
-                                ► marmalade-v2.sale-v2
 
 cohort-B additions (call-frequency census):
 ecosystem/kia/kia-oracle──────── free.util-time
@@ -229,12 +211,11 @@ keywords: ['pact', 'smart-contract']
 |------|------------|-------------------|
 | `registry/kip/` | Upstream Kadena LLC | [kadena-io/marmalade/pact/kip/](https://github.com/kadena-io/marmalade/tree/main/pact/kip) + [chainweb-node](https://github.com/kda-community/chainweb-node) |
 | `registry/core/` | Upstream Kadena LLC | [kadena-io/marmalade/pact/root/](https://github.com/kadena-io/marmalade/tree/main/pact/root) + chainweb-node |
-| `registry/marmalade/` | Upstream Kadena LLC | [kadena-io/marmalade/pact/](https://github.com/kadena-io/marmalade/tree/main/pact) |
 | `registry/ecosystem/` | Third-party projects | Various (see each module's `metadata.yaml`) — verified from mainnet01 blockchain census Jan 2025 / Mar 2026 |
 | `registry/community/` | Community projects | Census-observed free-namespace modules (see each module's `metadata.yaml`) |
 | `library/` | PCO contributors | [Pact-Community-Organization/pact-contract-catalog](https://github.com/Pact-Community-Organization/pact-contract-catalog) |
 | `standards/` | PCO-authored | This repository (normative interface standard, un-upgradeable once deployed) |
-| `nft/` | PCO-authored | This repository (original implementation; Marmalade sources were read-only reference) |
+| `nft/` | PCO-authored | This repository (original, independent implementation) |
 
 > All `registry/` entries are **observed entries** — verbatim snapshots of upstream or on-chain code, catalogued to document what community modules build upon and integrate with. PCO makes no security claim beyond the recorded audit status. Only `library/` entries are authored, maintained, and quality-gated by PCO.
 
@@ -242,7 +223,7 @@ keywords: ['pact', 'smart-contract']
 
 ## Governance notes
 
-- Additions to `registry/kip/`, `registry/core/`, or `registry/marmalade/` require a maintainer PR for upstream sync.
+- Additions to `registry/kip/` or `registry/core/` require a maintainer PR for upstream sync.
 - Additions to `registry/ecosystem/` and `registry/community/` require evidence of deployment on mainnet01 (module hash, describe-module output, or block explorer link) plus a PR matching the census methodology in `contracts/registry/ecosystem/README.md`.
 - Additions to `library/` require a PR linking a GitHub issue, passing CI (including the library quality gate: schema-A metadata, co-located `.repl` tests, `audit_status` of `self-reviewed` or better), and approval per `CONTRIBUTING.md`.
 - Entries with an open CRITICAL finding live in `registry/`, never `library/`.
