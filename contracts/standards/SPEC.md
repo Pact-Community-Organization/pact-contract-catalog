@@ -23,8 +23,18 @@ a governed principal namespace is the strongest available equivalent).
 
 | Network | PCO namespace | Published |
 |---|---|---|
-| testnet06 | `n_e82dd10f74b7e8c253553de95629fdfa35cf8379` | 2026-07-08, all 20 chains |
+| testnet06 | `n_e82dd10f74b7e8c253553de95629fdfa35cf8379` | 2026-07-08, all 20 chains — **wiped by the subsequent network reset; re-publication pending** (see note) |
 | mainnet | not yet published | — |
+
+> **Network-reset note (2026-07-18).** testnet06 was reset to a fresh genesis
+> shortly after publication, which removed every deployed contract including
+> this standard. Nothing about the standard changed: the namespace name derives
+> deterministically from the PCO keyset (it will re-derive identically), and a
+> module hash derives from its source (byte-identical interfaces re-publish to
+> the same hashes). The tables here are therefore the **expected values** for
+> the re-publication, which follows once the network is back and namespace
+> creation (`ns.create-principal-namespace`) is available on the new genesis.
+> Until then, no on-chain copy of the standard exists on testnet06.
 
 Deployed interface hashes on testnet06 (identical on every chain; verify with
 `(at 'hash (describe-module "<ns>.<interface>"))`):

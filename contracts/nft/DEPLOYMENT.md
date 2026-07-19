@@ -31,6 +31,27 @@ interface name, not an edit. Validate the full train on a devnet first, always.
 
 ## Order, per chain
 
+The full sequence, per chain (each step confirmed mined before the next —
+cross-references resolve at load time):
+
+```mermaid
+flowchart TD
+    subgraph T0["Train 0 — the v1 standard (once per network, PCO)"]
+        NS["create the PCO principal namespace<br/>(ns.create-principal-namespace)"] --> IF["publish nft-asset-v1 + nft-market-v1 + nft-xchain-v1<br/>(one tx — frozen forever at deploy)"]
+    end
+    subgraph T1["Train 1 — the framework"]
+        KS["1 · admin keyset"] --> FWIF["2 · framework interfaces<br/>(account-protocols, token-policy,<br/>poly-fungible, ledger-iface, sale)"]
+        FWIF --> UTIL["3 · util"]
+        UTIL --> PM["4 · policy-manager + tables"]
+        PM --> LED["5 · ledger + tables"]
+        LED --> POL["6 · policies + tables<br/>(royalty, non-fungible, … as needed)"]
+        POL --> AUC["7 · sale contracts + tables<br/>(conventional-auction, dutch-auction)"]
+        AUC --> WIRE["8 · governance wiring<br/>(policy-manager.init + register-sale-contract)"]
+    end
+    IF --> KS
+    WIRE --> VER["verify: describe-module hash per chain<br/>+ run the test suites against the deployed sources"]
+```
+
 0. **The v1 standard interfaces come first (separate train).** PCO publishes
    the Kadena NFT interface standard v1 (`contracts/standards/`:
    `nft-asset-v1`, `nft-market-v1`, `nft-xchain-v1`) into the PCO-owned
@@ -73,10 +94,20 @@ interface name, not an edit. Validate the full train on a devnet first, always.
 
 ## Published deployments
 
-**testnet06** (2026-07-08): the full framework is live on **all 20 chains** in the
-PCO principal namespace `n_e82dd10f74b7e8c253553de95629fdfa35cf8379`, deployed in
-the order above (standard-v1 interfaces first, framework train after). Hashes are
-identical on every chain — verify with `(at 'hash (describe-module "<ns>.<module>"))`:
+**testnet06** (2026-07-08): the full framework was deployed to **all 20 chains** in
+the PCO principal namespace `n_e82dd10f74b7e8c253553de95629fdfa35cf8379`, in the
+order above (standard-v1 interfaces first, framework train after).
+
+> **Network-reset note (2026-07-18).** testnet06 was reset to a fresh genesis
+> shortly after this deployment, which removed it along with everything else on
+> the network. The framework itself is unchanged; re-deployment follows the same
+> train once the network is back and namespace creation is available on the new
+> genesis. Because the namespace derives from the PCO keyset and module hashes
+> derive from source, the table below records the **expected values** for the
+> re-deployment (byte-identical sources reproduce identical hashes).
+
+Hashes are identical on every chain — verify with
+`(at 'hash (describe-module "<ns>.<module>"))`:
 
 | Module | Hash (×20 chains) |
 |---|---|

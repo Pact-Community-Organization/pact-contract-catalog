@@ -8,10 +8,44 @@ settlement and policy layers that analysis found unsound. This is an original, i
 implementation: it shares no code with and does not depend on that stack, which this catalog does
 not carry.
 
+> **Launching your own market?** Start with the [marketplace quickstart](QUICKSTART.md) —
+> what to deploy (usually: nothing), what to configure, and the whole onboarding journey in
+> plain language.
+>
 > **Deep technical reference:** [TECHNICAL.md](TECHNICAL.md) — every mechanism down to the code:
 > identity derivation, the policy system and its `-CALL` handshake, the conservation-asserted
 > settlement worked to 12 dp, defpacts, auctions, cross-chain passports, the marketplace
 > integration surface, the full capability inventory, and the test that proves each claim.
+
+## The map — interfaces, framework, and your marketplace
+
+```mermaid
+flowchart LR
+    subgraph STD["The v1 standard — PCO namespace (frozen interfaces)"]
+        SIF["nft-asset-v1<br/>nft-market-v1<br/>nft-xchain-v1"]
+    end
+    subgraph FW["The nft framework — shared ledger (this directory)"]
+        LEDGER["ledger<br/>(token identity + custody)"]
+        PM["policy-manager<br/>(one conservation-asserted settlement)"]
+        POL["policies<br/>(royalty, guards, 1/1, collections, uri)"]
+        AUC["auctions<br/>(conventional, dutch)"]
+        LEDGER --- PM
+        PM --- POL
+        PM --- AUC
+    end
+    subgraph MKT["A marketplace (yours)"]
+        FEE["fee identity in the seller's quote<br/>+ frontend + auction crank"]
+        STAND["…or a standalone module implementing<br/>the v1 interfaces fully qualified"]
+    end
+    FEE -->|"offer / buy transactions"| PM
+    STAND -->|"implements"| SIF
+    SIF -.->|"one wallet / indexer works across every<br/>conforming standalone marketplace"| STAND
+```
+
+Two independent tracks, both PCO-owned: a **standalone** marketplace custodies its own tokens and
+implements the frozen v1 interfaces from the PCO namespace ([`contracts/standards/`](../standards/));
+a **framework** marketplace holds no custody at all — it is a fee identity in seller-signed quotes,
+settled by the shared ledger's policy-manager. The quickstart walks both.
 
 ## Identity: why a shared ledger
 
