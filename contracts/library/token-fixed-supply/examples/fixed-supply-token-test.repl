@@ -1,0 +1,235 @@
+;; fixed-supply-token-test.repl — PCO library template test suite
+;;
+;; Self-contained: loads the fungible-v2 interface from this repository's
+;; registry tree. No external sandbox required.
+;;
+;; Covers: deploy-time parameter validation, the ONE-SHOT mint (exactness,
+;; wrong-keyset rejection, second-call impossibility), the fungible-v2
+;; surface (managed TRANSFER scoping, guard mismatch, reserved-name/principal
+;; protocol, rotate safety), self-burn supply accounting, and the disabled
+;; cross-chain path.
+
+;; NOTE on deploy-time parameter validation: the precision/total-supply
+;; bounds are enforced inside defconsts, i.e. AT MODULE LOAD. A
+;; REPL limitation prevents asserting failing loads in-suite (expect-failure
+;; around `load` corrupts repl state), so bad-deploy rejection is verified
+;; manually: load this module with e.g. "precision": 13 and observe the
+;; abort. See README "Known limits".
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+
+;; ---------------------------------------------------------------------------
+;; Setup: interface + a good deploy (tables are created by the file itself -
+;; frozen governance means they can only ever exist via the deploy tx)
+;; ---------------------------------------------------------------------------
+(env-data
+  { "symbol": "FIX", "precision": 12, "total-supply": 1000000.0
+  , "token-minter": ["minter-key"]
+  , "alice": ["alice-key"], "bob": ["bob-key"], "carol": ["carol-key"]
+  , "attacker": ["attacker-key"]
+  , "k-ks": ["deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"] })
+
+(begin-tx "setup")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../fixed-supply-token.pact")
+(commit-tx)
+
+(begin-tx "frozen governance")
+(expect-failure "module admin is unobtainable" "frozen"
+  (acquire-module-admin fixed-supply-token))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; One-shot mint
+;; ---------------------------------------------------------------------------
+;; REPL discipline used throughout: expect-failure does NOT roll back the
+;; partial writes of the failed action in this Pact version, so every
+;; negative case that could write before failing lives in its own
+;; transaction ended with (rollback-tx).
+
+(begin-tx "mint auth")
+(env-sigs [{"key": "attacker-key", "caps": []}])
+(expect-failure "non-minter cannot init-mint" "Keyset failure"
+  (fixed-supply-token.init-mint
+    [ { "account": "alice", "guard": (read-keyset "alice"), "amount": 1000000.0 } ]))
+(rollback-tx)
+
+(begin-tx "under-distribution rejected")
+(env-sigs [{"key": "minter-key", "caps": []}])
+(expect-failure "under-distribution rejected" "exactly TOTAL-SUPPLY"
+  (fixed-supply-token.init-mint
+    [ { "account": "alice", "guard": (read-keyset "alice"), "amount": 999999.0 } ]))
+(rollback-tx)
+
+(begin-tx "over-distribution rejected")
+(env-sigs [{"key": "minter-key", "caps": []}])
+(expect-failure "over-distribution rejected" "exactly TOTAL-SUPPLY"
+  (fixed-supply-token.init-mint
+    [ { "account": "alice", "guard": (read-keyset "alice"), "amount": 1000001.0 } ]))
+(rollback-tx)
+
+(begin-tx "the one mint")
+(env-sigs [{"key": "minter-key", "caps": []}])
+(expect "mint succeeds" "minted"
+  (fixed-supply-token.init-mint
+    [ { "account": "alice", "guard": (read-keyset "alice"), "amount": 600000.0 }
+    , { "account": "bob",   "guard": (read-keyset "bob"),   "amount": 300000.0 }
+    , { "account": "carol", "guard": (read-keyset "carol"), "amount": 100000.0 } ]))
+(expect "alice funded" 600000.0 (fixed-supply-token.get-balance "alice"))
+(expect "bob funded"   300000.0 (fixed-supply-token.get-balance "bob"))
+(expect "carol funded" 100000.0 (fixed-supply-token.get-balance "carol"))
+(expect "initial supply recorded" 1000000.0 (fixed-supply-token.initial-supply))
+(expect "nothing burned yet" 0.0 (fixed-supply-token.burned-total))
+(expect "circulating = initial" 1000000.0 (fixed-supply-token.circulating-supply))
+(commit-tx)
+
+(begin-tx "second mint impossible")
+(env-sigs [{"key": "minter-key", "caps": []}])
+(expect-failure "one-shot enforced by the supply-row insert" "already found"
+  (fixed-supply-token.init-mint
+    [ { "account": "alice", "guard": (read-keyset "alice"), "amount": 1000000.0 } ]))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Account protocol: creation, duplicates, reserved names, principals
+;; ---------------------------------------------------------------------------
+(begin-tx "account protocol")
+(env-sigs [])
+(expect-failure "duplicate account rejected" "already found"
+  (fixed-supply-token.create-account "alice" (read-keyset "alice")))
+(expect-failure "too-short name rejected" "min length"
+  (fixed-supply-token.create-account "ab" (read-keyset "alice")))
+(expect-failure "k: squat rejected: guard is not the principal's"
+  "Single-key account protocol violation"
+  (fixed-supply-token.create-account
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    (read-keyset "attacker")))
+(expect "proper principal account created"
+  "created k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  (fixed-supply-token.create-account
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    (read-keyset "k-ks")))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Transfers: managed cap scoping and ledger rules
+;; ---------------------------------------------------------------------------
+(begin-tx "unsigned transfer fails")
+(env-sigs [])
+(expect-failure "no capability installed" "not installed"
+  (fixed-supply-token.transfer "alice" "bob" 10.0))
+(commit-tx)
+
+(begin-tx "signed transfer works and is bounded by the managed amount")
+(env-sigs [ { "key": "alice-key"
+            , "caps": [ (fixed-supply-token.TRANSFER "alice" "bob" 100.0) ] } ])
+(expect "transfer ok" "Write succeeded" (fixed-supply-token.transfer "alice" "bob" 60.0))
+(expect "second leg within the managed budget" "Write succeeded"
+  (fixed-supply-token.transfer "alice" "bob" 40.0))
+(expect-failure "managed budget exhausted" "TRANSFER exceeded"
+  (fixed-supply-token.transfer "alice" "bob" 1.0))
+(expect "alice debited" 599900.0 (fixed-supply-token.get-balance "alice"))
+(expect "bob credited" 300100.0 (fixed-supply-token.get-balance "bob"))
+(commit-tx)
+
+(begin-tx "transfer rules")
+(env-sigs [ { "key": "alice-key"
+            , "caps": [ (fixed-supply-token.TRANSFER "alice" "alice" 10.0)
+                      , (fixed-supply-token.TRANSFER "alice" "bob" 2000000.0)
+                      , (fixed-supply-token.TRANSFER "alice" "carol" 10.0) ] } ])
+(expect-failure "self-transfer rejected" "same sender and receiver"
+  (fixed-supply-token.transfer "alice" "alice" 10.0))
+(expect-failure "insufficient funds" "insufficient funds"
+  (fixed-supply-token.transfer "alice" "bob" 1000000.0))
+(expect-failure "precision violation" "precision violation"
+  (fixed-supply-token.transfer "alice" "carol" 0.0000000000001))
+(rollback-tx)
+
+;; the failing credit comes AFTER the debit wrote - rollback-tx discards the leak
+(begin-tx "guard mismatch on credit to an existing account")
+(env-sigs [ { "key": "alice-key"
+            , "caps": [ (fixed-supply-token.TRANSFER "alice" "bob" 10.0) ] } ])
+(expect-failure "cannot re-guard an existing account via transfer-create"
+  "account guard mismatch"
+  (fixed-supply-token.transfer-create "alice" "bob" (read-keyset "attacker") 10.0))
+(rollback-tx)
+
+(begin-tx "transfer-create to a new principal account")
+(env-sigs [ { "key": "alice-key"
+            , "caps": [ (fixed-supply-token.TRANSFER
+                          "alice"
+                          "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                          25.0) ] } ])
+(fixed-supply-token.transfer-create
+  "alice"
+  "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  (read-keyset "k-ks") 25.0)
+(expect "principal account credited" 25.0
+  (fixed-supply-token.get-balance
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Rotation safety
+;; ---------------------------------------------------------------------------
+(begin-tx "rotate under a capability-scoped signature")
+(env-sigs [ { "key": "carol-key"
+            , "caps": [ (fixed-supply-token.ROTATE "carol") ] } ])
+(expect "vanity account rotates under a scoped ROTATE signature" "rotated carol"
+  (fixed-supply-token.rotate "carol" (read-keyset "attacker")))
+(commit-tx)
+(begin-tx "principal accounts cannot rotate away")
+(env-sigs [ { "key": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+            , "caps": [] } ])
+(expect-failure "principal rotation forbidden" "unsafe for principal accounts"
+  (fixed-supply-token.rotate
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    (read-keyset "attacker")))
+(commit-tx)
+(begin-tx "old guard is gone after rotation")
+(env-sigs [ { "key": "carol-key"
+            , "caps": [ (fixed-supply-token.TRANSFER "carol" "bob" 1.0) ] } ])
+(expect-failure "old key no longer authorizes" "Keyset failure"
+  (fixed-supply-token.transfer "carol" "bob" 1.0))
+(commit-tx)
+(begin-tx "new guard authorizes")
+(env-sigs [ { "key": "attacker-key"
+            , "caps": [ (fixed-supply-token.TRANSFER "carol" "bob" 1.0) ] } ])
+(expect "rotated guard transfers" "Write succeeded"
+  (fixed-supply-token.transfer "carol" "bob" 1.0))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Burn: self-only, exact supply accounting
+;; ---------------------------------------------------------------------------
+(begin-tx "burn auth")
+(env-sigs [{"key": "attacker-key", "caps": []}])
+(expect-failure "only the holder can burn" "Keyset failure"
+  (fixed-supply-token.burn "bob" 10.0))
+(commit-tx)
+
+(begin-tx "burn accounting")
+(env-events true)
+(env-sigs [{"key": "bob-key", "caps": []}])
+(expect-failure "cannot burn more than balance" "insufficient funds"
+  (fixed-supply-token.burn "bob" 9999999.0))
+(expect "burn ok" "burned" (fixed-supply-token.burn "bob" 100.0))
+(expect "bob debited by the burn" 300001.0 (fixed-supply-token.get-balance "bob"))
+(expect "burned-total tracks" 100.0 (fixed-supply-token.burned-total))
+(expect "initial supply unchanged" 1000000.0 (fixed-supply-token.initial-supply))
+(expect "circulating shrank" 999900.0 (fixed-supply-token.circulating-supply))
+(expect "BURNED event emitted"
+  [ { "name": "fixed-supply-token.BURNED", "params": ["bob" 100.0], "module-hash": (at 'hash (describe-module "fixed-supply-token")) } ]
+  (env-events true))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Cross-chain is disabled
+;; ---------------------------------------------------------------------------
+(begin-tx "xchain disabled")
+(env-sigs [{"key": "alice-key", "caps": []}])
+(expect-failure "transfer-crosschain step 0 always aborts" "cross-chain transfers are disabled"
+  (fixed-supply-token.transfer-crosschain "alice" "bob" (read-keyset "bob") "1" 10.0))
+(commit-tx)
+
+(print "fixed-supply-token suite complete")

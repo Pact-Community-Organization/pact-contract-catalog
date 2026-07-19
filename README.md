@@ -11,11 +11,13 @@ The catalog ships four clearly separated products:
 
 ## The Library
 
-Nine production-grade templates covering the foundations most projects need. Every one shipped through the same three gates: a **blocking CI test suite**, a **static-analysis pass**, and an **independent adversarial security review** whose findings and fixes are documented in the entry's `AUDIT.md` — including the attacks that were tried and defeated.
+Eleven production-grade templates covering the foundations most projects need. Every one shipped through the same three gates: a **blocking CI test suite**, a **static-analysis pass**, and an **independent adversarial security review** whose findings and fixes are documented in the entry's `AUDIT.md` — including the attacks that were tried and defeated.
 
 | Template | What it is |
 |---|---|
 | [token-fungible](contracts/library/token-fungible/) | A hardened `fungible-v2` + `fungible-xchain-v1` token: coin-pattern guard enforcement, governed mint, reserved-name protection, cross-chain step semantics. |
+| [token-fixed-supply](contracts/library/token-fixed-supply/) | A frozen, non-upgradeable `fungible-v2` token: one-shot exact-distribution mint, self-burn only, no admin surface — immutability as the product. |
+| [token-fixed-supply-gov](contracts/library/token-fixed-supply-gov/) | The fixed-supply token plus advisory live-vote governance: weight = current balance, balance decreases release recorded votes, permanent tallies, executes nothing. |
 | [gas-station](contracts/library/gas-station/) | Drain-defended gas sponsorship: bounds and accounting against *actual* chain gas (never signer-supplied values), per-user on-chain allowlist. |
 | [multisig-treasury](contracts/library/multisig-treasury/) | M-of-N treasury: KDA in a capability-guarded vault, asynchronous propose/approve/execute, rotation that revokes stale approvals. |
 | [vesting](contracts/library/vesting/) | Cliff + linear vesting, escrowed upfront: the beneficiary never depends on the funder's solvency; revoke returns only the unvested part; governance has zero fund paths. |
