@@ -18,6 +18,8 @@ _Generated from `contracts/**/metadata.yaml`._
 | Oracle Feed (median, staleness-guarded) | oracle-feed | 1.0.0 | self-reviewed | oracle, price-feed, median, template, library |
 | Property Lease (rental rails) | property-lease | 1.0.0 | self-reviewed | lease, rental, escrow, revenue-split, template, library |
 | Royalty Sale (conservation-checked NFT marketplace) | royalty-sale | 1.0.0 | self-reviewed | nft, royalty, marketplace, escrow, template, library |
+| Fixed-Supply Token with Advisory Governance | token-fixed-supply-gov | 1.0.0 | self-reviewed | token, fungible, fixed-supply, governance, voting, template, library |
+| Fixed-Supply Token (frozen, one-shot mint) | token-fixed-supply | 1.0.0 | self-reviewed | token, fungible, fixed-supply, non-upgradeable, template, library |
 | Token (fungible-v2 + fungible-xchain-v1) | token-fungible | 0.2.0 | self-reviewed | token, fungible, template, library |
 | Token Vesting (cliff + linear) | vesting | 1.0.0 | self-reviewed | vesting, escrow, timelock, template, library |
 

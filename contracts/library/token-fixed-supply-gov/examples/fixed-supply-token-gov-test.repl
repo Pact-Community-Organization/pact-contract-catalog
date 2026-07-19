@@ -1,0 +1,303 @@
+;; fixed-supply-token-gov-test.repl — PCO library template test suite
+;;
+;; Self-contained: loads the fungible-v2 interface from this repository's
+;; registry tree. No external sandbox required.
+;;
+;; The fungible core mirrors library/token-fixed-supply (a compact sanity
+;; block re-proves it here); the bulk of this suite exercises the governance
+;; delta: proposal threshold, duration/active bounds, live-vote weight with
+;; re-vote, the RELEASE rule on transfer and burn, the permissionless
+;; release-votes sync, tally freeze at close, index self-pruning, and the
+;; bounded transfer gas under maximum governance load.
+
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+
+;; NOTE on deploy-time parameter validation: the precision/total-supply/
+;; gov-threshold bounds are enforced inside defconsts, i.e. AT MODULE LOAD.
+;; A REPL limitation prevents asserting failing loads in-suite, so
+;; bad-deploy rejection is verified manually: load this module with e.g.
+;; "gov-threshold": 0.5 and observe the abort. See README "Known limits".
+
+;; ---------------------------------------------------------------------------
+;; Setup: interface + deploy (tables created by the file - frozen governance)
+;; ---------------------------------------------------------------------------
+(env-data
+  { "symbol": "FSG", "precision": 12, "total-supply": 900000.0
+  , "gov-threshold": 0.01
+  , "token-minter": ["minter-key"]
+  , "whale": ["whale-key"], "holder": ["holder-key"], "carol": ["carol-key"]
+  , "attacker": ["attacker-key"]
+  , "k-ks": ["deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"] })
+
+(begin-tx "setup")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../fixed-supply-token-gov.pact")
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Core sanity: one-shot mint + reserved-name protocol + managed transfer
+;; ---------------------------------------------------------------------------
+;; REPL discipline used throughout: expect-failure does NOT roll back the
+;; partial writes of the failed action in this Pact version, so every
+;; negative case that could write before failing lives in its own
+;; transaction ended with (rollback-tx).
+
+(begin-tx "mint auth")
+(env-sigs [{"key": "attacker-key", "caps": []}])
+(expect-failure "non-minter cannot init-mint" "Keyset failure"
+  (fixed-supply-token-gov.init-mint
+    [ { "account": "whale", "guard": (read-keyset "whale"), "amount": 900000.0 } ]))
+(rollback-tx)
+
+(begin-tx "distribution must be exact")
+(env-sigs [{"key": "minter-key", "caps": []}])
+(expect-failure "distribution must be exact" "exactly TOTAL-SUPPLY"
+  (fixed-supply-token-gov.init-mint
+    [ { "account": "whale", "guard": (read-keyset "whale"), "amount": 899999.0 } ]))
+(rollback-tx)
+
+(begin-tx "the one mint")
+(env-sigs [{"key": "minter-key", "caps": []}])
+(expect "mint succeeds" "minted"
+  (fixed-supply-token-gov.init-mint
+    [ { "account": "whale",  "guard": (read-keyset "whale"),  "amount": 500000.0 }
+    , { "account": "holder", "guard": (read-keyset "holder"), "amount": 1000.0 }
+    , { "account": "carol",  "guard": (read-keyset "carol"),  "amount": 399000.0 } ]))
+(commit-tx)
+
+(begin-tx "second mint impossible + squat rejected")
+(env-sigs [{"key": "minter-key", "caps": []}])
+(expect-failure "second mint impossible" "already found"
+  (fixed-supply-token-gov.init-mint
+    [ { "account": "whale", "guard": (read-keyset "whale"), "amount": 900000.0 } ]))
+(expect-failure "k: squat rejected" "Single-key account protocol violation"
+  (fixed-supply-token-gov.create-account
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    (read-keyset "attacker")))
+(rollback-tx)
+
+(begin-tx "managed transfer sanity")
+(env-sigs [ { "key": "whale-key"
+            , "caps": [ (fixed-supply-token-gov.TRANSFER "whale" "holder" 10.0) ] } ])
+(fixed-supply-token-gov.transfer "whale" "holder" 10.0)
+(expect-failure "managed budget exhausted" "TRANSFER exceeded"
+  (fixed-supply-token-gov.transfer "whale" "holder" 1.0))
+(expect "holder credited" 1010.0 (fixed-supply-token-gov.get-balance "holder"))
+(commit-tx)
+
+;; put the 10 back so governance numbers stay round
+(begin-tx "restore round balances")
+(env-sigs [ { "key": "holder-key"
+            , "caps": [ (fixed-supply-token-gov.TRANSFER "holder" "whale" 10.0) ] } ])
+(fixed-supply-token-gov.transfer "holder" "whale" 10.0)
+(expect "whale at 500000" 500000.0 (fixed-supply-token-gov.get-balance "whale"))
+(expect "holder at 1000" 1000.0 (fixed-supply-token-gov.get-balance "holder"))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Governance constants
+;; ---------------------------------------------------------------------------
+(begin-tx "governance constants")
+(expect "threshold = 1% of supply" 9000.0 (fixed-supply-token-gov.proposal-threshold))
+(expect "no open proposals yet" [] (fixed-supply-token-gov.open-ids))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Proposal creation: threshold, duration bounds, guard
+;; ---------------------------------------------------------------------------
+(env-sigs [{"key": "holder-key", "caps": []}])
+(begin-tx "below-threshold holder cannot propose")
+(expect-failure "threshold enforced" "balance below proposal threshold"
+  (fixed-supply-token-gov.create-proposal "holder" "t" "b" 48))
+(commit-tx)
+
+(env-sigs [{"key": "whale-key", "caps": []}])
+(begin-tx "duration bounds")
+(expect-failure "too short" "duration outside"
+  (fixed-supply-token-gov.create-proposal "whale" "t" "b" 23))
+(expect-failure "too long" "duration outside"
+  (fixed-supply-token-gov.create-proposal "whale" "t" "b" 721))
+(expect-failure "empty title" "title 1..120 chars"
+  (fixed-supply-token-gov.create-proposal "whale" "" "b" 48))
+(commit-tx)
+
+(begin-tx "wrong signer cannot propose for the whale")
+(env-sigs [{"key": "holder-key", "caps": []}])
+(expect-failure "guard enforced" "Keyset failure"
+  (fixed-supply-token-gov.create-proposal "whale" "t" "b" 48))
+(commit-tx)
+
+;; SCOPED-signature proposing: wallets never need an unscoped signature
+(env-sigs [ { "key": "whale-key"
+            , "caps": [ (fixed-supply-token-gov.PROPOSE "whale") ] } ])
+(begin-tx "whale opens proposal 1 with a capability-scoped signature")
+(expect "pid 1" "1"
+  (fixed-supply-token-gov.create-proposal
+    "whale" "List on the community page?" "Advisory signal only." 72))
+(expect "open ids [1]" ["1"] (fixed-supply-token-gov.open-ids))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Voting: weight = current balance; re-vote updates in place.
+;; The first vote uses a SCOPED signature (caps: [(VOTE "1" "whale")]) - a
+;; wallet can authorize exactly one vote on one proposal and nothing else.
+;; ---------------------------------------------------------------------------
+(env-sigs [ { "key": "whale-key"
+            , "caps": [ (fixed-supply-token-gov.VOTE "1" "whale") ] } ])
+(begin-tx "whale votes yes with a capability-scoped signature")
+(fixed-supply-token-gov.cast-vote "1" "whale" "yes")
+(expect "yes tally == whale balance" 500000.0
+  (at 'yes (fixed-supply-token-gov.get-proposal "1")))
+(expect-failure "bad choice rejected" "choice: yes|no|abstain"
+  (fixed-supply-token-gov.cast-vote "1" "whale" "maybe"))
+(commit-tx)
+
+(env-sigs [ { "key": "attacker-key"
+            , "caps": [ (fixed-supply-token-gov.VOTE "1" "whale") ] } ])
+(begin-tx "a scoped cap under the wrong key is worthless")
+(expect-failure "voter guard still enforced inside the cap" "Keyset failure"
+  (fixed-supply-token-gov.cast-vote "1" "whale" "no"))
+(rollback-tx)
+
+(env-sigs [{"key": "whale-key", "caps": []}])
+
+(begin-tx "re-vote moves the full weight to no")
+(fixed-supply-token-gov.cast-vote "1" "whale" "no")
+(expect "yes back to 0" 0.0 (at 'yes (fixed-supply-token-gov.get-proposal "1")))
+(expect "no == whale balance" 500000.0
+  (at 'no (fixed-supply-token-gov.get-proposal "1")))
+(commit-tx)
+
+(env-sigs [{"key": "holder-key", "caps": []}])
+(begin-tx "small holder votes yes")
+(fixed-supply-token-gov.cast-vote "1" "holder" "yes")
+(expect "yes == 1000" 1000.0 (at 'yes (fixed-supply-token-gov.get-proposal "1")))
+(commit-tx)
+
+(begin-tx "zero-balance account cannot vote")
+(env-sigs [{"key": "attacker-key", "caps": []}])
+(expect-failure "no account row, no vote" "No value found"
+  (fixed-supply-token-gov.cast-vote "1" "attacker" "yes"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; THE RELEASE RULE: balance decreases shrink the recorded vote
+;; ---------------------------------------------------------------------------
+(env-sigs [ { "key": "whale-key"
+            , "caps": [ (fixed-supply-token-gov.TRANSFER "whale" "carol" 50000.0) ] } ])
+(begin-tx "transfer releases the moved weight")
+(let ((before (at 'no (fixed-supply-token-gov.get-proposal "1"))))
+  (fixed-supply-token-gov.transfer "whale" "carol" 50000.0)
+  (expect "no tally shrank by exactly the moved amount" (- before 50000.0)
+    (at 'no (fixed-supply-token-gov.get-proposal "1")))
+  (expect "vote row synced to the new balance" 450000.0
+    (at 'weight (fixed-supply-token-gov.get-vote "1" "whale"))))
+(commit-tx)
+
+(env-sigs [{"key": "whale-key", "caps": []}])
+(begin-tx "burn releases too; credits stay unvoted; public sync is a no-op")
+(let ((before (at 'no (fixed-supply-token-gov.get-proposal "1"))))
+  (fixed-supply-token-gov.burn "whale" 10000.0)
+  (expect "no tally shrank by the burn" (- before 10000.0)
+    (at 'no (fixed-supply-token-gov.get-proposal "1"))))
+(let ((t (at 'no (fixed-supply-token-gov.get-proposal "1"))))
+  (fixed-supply-token-gov.release-votes "whale")
+  (expect "public release-votes is a harmless sync" t
+    (at 'no (fixed-supply-token-gov.get-proposal "1"))))
+;; carol received 50k but never voted - tallies never grow from a credit
+(expect "turnout = yes + no only (credits never vote)"
+  (+ (at 'yes (fixed-supply-token-gov.get-proposal "1"))
+     (at 'no (fixed-supply-token-gov.get-proposal "1")))
+  (at 'turnout (fixed-supply-token-gov.get-results "1")))
+(expect "supply accounting after burn" 890000.0
+  (fixed-supply-token-gov.circulating-supply))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; MAX-ACTIVE bound
+;; ---------------------------------------------------------------------------
+(env-sigs [{"key": "whale-key", "caps": []}])
+(begin-tx "at most 3 active proposals")
+(fixed-supply-token-gov.create-proposal "whale" "p2" "" 168)
+(fixed-supply-token-gov.create-proposal "whale" "p3" "" 168)
+(expect-failure "4th active rejected" "too many active proposals"
+  (fixed-supply-token-gov.create-proposal "whale" "p4" "" 48))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Transfer gas at TRUE worst case - 3 open proposals, live votes on ALL 3 -
+;; stays far under the 150k ceiling (asserted, not just printed)
+;; ---------------------------------------------------------------------------
+(env-sigs [{"key": "whale-key", "caps": []}])
+(begin-tx "whale votes on p2 and p3 too")
+(fixed-supply-token-gov.cast-vote "2" "whale" "yes")
+(fixed-supply-token-gov.cast-vote "3" "whale" "abstain")
+(commit-tx)
+
+(env-gasmodel "table") (env-gaslimit 150000)
+(env-sigs [ { "key": "whale-key"
+            , "caps": [ (fixed-supply-token-gov.TRANSFER "whale" "carol" 100.0) ] } ])
+(begin-tx "worst-case transfer gas: 3 active proposals, 3 live votes")
+(env-gas 0)
+(fixed-supply-token-gov.transfer "whale" "carol" 100.0)
+(print (format "GAS worst-case transfer (3 open, 3 live votes): {}" [(env-gas)]))
+(expect "worst-case governance-loaded transfer well under the 150k ceiling" true
+  (< (env-gas) 5000))
+(commit-tx)
+(env-sigs [])
+
+;; ---------------------------------------------------------------------------
+;; Core parity with the base template: rotation safety + disabled cross-chain
+;; ---------------------------------------------------------------------------
+(begin-tx "principal account for rotation checks")
+(env-sigs [])
+(fixed-supply-token-gov.create-account
+  "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  (read-keyset "k-ks"))
+(commit-tx)
+
+(begin-tx "rotate is scoped-signable; principals cannot rotate away")
+(env-sigs [ { "key": "carol-key"
+            , "caps": [ (fixed-supply-token-gov.ROTATE "carol") ] } ])
+(expect "vanity rotate under a scoped signature" "rotated carol"
+  (fixed-supply-token-gov.rotate "carol" (read-keyset "attacker")))
+(commit-tx)
+(begin-tx "principal rotation rejected")
+(env-sigs [ { "key": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+            , "caps": [] } ])
+(expect-failure "principal rotation forbidden" "unsafe for principal accounts"
+  (fixed-supply-token-gov.rotate
+    "k:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    (read-keyset "attacker")))
+(rollback-tx)
+
+(begin-tx "xchain disabled")
+(env-sigs [{"key": "whale-key", "caps": []}])
+(expect-failure "transfer-crosschain step 0 always aborts" "cross-chain transfers are disabled"
+  (fixed-supply-token-gov.transfer-crosschain
+    "whale" "carol" (read-keyset "carol") "1" 10.0))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Tally freeze at close + index self-pruning
+;; ---------------------------------------------------------------------------
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-04T00:00:01Z") })
+(begin-tx "voting closed; tallies frozen")
+(env-sigs [{"key": "holder-key", "caps": []}])
+(expect-failure "vote after close rejected" "voting closed"
+  (fixed-supply-token-gov.cast-vote "1" "holder" "no"))
+(expect "results closed" true (at 'closed (fixed-supply-token-gov.get-results "1")))
+(commit-tx)
+
+(env-sigs [ { "key": "holder-key"
+            , "caps": [ (fixed-supply-token-gov.TRANSFER "holder" "carol" 1000.0) ] } ])
+(begin-tx "post-close transfer does NOT touch the frozen tally")
+(let ((frozen (at 'yes (fixed-supply-token-gov.get-proposal "1"))))
+  (fixed-supply-token-gov.transfer "holder" "carol" 1000.0)
+  (expect "closed tally unchanged" frozen
+    (at 'yes (fixed-supply-token-gov.get-proposal "1"))))
+;; the index self-prunes: p1 closed, p2/p3 still open
+(expect "open ids pruned to p2,p3" ["2" "3"] (fixed-supply-token-gov.open-ids))
+(commit-tx)
+
+(print "fixed-supply-token-gov suite complete")
