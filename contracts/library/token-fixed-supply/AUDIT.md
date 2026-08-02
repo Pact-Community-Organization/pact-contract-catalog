@@ -57,11 +57,16 @@ acquisition rejected), original probe batteries re-run, verdict unchanged.
 | F2 | INFO | `read-integer 'precision` coerces decimals by rounding — `12.4` deploys silently as `12`. Operator's own tx data, irreversible deploy footgun. | Documented in README §Known limits: send deploy parameters as exact JSON numbers. |
 | F3 | INFO | Non-principal vanity names are first-come (standard fungible-v2 behavior; squatter denies only the name string, never value). | Documented in README §Known limits. |
 
-## Attacks attempted and defeated (reviewer-executed probes)
+## Attacks attempted (reviewer-executed probes)
 
-- Free-mint via the weak `CREDIT` capability: direct `credit`/`debit` fail
-  `require-capability`; external `with-capability (CREDIT …)` fails
-  `Module admin necessary`; `install-capability` fails `not managed`.
+> **Scope.** This lists the routes this review actually exercised and what each one
+> did. It is not a claim that the list is exhaustive, and absence from it is not
+> evidence of safety. Validate independently before deploying with real value.
+
+- Free-mint via the weak `CREDIT` capability — routes exercised: direct
+  `credit`/`debit` (fail `require-capability`); external
+  `with-capability (CREDIT …)` (fails `Module admin necessary`);
+  `install-capability` (fails `not managed`).
 - Second mint: blocked by the singleton supply-row insert.
 - Under/over-distribution: blocked by the exact-sum enforce.
 - Managed-budget overrun, self-transfer, precision dust, insufficient funds:

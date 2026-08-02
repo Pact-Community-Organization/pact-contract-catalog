@@ -59,7 +59,11 @@ closed tallies are immutable.
 | F7 | INFO | No AUDIT.md at review time. | This file. |
 | F8 | INFO | Closed pids persist in `gov-actives` until the next `create-proposal` prunes (≤3 stale reads per transfer meanwhile; self-heals). | Accepted as-is; cosmetic, provably bounded. |
 
-## Attacks attempted and defeated (reviewer-executed)
+## Attacks attempted (reviewer-executed)
+
+> **Scope.** This lists the routes this review actually exercised and what each one
+> did. It is not a claim that the list is exhaustive, and absence from it is not
+> evidence of safety. Validate independently before deploying with real value.
 
 - **Vote→transfer→re-vote double-count** across split accounts and circular
   transfers: tally always equals the sum of voters' current balances; never
