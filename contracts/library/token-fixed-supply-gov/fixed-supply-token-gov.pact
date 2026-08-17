@@ -667,7 +667,7 @@
 
   (defun register-non-voting:string (account:string reason:string)
     @doc "Record ACCOUNT as an escrow whose holdings are outside the float \
-         \and carry no vote. REASON is mandatory and public."
+         \and carry no vote. REASON is mandatory and public. Registration gates FUTURE ballots only - a ballot cast before it persists, so register every escrow BEFORE its first question opens."
     (with-capability (NON-VOTING-ADMIN)
       (validate-account account)
       (enforce (!= "" reason) "a public reason is required")

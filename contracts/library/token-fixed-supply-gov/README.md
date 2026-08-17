@@ -186,3 +186,15 @@ via `continue-pact`; SPV proof validation itself needs devnet.
 ## License
 
 Apache-2.0 — see the repository [LICENSE](../../../LICENSE).
+
+## Audit dispositions (v2.0.0 cold review)
+
+- **Escrow registration is not retroactive.** A ballot cast before an account is registered
+  non-voting stays in the tally. Register every escrow before its first question opens. This is
+  deliberate: zeroing live ballots on registration would let governance strike an unfavourable
+  ballot out of a running tally — the same power the no-cancel-once-open rule exists to deny.
+- **Balance-decrease releases emit no event.** An indexer rebuilding tallies from events must
+  replay every debit against the open-question set; `get-results`/`get-head-to-head` on chain are
+  authoritative. A per-release event was rejected: it would tax every transfer.
+- **Verify every chain has all tables before the first question and before any freeze** — a chain
+  missing `rcv-actives` refuses every debit, and after a freeze there is no repair.

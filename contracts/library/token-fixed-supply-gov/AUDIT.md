@@ -151,3 +151,14 @@ Same REPL discipline note as the base template: `expect-failure` does not
 roll back partial writes and cannot wrap `load` — negative write-capable
 cases live in `(rollback-tx)` transactions; bad-deploy aborts (including the
 zero-threshold refusal) are verified manually.
+
+## 2.0.0 — independent cold review (pre-merge)
+
+Fresh-context audit of the template as shipped: **no CRITICAL, HIGH or MEDIUM findings.** One LOW
+(escrow registration not retroactive — dispositioned as documentation, see README; the code fix
+was rejected as a live-tally striking power) and three INFO (release-path event gap, the
+missing-table deploy hazard, disclosed pre-freeze upgradeability), all recorded in the README.
+The structural deltas from the production ancestor were each verified: the pairwise-matrix merge
+held under K=5 hand-computed ballots, idempotent re-votes, partial-release exactness, and
+full-lifecycle unwind to exact zero; foreign capability composition was confined to a legitimate
+self-vote at real weight.
