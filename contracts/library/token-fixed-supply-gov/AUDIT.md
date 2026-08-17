@@ -1,5 +1,45 @@
 # AUDIT — library/token-fixed-supply-gov
 
+## 2.0.0 — Derivation statement
+
+Version 2.0.0 replaces the 1.0.0 module wholesale. It is **derived from a
+production contract live on Kadena mainnet that passed two independent cold
+audits** (fresh-context adversarial reviews of the deployed lineage); **the
+template itself is self-reviewed** — the derivation carries the reviewed
+semantics, not the audit verdicts, and any deploy of this template should be
+validated independently.
+
+The voting, transfer, and release semantics match the production contract.
+The structural deltas, each verified by the co-located suites:
+
+- **`burned` removed** — the supply schema is `minted:decimal` only; the
+  production module carried a dead `burned` field (always 0.0, no burn path).
+- **`gov-counts` removed** — question ids are operator-supplied, so the id
+  counter table was dead state.
+- **Margins merged** — the pairwise head-to-head matrix is a field
+  (`m:[decimal]`) on the question row, initialized to K×K zeros at
+  `create-proposal`, instead of a separate `rcv-margins` table. Every
+  question therefore has a complete pairwise record from its first ballot,
+  and the production `available:false` case (questions predating the record)
+  cannot exist and is not reported.
+
+Also cleaned relative to the production source: no deployment-specific
+`bless` line (a fresh deploy has no history; the upgrade duty is documented
+in README §Operational warnings), generic naming, and deploy literals marked
+`EDIT-BEFORE-DEPLOY`.
+
+Suites: `tests/token-gov.repl`, `tests/negatives.repl`, `tests/pairwise.repl`
+— all green under `pact` 5.4. Static analysis: 0 VIOLATIONs; 13 WARNs, every
+one an `enforce-keyset`/`enforce-guard` sitting inside a defcap body (the
+scoped-signature pattern; same disposition as 1.0.0). Known coverage gap: the
+`FROZEN-MODULE` refusal branch is a source literal and is not exercised by
+the suites — rehearse the freeze on devnet (README §Known limits).
+
+---
+
+Everything below this line documents **version 1.0.0** (the yes/no/abstain
+single-chain design that 2.0.0 replaces) and is retained as review history.
+
 ## Summary
 
 | | |
@@ -9,7 +49,7 @@
 | Review | Independent adversarial review, fresh context, 2026-07-18 |
 | Initial verdict | NO-GO as written: 1 MEDIUM (F1) + 2 LOW (F2, F3) |
 | Final verdict | **GO** after the reviewer-prescribed F1/F2 fixes landed and the suite re-ran green; F3 documented |
-| Suite | `examples/fixed-supply-token-gov-test.repl` — green; worst-case governance-loaded transfer gas measured AND asserted (489 ≪ 150k) |
+| Suite | `examples/fixed-supply-token-gov-test.repl` (removed with the 1.0.0 module; in git history) — green; worst-case governance-loaded transfer gas measured AND asserted (489 ≪ 150k) |
 | Static analysis | 0 VIOLATIONs; WARNs dispositioned (guard enforcement lives in defcap bodies) |
 
 ## Purpose
@@ -103,6 +143,7 @@ qualifying independent community review promotes the entry.
 ## Reproduce the review
 
 ```bash
+# 1.0.0 only — check out the 1.0.0 tree from git history first:
 cd examples && pact fixed-supply-token-gov-test.repl   # suite green, gas asserted
 ```
 

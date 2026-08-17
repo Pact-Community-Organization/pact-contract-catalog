@@ -1,0 +1,575 @@
+;; token-gov.repl — fixed-supply-token-gov positive lifecycle suite.
+;;
+;; Self-contained: interfaces + coin load from this repository's registry
+;; tree. Covers the fungible core (one-shot mint on MINT-CHAIN under the
+;; governance keyset, reserved-name protocol, managed transfers), the
+;; chain-local advisory governance delta (admin-authored questions, live
+;; ranked-choice ballots, re-vote replacement, release on every balance
+;; decrease, reserve + escrow exclusion, the dedicated vote key, tally freeze
+;; at close), the cross-chain defpact (step-0 debit + release + yield, resume
+;; credit, resume guard-mismatch refusal), and keyset-governed upgrade +
+;; rotation.
+;;
+;; REPL discipline: expect-failure does NOT roll back a failed action's
+;; partial writes, and commit-tx would persist the leak - every negative
+;; case that could write lives in its own transaction ended by rollback-tx.
+
+(env-exec-config ["RequireKeysetNs"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T00:00:00Z") })
+
+;; ---------------------------------------------------------------------------
+;; Setup: interfaces + coin + namespace + keyset + deploy
+;; ---------------------------------------------------------------------------
+(begin-tx "interfaces + coin (the module references coin.VALID_CHAIN_IDS)")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(commit-tx)
+
+(begin-tx "namespace + keyset + deploy")
+(env-data
+  { "ns": "free"
+  , "upgrade": false
+  , "token-gov": { "keys": ["gov-a", "gov-b", "gov-c"], "pred": "keys-2" }
+  , "token-ops": { "keys": ["gov-a"], "pred": "keys-all" }
+  , "ns-guard": { "keys": ["gov-a", "gov-b", "gov-c"], "pred": "keys-2" } })
+(env-keys ["gov-a", "gov-b"])
+(define-namespace "free" (read-keyset 'ns-guard) (read-keyset 'ns-guard))
+(namespace "free")
+(define-keyset "free.token-gov" (read-keyset 'token-gov))
+(load "../fixed-supply-token-gov.pact")
+(commit-tx)
+
+(begin-tx "governance names the ops authority")
+(env-keys ["gov-a", "gov-b"])
+(free.fixed-supply-token-gov.set-ops-guard (read-keyset 'token-ops))
+(commit-tx)
+
+;; deploy-state sanity
+(expect "supply row seeded, nothing minted" 0.0
+  (free.fixed-supply-token-gov.chain-minted))
+(expect "reserve account derives from the keyset reference"
+  "r:free.token-gov" (free.fixed-supply-token-gov.reserve-account))
+
+;; ---------------------------------------------------------------------------
+;; One-shot mint: keyset gate (2-of-3), MINT-CHAIN gate, exactness
+;; ---------------------------------------------------------------------------
+(env-data
+  { "whale":  { "keys": ["whale-key"],  "pred": "keys-all" }
+  , "holder": { "keys": ["holder-key"], "pred": "keys-all" }
+  , "carol":  { "keys": ["carol-key"],  "pred": "keys-all" }
+  , "attacker": { "keys": ["attacker-key"], "pred": "keys-all" } })
+
+(begin-tx "mint requires the governance keyset")
+(env-keys ["attacker-key"])
+(expect-failure "non-admin cannot mint" "Keyset failure"
+  (free.fixed-supply-token-gov.init-mint
+    [ { "account": "whale", "guard": (read-keyset 'whale), "amount": 1000000.0 } ]))
+(rollback-tx)
+
+(begin-tx "mint requires TWO of the three keys")
+(env-keys ["gov-a"])
+(expect-failure "1-of-3 is not enough" "Keyset failure"
+  (free.fixed-supply-token-gov.init-mint
+    [ { "account": "whale", "guard": (read-keyset 'whale), "amount": 1000000.0 } ]))
+(rollback-tx)
+
+(begin-tx "mint is MINT-CHAIN only")
+(env-chain-data { "chain-id": "7" })
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "no mint off the mint chain" "mint happens on MINT-CHAIN only"
+  (free.fixed-supply-token-gov.init-mint
+    [ { "account": "whale", "guard": (read-keyset 'whale), "amount": 1000000.0 } ]))
+(rollback-tx)
+(env-chain-data { "chain-id": "0" })
+
+(begin-tx "distribution must be exact")
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "under-distribution rejected" "exactly TOTAL-SUPPLY"
+  (free.fixed-supply-token-gov.init-mint
+    [ { "account": "whale", "guard": (read-keyset 'whale), "amount": 999999.0 } ]))
+(rollback-tx)
+
+;; The two recipient-amount negatives sit in SEPARATE transactions: each
+;; reaches the per-recipient checks only after the supply-row update, whose
+;; partial write expect-failure does not roll back - sharing a tx would make
+;; the second case die on "already minted" instead of the branch it names.
+(begin-tx "recipient amounts must be positive")
+(env-keys ["gov-a", "gov-b"])
+;; totals balance to TOTAL-SUPPLY exactly, so the per-recipient check is
+;; what this case reaches
+(expect-failure "negative recipient amount rejected" "recipient amount must be positive"
+  (free.fixed-supply-token-gov.init-mint
+    [ { "account": "whale",  "guard": (read-keyset 'whale),  "amount": 1000001.0 }
+    , { "account": "holder", "guard": (read-keyset 'holder), "amount": -1.0 } ]))
+(rollback-tx)
+
+(begin-tx "recipient amounts must respect the precision")
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "over-precise recipient amount rejected" "precision violation"
+  (free.fixed-supply-token-gov.init-mint
+    [ { "account": "whale",  "guard": (read-keyset 'whale),  "amount": 999998.9999999999999 }
+    , { "account": "holder", "guard": (read-keyset 'holder), "amount": 1.0000000000001 } ]))
+(rollback-tx)
+
+(begin-tx "the one mint")
+(env-keys ["gov-b", "gov-c"])
+(expect "mint succeeds with a different 2-of-3 pair" "minted"
+  (free.fixed-supply-token-gov.init-mint
+    [ { "account": "whale",  "guard": (read-keyset 'whale),  "amount": 500000.0 }
+    , { "account": "holder", "guard": (read-keyset 'holder), "amount": 1500.0 }
+    , { "account": "carol",  "guard": (read-keyset 'carol),  "amount": 398500.0 }
+    , { "account": "r:free.token-gov", "guard": (keyset-ref-guard "free.token-gov"), "amount": 100000.0 } ]))
+(commit-tx)
+
+(expect "whale funded" 500000.0 (free.fixed-supply-token-gov.get-balance "whale"))
+(expect "reserve funded" 100000.0 (free.fixed-supply-token-gov.get-balance "r:free.token-gov"))
+(expect "chain-minted = total supply on the mint chain" 1000000.0
+  (free.fixed-supply-token-gov.chain-minted))
+
+(begin-tx "second mint impossible")
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "one-shot" "already minted"
+  (free.fixed-supply-token-gov.init-mint
+    [ { "account": "whale", "guard": (read-keyset 'whale), "amount": 1000000.0 } ]))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Reserved-name protocol + managed transfer basics
+;; ---------------------------------------------------------------------------
+(begin-tx "k: squatting rejected")
+(env-data { "attacker": { "keys": ["attacker-key"], "pred": "keys-all" } })
+(expect-failure "k: account must be principal of its guard"
+  "Single-key account protocol violation"
+  (free.fixed-supply-token-gov.create-account
+    "k:f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0"
+    (read-keyset 'attacker)))
+(rollback-tx)
+
+(begin-tx "transfer under a scoped signature")
+(env-sigs [ { "key": "whale-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "holder" 100.0)] } ])
+(free.fixed-supply-token-gov.transfer "whale" "holder" 100.0)
+(expect "holder credited" 1600.0 (free.fixed-supply-token-gov.get-balance "holder"))
+(commit-tx)
+
+(begin-tx "transfer beyond managed amount rejected")
+(env-sigs [ { "key": "whale-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "holder" 100.0)] } ])
+(free.fixed-supply-token-gov.transfer "whale" "holder" 60.0)
+(expect-failure "second leg exceeds the managed budget" "TRANSFER exceeded"
+  (free.fixed-supply-token-gov.transfer "whale" "holder" 60.0))
+(rollback-tx)
+
+(begin-tx "foreign key cannot debit")
+(env-sigs [ { "key": "attacker-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "holder" 100.0)] } ])
+(expect-failure "sender guard enforced" "Keyset failure"
+  (free.fixed-supply-token-gov.transfer "whale" "holder" 100.0))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Advisory governance: ADMIN-authored ranked-choice questions, live Borda
+;; scores. K=3 options here: rank position p contributes weight*(3-p) points.
+;; ---------------------------------------------------------------------------
+(begin-tx "a holder cannot put questions on-chain (admin-authored)")
+(env-sigs [ { "key": "whale-key", "caps": [] } ])
+(expect-failure "holders suggest off-chain; the operator publishes"
+  "governance or ops authority required"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T00:00:00Z") (time "2026-08-01T12:00:00Z") (time "2026-08-08T12:00:00Z")))
+(rollback-tx)
+
+;; Questions are chain-local: the same question is published to every chain
+;; as identical transactions, so creating one off MINT-CHAIN must work.
+(begin-tx "a question can be published to a chain other than MINT-CHAIN")
+(env-chain-data { "chain-id": "3", "block-time": (time "2026-08-01T00:00:00Z") })
+(env-keys ["gov-a"])
+(expect "the same question publishes off the mint chain" "off-mint"
+  (free.fixed-supply-token-gov.create-proposal "off-mint" "off-mint" "body" ["a" "b"]
+    (time "2026-08-01T00:00:00Z") (time "2026-08-01T12:00:00Z") (time "2026-08-08T12:00:00Z")))
+(rollback-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T00:00:00Z") })
+
+(begin-tx "question opens under the OPS key alone (routine tier)")
+(env-keys ["gov-a"])
+(expect "pid 1" "1" (free.fixed-supply-token-gov.create-proposal
+  "1"
+  "Which template family should the catalog grow next?"
+  "Advisory: rank the options."
+  ["catalog-v2" "docs" "oracles"]
+  (time "2026-08-01T00:00:00Z")      ; authored now
+  (time "2026-08-01T12:00:00Z")      ; opens 12h later - the announce floor
+  (time "2026-08-08T12:00:00Z")))    ; runs a week
+(commit-tx)
+
+;; the pairwise record is complete from creation: K*K zeros
+(expect "fresh head-to-head matrix is 3x3 zeros"
+  [0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0]
+  (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1")))
+
+;; Voting cannot begin until starts-at - advance the clock past the announce
+;; window first.
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+
+(begin-tx "reserve cannot vote")
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "reserve exclusion" "reserve cannot vote"
+  (free.fixed-supply-token-gov.cast-vote "1" "r:free.token-gov" [0]))
+(rollback-tx)
+
+;; --- escrows outside the float do not vote ----------------------------------
+;; The rule is a REGISTER OF NAMED ACCOUNTS, not a rule about guard types:
+;; these cases prove the register decides, and that an identical account that
+;; is NOT registered keeps its vote.
+(begin-tx "escrow bar: an UNREGISTERED contract-held account still votes")
+(env-data { "ug": { "keys": ["holder-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "holder-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "holder"
+                        (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))) 500.0)] } ])
+(free.fixed-supply-token-gov.transfer-create "holder"
+  (create-principal (create-user-guard (free.fixed-supply-token-gov.precision)))
+  (create-user-guard (free.fixed-supply-token-gov.precision)) 500.0)
+(expect "the escrow really does hold tokens" 500.0
+  (free.fixed-supply-token-gov.get-balance
+    (create-principal (create-user-guard (free.fixed-supply-token-gov.precision)))))
+;; unregistered, it votes like any other holder - the register is the rule
+(env-sigs [ { "key": "holder-key"
+            , "caps": [(free.fixed-supply-token-gov.VOTE "1"
+                        (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))))] } ])
+(expect "an unregistered contract-held account still votes" "vote recorded"
+  (free.fixed-supply-token-gov.cast-vote "1"
+    (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))) [0]))
+(rollback-tx)
+
+(begin-tx "escrow bar: once registered, the same account is refused")
+(env-data { "ug": { "keys": ["holder-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "holder-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "holder"
+                        (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))) 500.0)] } ])
+(free.fixed-supply-token-gov.transfer-create "holder"
+  (create-principal (create-user-guard (free.fixed-supply-token-gov.precision)))
+  (create-user-guard (free.fixed-supply-token-gov.precision)) 500.0)
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "a reason is mandatory - the register is meant to be read"
+  "a public reason is required"
+  (free.fixed-supply-token-gov.register-non-voting
+    (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))) ""))
+(free.fixed-supply-token-gov.register-non-voting
+  (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))) "test escrow")
+(expect "the register is publicly readable" "test escrow"
+  (free.fixed-supply-token-gov.non-voting-reason
+    (create-principal (create-user-guard (free.fixed-supply-token-gov.precision)))))
+(env-sigs [ { "key": "holder-key"
+            , "caps": [(free.fixed-supply-token-gov.VOTE "1"
+                        (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))))] } ])
+(expect-failure "a registered escrow is refused"
+  "registered as non-voting"
+  (free.fixed-supply-token-gov.cast-vote "1"
+    (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))) [0]))
+;; the correction path works, so an account excluded in error is not
+;; silently disenfranchised forever
+(env-keys ["gov-a", "gov-b"])
+(free.fixed-supply-token-gov.release-non-voting
+  (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))))
+(env-sigs [ { "key": "holder-key"
+            , "caps": [(free.fixed-supply-token-gov.VOTE "1"
+                        (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))))] } ])
+(expect "released, it votes again" "vote recorded"
+  (free.fixed-supply-token-gov.cast-vote "1"
+    (create-principal (create-user-guard (free.fixed-supply-token-gov.precision))) [0]))
+(rollback-tx)
+
+(begin-tx "escrow bar: only governance may change the register")
+(env-keys ["attacker-key"])
+(expect-failure "a stranger cannot register an account" "Keyset failure"
+  (free.fixed-supply-token-gov.register-non-voting "holder" "malicious exclusion"))
+(expect-failure "a stranger cannot release one" "Keyset failure"
+  (free.fixed-supply-token-gov.release-non-voting "holder"))
+(rollback-tx)
+
+(begin-tx "escrow bar: ordinary accounts are unaffected")
+(env-sigs [ { "key": "holder-key", "caps": [(free.fixed-supply-token-gov.VOTE "1" "holder")] } ])
+(expect "a plain named account votes" "vote recorded"
+  (free.fixed-supply-token-gov.cast-vote "1" "holder" [0]))
+(rollback-tx)
+
+(begin-tx "ballots: live weight, Borda scores, re-vote in place")
+;; whale (499,900) ranks only option 0: +3w to option 0
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.VOTE "1" "whale")] } ])
+(free.fixed-supply-token-gov.cast-vote "1" "whale" [0])
+;; holder (1,600) ranks [1,0]: +3w to option 1, +2w to option 0
+(env-sigs [ { "key": "holder-key", "caps": [(free.fixed-supply-token-gov.VOTE "1" "holder")] } ])
+(free.fixed-supply-token-gov.cast-vote "1" "holder" [1 0])
+(let ((r (free.fixed-supply-token-gov.get-results "1")))
+  (expect "scores after two ballots"
+    [1502900.0 4800.0 0.0] (at 'scores r))
+  (expect "turnout = sum of ballot weights" 501500.0 (at 'turnout r)))
+;; re-vote REPLACES the ballot: holder switches to [2] only
+(env-sigs [ { "key": "holder-key", "caps": [(free.fixed-supply-token-gov.VOTE "1" "holder")] } ])
+(free.fixed-supply-token-gov.cast-vote "1" "holder" [2])
+(let ((r (free.fixed-supply-token-gov.get-results "1")))
+  (expect "old contribution fully removed, new applied"
+    [1499700.0 0.0 4800.0] (at 'scores r))
+  (expect "turnout unchanged by a re-vote" 501500.0 (at 'turnout r)))
+(commit-tx)
+
+(begin-tx "transfer releases the moved weight (vote-then-transfer closed)")
+(env-sigs [ { "key": "whale-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "carol" 200000.0)] } ])
+(free.fixed-supply-token-gov.transfer "whale" "carol" 200000.0)
+(let ((r (free.fixed-supply-token-gov.get-results "1")))
+  ;; whale's ballot [0] shrank by 200,000 weight -> -600,000 points on opt 0
+  (expect "excess Borda points left with the tokens"
+    [899700.0 0.0 4800.0] (at 'scores r))
+  (expect "turnout shrank by the moved weight" 301500.0 (at 'turnout r)))
+;; received tokens arrive unvoted: carol (598,500) then ranks [0]
+(env-sigs [ { "key": "carol-key", "caps": [(free.fixed-supply-token-gov.VOTE "1" "carol")] } ])
+(free.fixed-supply-token-gov.cast-vote "1" "carol" [0])
+(let ((r (free.fixed-supply-token-gov.get-results "1")))
+  (expect "carol's full current balance counts once"
+    [2695200.0 0.0 4800.0] (at 'scores r)))
+(commit-tx)
+
+(begin-tx "vote key: register, hot key votes, main never locked out, clear")
+;; never-registered default: inactive, main guard
+(expect "unregistered default is inactive" false
+  (at 'active (free.fixed-supply-token-gov.get-vote-key "whale")))
+;; register under the MAIN guard (scoped VOTE-KEY-ADMIN signature)
+(env-data { "carol-vk": { "keys": ["carol-hot"], "pred": "keys-all" } })
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "carol"
+                        (create-principal (read-keyset 'carol-vk)))] } ])
+(expect "registration under the main guard" "vote key set"
+  (free.fixed-supply-token-gov.set-vote-key "carol" (read-keyset 'carol-vk)))
+(expect "registration is active" true
+  (at 'active (free.fixed-supply-token-gov.get-vote-key "carol")))
+;; the HOT key alone re-votes; weight = current balance, replaced in place
+(env-sigs [ { "key": "carol-hot", "caps": [(free.fixed-supply-token-gov.VOTE "1" "carol")] } ])
+(free.fixed-supply-token-gov.cast-vote "1" "carol" [1])
+(expect "hot-key re-vote recorded" [1]
+  (at 'ranking (free.fixed-supply-token-gov.get-ballot "1" "carol")))
+;; the MAIN guard still votes while a key is active - lockout impossible
+(env-sigs [ { "key": "carol-key", "caps": [(free.fixed-supply-token-gov.VOTE "1" "carol")] } ])
+(free.fixed-supply-token-gov.cast-vote "1" "carol" [0])
+(expect "main guard voted it back" [0]
+  (at 'ranking (free.fixed-supply-token-gov.get-ballot "1" "carol")))
+;; replace: a new registration overwrites the old hot key
+(env-data { "carol-vk2": { "keys": ["carol-hot2"], "pred": "keys-all" } })
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "carol"
+                        (create-principal (read-keyset 'carol-vk2)))] } ])
+(free.fixed-supply-token-gov.set-vote-key "carol" (read-keyset 'carol-vk2))
+(env-sigs [ { "key": "carol-hot2", "caps": [(free.fixed-supply-token-gov.VOTE "1" "carol")] } ])
+(free.fixed-supply-token-gov.cast-vote "1" "carol" [2 0])
+(expect "replacement hot key votes" [2 0]
+  (at 'ranking (free.fixed-supply-token-gov.get-ballot "1" "carol")))
+;; clear: back to main-guard-only voting
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "carol" "")] } ])
+(expect "cleared under the main guard" "vote key cleared"
+  (free.fixed-supply-token-gov.clear-vote-key "carol"))
+(expect "registration inactive after clear" false
+  (at 'active (free.fixed-supply-token-gov.get-vote-key "carol")))
+(env-sigs [ { "key": "carol-key", "caps": [(free.fixed-supply-token-gov.VOTE "1" "carol")] } ])
+(free.fixed-supply-token-gov.cast-vote "1" "carol" [0])
+(expect "main guard votes after clear" [0]
+  (at 'ranking (free.fixed-supply-token-gov.get-ballot "1" "carol")))
+;; guard hand-over kills the old owner's vote key: re-register, then rotate
+(env-data { "carol-new": { "keys": ["carol-new-key"], "pred": "keys-all" }
+          , "carol-vk": { "keys": ["carol-hot"], "pred": "keys-all" } })
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "carol"
+                        (create-principal (read-keyset 'carol-vk)))] } ])
+(free.fixed-supply-token-gov.set-vote-key "carol" (read-keyset 'carol-vk))
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.ROTATE "carol"
+                        (create-principal (read-keyset 'carol-new)))] } ])
+(free.fixed-supply-token-gov.rotate "carol" (read-keyset 'carol-new))
+(expect "rotation deactivated the previous owner's vote key" false
+  (at 'active (free.fixed-supply-token-gov.get-vote-key "carol")))
+(env-sigs [ { "key": "carol-hot", "caps": [(free.fixed-supply-token-gov.VOTE "1" "carol")] } ])
+(expect-failure "old hot key is dead after the hand-over"
+  "neither account guard nor registered vote key satisfied"
+  (free.fixed-supply-token-gov.cast-vote "1" "carol" [1]))
+(rollback-tx)
+
+(begin-tx "release-votes is a harmless public sync")
+(env-keys ["attacker-key"])
+(expect "public release cannot change a correct tally" "synced"
+  (free.fixed-supply-token-gov.release-votes "carol"))
+(let ((r (free.fixed-supply-token-gov.get-results "1")))
+  (expect "scores unchanged" [2695200.0 0.0 4800.0] (at 'scores r)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; Cross-chain: step-0 debit releases votes and yields; wrong chains rejected;
+;; the resume credits, and refuses a guard mismatch.
+;; ---------------------------------------------------------------------------
+(env-data { "carol": { "keys": ["carol-key"], "pred": "keys-all" }
+          ;; cross-chain receivers must be PRINCIPALS (a vanity name on the
+          ;; target chain is squattable, which would strand the transfer)
+          , "carol-x": { "keys": ["cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"], "pred": "keys-all" } })
+(begin-tx "xchain to a nonexistent chain rejected")
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "carol" "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33" 10.0 "25")] } ])
+(expect-failure "invalid target chain rejected before any debit"
+  "not a valid chain id"
+  (free.fixed-supply-token-gov.transfer-crosschain "carol"
+    "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"
+    (read-keyset 'carol-x) "25" 10.0))
+(rollback-tx)
+
+(begin-tx "xchain to same chain rejected")
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "carol" "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33" 10.0 "0")] } ])
+(expect-failure "same-chain xchain rejected" "same chain"
+  (free.fixed-supply-token-gov.transfer-crosschain "carol"
+    "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"
+    (read-keyset 'carol-x) "0" 10.0))
+(rollback-tx)
+
+(begin-tx "xchain step 0: debit + release + yield")
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "carol" "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33" 100000.0 "5")] } ])
+(free.fixed-supply-token-gov.transfer-crosschain "carol"
+  "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"
+  (read-keyset 'carol-x) "5" 100000.0)
+(expect "carol debited on the source chain" 498500.0
+  (free.fixed-supply-token-gov.get-balance "carol"))
+(let ((r (free.fixed-supply-token-gov.get-results "1")))
+  ;; carol's ballot [0] shrank by 100,000 -> -300,000 points on option 0
+  (expect "the moved weight left the scores BEFORE leaving the chain"
+    [2395200.0 0.0 4800.0] (at 'scores r)))
+(commit-tx)
+
+(begin-tx "xchain both steps: the resume credits on the target chain")
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "carol" "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33" 250.0 "5")] } ])
+(free.fixed-supply-token-gov.transfer-crosschain "carol"
+  "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"
+  (read-keyset 'carol-x) "5" 250.0)
+(expect "step 0 debited the sender" 498250.0
+  (free.fixed-supply-token-gov.get-balance "carol"))
+;; the continuation lands on the TARGET chain
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-08-01T12:00:01Z") })
+(continue-pact 1)
+(expect "step 1 credited the receiver on the target chain" 250.0
+  (free.fixed-supply-token-gov.get-balance
+    "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+(rollback-tx)
+
+(begin-tx "xchain resume refuses a receiver whose guard differs")
+;; the receiver name already exists on the target chain under another guard;
+;; crediting it regardless would hand the sender's tokens to its squatter
+(env-data { "other": { "keys": ["other-key"], "pred": "keys-all" }
+          , "carol-x": { "keys": ["cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"], "pred": "keys-all" } })
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-08-01T12:00:01Z") })
+(free.fixed-supply-token-gov.create-account "squatted-name" (read-keyset 'other))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "carol" "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33" 10.0 "5")] } ])
+(free.fixed-supply-token-gov.transfer-crosschain "carol"
+  "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"
+  (read-keyset 'carol-x) "5" 10.0)
+(env-chain-data { "chain-id": "5", "block-time": (time "2026-08-01T12:00:01Z") })
+;; inject a yield naming the SQUATTED account with the sender's chosen guard
+(expect-failure "the credit refuses an existing account whose guard differs"
+  "account guard mismatch"
+  (continue-pact 1 false (at 'pactId (pact-state))
+    { "receiver": "squatted-name"
+    , "receiver-guard": (read-keyset 'carol-x)
+    , "amount": 10.0
+    , "source-chain": "0" }))
+(rollback-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+
+;; ---------------------------------------------------------------------------
+;; Tally freeze at close + active-index pruning
+;; ---------------------------------------------------------------------------
+(begin-tx "voting closes at ends-at")
+(env-chain-data { "block-time": (time "2026-08-09T00:00:01Z") })  ; past ends-at
+(env-sigs [ { "key": "carol-key", "caps": [(free.fixed-supply-token-gov.VOTE "1" "carol")] } ])
+(expect-failure "no votes after close" "voting closed"
+  (free.fixed-supply-token-gov.cast-vote "1" "carol" [1]))
+(expect "closed flag set" true (at 'closed (free.fixed-supply-token-gov.get-results "1")))
+(expect "active index self-prunes" [] (free.fixed-supply-token-gov.open-ids))
+;; post-close transfers no longer touch the frozen tally
+(env-sigs [ { "key": "carol-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "carol" "holder" 400000.0)] } ])
+(free.fixed-supply-token-gov.transfer "carol" "holder" 400000.0)
+(let ((r (free.fixed-supply-token-gov.get-results "1")))
+  (expect "scores frozen after close" [2395200.0 0.0 4800.0] (at 'scores r)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Rotation: account-level guard rotation
+;; ---------------------------------------------------------------------------
+(begin-tx "vanity account can rotate; the rotated guard controls the account")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+(env-data { "small": { "keys": ["small-key"], "pred": "keys-all" }
+          , "small2": { "keys": ["small2-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "small" 10.0)] } ])
+(free.fixed-supply-token-gov.transfer-create "whale" "small" (read-keyset 'small) 10.0)
+(env-sigs [ { "key": "small-key"
+            , "caps": [(free.fixed-supply-token-gov.ROTATE "small"
+                        (create-principal (read-keyset 'small2)))] } ])
+(free.fixed-supply-token-gov.rotate "small" (read-keyset 'small2))
+(env-sigs [ { "key": "small2-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "small" "holder" 10.0)] } ])
+(free.fixed-supply-token-gov.transfer "small" "holder" 10.0)
+(expect "rotated guard controls the account" 0.0
+  (free.fixed-supply-token-gov.get-balance "small"))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; Module upgrade: keyset-gated; keyset rotation moves the power
+;; ---------------------------------------------------------------------------
+;; NOTE: asserting a FAILING (load ...) in-suite corrupts repl state, so
+;; upgrade denial is proven via the equivalent governance acquisition path -
+;; acquire-module-admin runs the module's GOVERNANCE cap exactly as an
+;; upgrade would.
+(begin-tx "governance rejected without the keyset")
+(env-keys ["attacker-key"])
+(expect-failure "no admin, no module admin" "Keyset failure"
+  (acquire-module-admin free.fixed-supply-token-gov))
+(rollback-tx)
+
+(begin-tx "upgrade succeeds under 2-of-3")
+(env-data { "ns": "free", "upgrade": true })
+(env-keys ["gov-a", "gov-c"])
+(load "../fixed-supply-token-gov.pact")
+(expect "state survives the upgrade" 1000000.0
+  (free.fixed-supply-token-gov.chain-minted))
+(commit-tx)
+
+(begin-tx "ROTATION: swap gov-c out for gov-d")
+(env-data { "token-gov-v2": { "keys": ["gov-a", "gov-b", "gov-d"], "pred": "keys-2" } })
+(env-keys ["gov-a", "gov-b"])   ; 2 of the CURRENT keyset authorize the rotation
+(namespace "free")
+(define-keyset "free.token-gov" (read-keyset 'token-gov-v2))
+(commit-tx)
+
+(begin-tx "old pair with the removed key can no longer govern")
+(env-keys ["gov-c", "gov-a"])   ; c is gone: only ONE live key signs
+(expect-failure "rotated-out pair rejected" "Keyset failure"
+  (acquire-module-admin free.fixed-supply-token-gov))
+(rollback-tx)
+
+(begin-tx "new pair governs; reserve control followed the rotation")
+(env-data { "ns": "free", "upgrade": true
+          , "sink": { "keys": ["sink-key"], "pred": "keys-all" } })
+(env-keys ["gov-d", "gov-b"])
+(load "../fixed-supply-token-gov.pact")
+;; the r: reserve account now answers to the NEW keyset - no account
+;; rotation was needed anywhere:
+(env-sigs [ { "key": "gov-d", "caps": [(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "sink" 5.0)] }
+          , { "key": "gov-b", "caps": [(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "sink" 5.0)] } ])
+(free.fixed-supply-token-gov.transfer-create "r:free.token-gov" "sink" (read-keyset 'sink) 5.0)
+(expect "reserve spends under the ROTATED keyset" 99995.0
+  (free.fixed-supply-token-gov.get-balance "r:free.token-gov"))
+(rollback-tx)
+
+(print "token-gov.repl: ALL TESTS PASSED")

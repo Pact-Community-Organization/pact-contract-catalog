@@ -1,11 +1,15 @@
-name: 'Fixed-Supply Token with Advisory Governance'
+name: 'Fixed-Supply Token with Chain-Local Ranked-Choice Governance'
 slug: 'token-fixed-supply-gov'
-version: '1.0.0'
+version: '2.0.0'
 repository: 'https://github.com/Pact-Community-Organization/pact-contract-catalog'
 license: 'Apache-2.0'
 authors:
   - name: 'Pact Community Organization'
     email: 'info@pact-community.org'
+# audit_status uses the catalog ladder (docs/CONTRACT_POLICIES.md 3.1); the
+# derivation field records that this template is derived from a mainnet
+# contract that passed two independent cold audits (see AUDIT.md).
 audit_status: 'self-reviewed'
+derivation: 'derived-from-audited-production'
 tags: ['token', 'fungible', 'fixed-supply', 'governance', 'voting', 'template', 'library']
-keywords: ['pact', 'smart-contract', 'fungible-v2', 'fixed-supply', 'live-vote', 'advisory-governance']
+keywords: ['pact', 'smart-contract', 'fungible-v2', 'fungible-xchain-v1', 'fixed-supply', 'ranked-choice', 'chain-local', 'pairwise', 'condorcet', 'live-vote', 'advisory-governance']

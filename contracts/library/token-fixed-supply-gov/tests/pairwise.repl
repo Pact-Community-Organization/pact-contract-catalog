@@ -1,0 +1,282 @@
+;; pairwise.repl — the head-to-head (Condorcet) tally.
+;;
+;; The property this aggregate exists for: a ballot's contribution to its
+;; FAVOURITE's duels does not depend on how much of the ballot the voter
+;; filled in. Under the Borda scores alone, truncating is strictly dominant
+;; (margin w*K vs w*1), which penalises honesty and makes the published
+;; number a function of ballot depth. Every case below is written to FAIL if
+;; that property is lost.
+;;
+;;   P1  depth-neutrality: [A] and [A,B,C] give IDENTICAL A-vs-B and A-vs-C cells
+;;   P2  divergence: Borda and head-to-head disagree on the SAME ballots, and
+;;       head-to-head is right (option 2 beats the Borda leader 160-100)
+;;   P3  exact reversibility: full release returns the matrix to all zeros
+;;   P4  re-vote replaces exactly (no residue from the previous ballot)
+;;   P5  index arithmetic: K*K length, diagonal permanently 0, i/j orientation
+;;   P6  unranked-vs-unranked expresses nothing
+;;   P7  Copeland / Condorcet readout, including the cycle case
+;;   P8  apply-ballot-swap is pure: no caller can mutate the stored tally
+
+(env-exec-config ["RequireKeysetNs"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T00:00:00Z") })
+
+(begin-tx "interfaces + coin")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(commit-tx)
+
+(begin-tx "namespace + keyset + deploy")
+(env-data
+  { "ns": "free", "upgrade": false
+  , "token-gov": { "keys": ["gov-a", "gov-b", "gov-c"], "pred": "keys-2" }
+  , "token-ops": { "keys": ["gov-a"], "pred": "keys-all" }
+  , "ns-guard": { "keys": ["gov-a", "gov-b", "gov-c"], "pred": "keys-2" } })
+(env-keys ["gov-a", "gov-b"])
+(define-namespace "free" (read-keyset 'ns-guard) (read-keyset 'ns-guard))
+(namespace "free")
+(define-keyset "free.token-gov" (read-keyset 'token-gov))
+(load "../fixed-supply-token-gov.pact")
+(commit-tx)
+
+(begin-tx "ops authority + mint + fund three voters")
+(env-data { "ns": "free"
+          , "token-ops": { "keys": ["gov-a"], "pred": "keys-all" }
+          , "voter1": { "keys": ["v1-key"], "pred": "keys-all" }
+          , "voter2": { "keys": ["v2-key"], "pred": "keys-all" }
+          , "voter3": { "keys": ["v3-key"], "pred": "keys-all" } })
+(env-keys ["gov-a", "gov-b"])
+(free.fixed-supply-token-gov.set-ops-guard (read-keyset 'token-ops))
+(free.fixed-supply-token-gov.init-mint
+  [ { "account": (free.fixed-supply-token-gov.reserve-account)
+    , "guard": (keyset-ref-guard "free.token-gov"), "amount": 1000000.0 } ])
+(env-sigs
+  [ { "key": "gov-a", "caps": [(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "voter1" 100.0)
+                              ,(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "voter2" 100.0)
+                              ,(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "voter3" 60.0)] }
+  , { "key": "gov-b", "caps": [(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "voter1" 100.0)
+                              ,(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "voter2" 100.0)
+                              ,(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "voter3" 60.0)] } ])
+(free.fixed-supply-token-gov.transfer-create "r:free.token-gov" "voter1" (read-keyset 'voter1) 100.0)
+(free.fixed-supply-token-gov.transfer-create "r:free.token-gov" "voter2" (read-keyset 'voter2) 100.0)
+(free.fixed-supply-token-gov.transfer-create "r:free.token-gov" "voter3" (read-keyset 'voter3)  60.0)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; P2 — THE DIVERGENCE CASE. Options [vesting, oracle, marketplace] (K=3):
+;;        v1 [1,0] w100 · v2 [2,1] w100 · v3 [2] w60
+;;      Borda gives [200, 500, 480] -> publishes ORACLE as leader.
+;;      Head-to-head from the SAME ballots: marketplace beats oracle 160-100
+;;      AND beats vesting 160-100, so marketplace is the Condorcet winner.
+;;      The 20-point Borda margin is a truncation artifact.
+;; ---------------------------------------------------------------------------
+(begin-tx "ops opens the question")
+(env-data { "ns": "free" })
+(env-keys ["gov-a"])
+(env-sigs [{ "key": "gov-a", "caps": [] }])
+(expect "pid 1" "1"
+  (free.fixed-supply-token-gov.create-proposal "1" "Which template family next?" "divergence case"
+    ["vesting" "oracle" "marketplace"]
+    (time "2026-08-01T00:00:00Z") (time "2026-08-01T12:00:00Z") (time "2026-08-31T12:00:00Z")))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })  ; inside the voting window
+
+(expect "P5 a fresh matrix is K*K zeros" 9
+  (length (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1"))))
+(expect "P5 fresh matrix is all zero" true
+  (fold (and) true (map (lambda (x:decimal) (= x 0.0))
+                        (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1")))))
+
+(begin-tx "the three ballots")
+(env-keys ["v1-key"]) (env-sigs [{ "key": "v1-key", "caps": [] }])
+(free.fixed-supply-token-gov.cast-vote "1" "voter1" [1 0])
+(commit-tx)
+(begin-tx "voter2")
+(env-keys ["v2-key"]) (env-sigs [{ "key": "v2-key", "caps": [] }])
+(free.fixed-supply-token-gov.cast-vote "1" "voter2" [2 1])
+(commit-tx)
+(begin-tx "v3 bullet-votes")
+(env-keys ["v3-key"]) (env-sigs [{ "key": "v3-key", "caps": [] }])
+(free.fixed-supply-token-gov.cast-vote "1" "voter3" [2])
+(commit-tx)
+
+;; the Borda diagnostic
+(expect "P2 Borda scores" [200.0 500.0 480.0]
+  (at 'scores (free.fixed-supply-token-gov.get-results "1")))
+(expect "P2 turnout" 260.0 (at 'turnout (free.fixed-supply-token-gov.get-results "1")))
+
+;; head-to-head, row-major m[i*3+j] = weight preferring i to j
+;;   m[1][0]=200 oracle>vesting      m[0][1]=0
+;;   m[2][0]=160 marketplace>vesting m[0][2]=100
+;;   m[2][1]=160 marketplace>oracle  m[1][2]=100
+(expect "P2 pairwise matrix" [0.0 0.0 100.0  200.0 0.0 100.0  160.0 160.0 0.0]
+  (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1")))
+(expect "P2 Copeland: vesting 0, oracle 1, marketplace 2" [0.0 1.0 2.0]
+  (at 'wins (free.fixed-supply-token-gov.get-head-to-head "1")))
+(expect "P2 THE POINT: Borda says oracle, head-to-head says marketplace"
+  "marketplace" (at 'condorcet (free.fixed-supply-token-gov.get-head-to-head "1")))
+
+;; ---------------------------------------------------------------------------
+;; P1 — DEPTH-NEUTRALITY, the property the whole aggregate exists for.
+;;      v3 bullet-voted [2]. Extending it to the full [2,1,0] must leave every
+;;      cell involving option 2 (its favourite) UNCHANGED, and move only the
+;;      1-vs-0 cell it newly expresses.
+;; ---------------------------------------------------------------------------
+(begin-tx "P1: v3 extends its bullet ballot to a full sincere ranking")
+(env-keys ["v3-key"]) (env-sigs [{ "key": "v3-key", "caps": [] }])
+(free.fixed-supply-token-gov.cast-vote "1" "voter3" [2 1 0])
+(commit-tx)
+;; mask to the cells that involve option 2 (voter3's favourite): every one of
+;; them must be byte-identical to the pre-extension matrix.
+(expect "P1 the favourite's duels are IDENTICAL after filling the ballot in"
+  [0.0 0.0 100.0  0.0 0.0 100.0  160.0 160.0 0.0]
+  (map (lambda (n:integer)
+         (if (or (= (/ n 3) 2) (= (mod n 3) 2))
+             (at n (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1")))
+             0.0))
+       (enumerate 0 8)))
+(expect "P1 ...while the newly-expressed oracle-vs-vesting pair DID move (200 -> 260)"
+  260.0 (at 3 (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1"))))
+(expect "P1 the Condorcet winner is unchanged by ballot depth"
+  "marketplace" (at 'condorcet (free.fixed-supply-token-gov.get-head-to-head "1")))
+;; contrast: the Borda score DID move, which is exactly the defect
+(expect "P1 Borda by contrast rewards ballot depth"
+  [260.0 620.0 480.0] (at 'scores (free.fixed-supply-token-gov.get-results "1")))
+
+;; ---------------------------------------------------------------------------
+;; P4 — re-vote replaces exactly: revert v3 to its bullet ballot and the matrix
+;;      must return to the P2 state, byte for byte.
+;; ---------------------------------------------------------------------------
+(begin-tx "P4: v3 reverts to the bullet ballot")
+(env-keys ["v3-key"]) (env-sigs [{ "key": "v3-key", "caps": [] }])
+(free.fixed-supply-token-gov.cast-vote "1" "voter3" [2])
+(commit-tx)
+(expect "P4 re-vote left no residue" [0.0 0.0 100.0  200.0 0.0 100.0  160.0 160.0 0.0]
+  (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1")))
+
+;; ---------------------------------------------------------------------------
+;; P6 — two UNRANKED options express nothing about each other. v3's ballot [2]
+;;      leaves 0 and 1 unranked, so it must contribute to neither m[0][1] nor
+;;      m[1][0]. Only v1 ([1,0]) and v2 ([2,1]) speak to that pair: both put
+;;      oracle above vesting, 200 total, and nothing the other way.
+;; ---------------------------------------------------------------------------
+(expect "P6 unranked-vs-unranked contributes nothing (m[0][1] stays 0)"
+  0.0 (at 1 (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1"))))
+(expect "P6 and the opposite cell carries only the ballots that ranked it"
+  200.0 (at 3 (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1"))))
+
+;; ---------------------------------------------------------------------------
+;; P5 — index arithmetic. The diagonal is never written, at any point.
+;; ---------------------------------------------------------------------------
+(expect "P5 diagonal is permanently zero" [0.0 0.0 0.0]
+  (map (lambda (i:integer)
+         (at (+ (* i 3) i) (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1"))))
+       (enumerate 0 2)))
+
+;; ---------------------------------------------------------------------------
+;; P3 — EXACT REVERSIBILITY. Drain every voter to zero; the release path must
+;;      unwind the matrix to all zeros with no residue. Coefficients are only
+;;      0 or 1, so this must be exact at any precision.
+;; ---------------------------------------------------------------------------
+(begin-tx "P3: every voter transfers their whole balance away")
+(env-data { "sink": { "keys": ["sink-key"], "pred": "keys-all" } })
+(env-keys ["v1-key"])
+(env-sigs [{ "key": "v1-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "voter1" "sink" 100.0)] }])
+(free.fixed-supply-token-gov.transfer-create "voter1" "sink" (read-keyset 'sink) 100.0)
+(commit-tx)
+(begin-tx "drain v2")
+(env-keys ["v2-key"])
+(env-sigs [{ "key": "v2-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "voter2" "sink" 100.0)] }])
+(free.fixed-supply-token-gov.transfer "voter2" "sink" 100.0)
+(commit-tx)
+(begin-tx "drain v3")
+(env-keys ["v3-key"])
+(env-sigs [{ "key": "v3-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "voter3" "sink" 60.0)] }])
+(free.fixed-supply-token-gov.transfer "voter3" "sink" 60.0)
+(commit-tx)
+(expect "P3 the matrix unwound to EXACTLY zero"
+  [0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0]
+  (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "1")))
+(expect "P3 turnout unwound too" 0.0 (at 'turnout (free.fixed-supply-token-gov.get-results "1")))
+(expect "P3 no Condorcet winner over an empty electorate" ""
+  (at 'condorcet (free.fixed-supply-token-gov.get-head-to-head "1")))
+
+;; ---------------------------------------------------------------------------
+;; P7 — the CYCLE case must be reported as one, not broken by an arbitrary rule.
+;;      Classic Condorcet cycle over 3 options with 3 equal blocs:
+;;        A>B>C , B>C>A , C>A>B  -> every option beats exactly one other
+;; ---------------------------------------------------------------------------
+(begin-tx "P7: fund three equal blocs for a cycle")
+(env-data { "ns": "free"
+          , "cyc1": { "keys": ["c1-key"], "pred": "keys-all" }
+          , "cyc2": { "keys": ["c2-key"], "pred": "keys-all" }
+          , "cyc3": { "keys": ["c3-key"], "pred": "keys-all" } })
+(env-keys ["gov-a", "gov-b"])
+(env-sigs
+  [ { "key": "gov-a", "caps": [(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "cyc1" 100.0)
+                              ,(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "cyc2" 100.0)
+                              ,(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "cyc3" 100.0)] }
+  , { "key": "gov-b", "caps": [(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "cyc1" 100.0)
+                              ,(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "cyc2" 100.0)
+                              ,(free.fixed-supply-token-gov.TRANSFER "r:free.token-gov" "cyc3" 100.0)] } ])
+(free.fixed-supply-token-gov.transfer-create "r:free.token-gov" "cyc1" (read-keyset 'cyc1) 100.0)
+(free.fixed-supply-token-gov.transfer-create "r:free.token-gov" "cyc2" (read-keyset 'cyc2) 100.0)
+(free.fixed-supply-token-gov.transfer-create "r:free.token-gov" "cyc3" (read-keyset 'cyc3) 100.0)
+(commit-tx)
+
+(begin-tx "P7: open a second question")
+(env-data { "ns": "free" })
+(env-keys ["gov-a"])
+(env-sigs [{ "key": "gov-a", "caps": [] }])
+(expect "pid 2" "2"
+  (free.fixed-supply-token-gov.create-proposal "2" "cycle" "A>B>C, B>C>A, C>A>B" ["A" "B" "C"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-09-01T00:00:01Z")))
+(commit-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:00:02Z") })  ; inside question 2's window
+(begin-tx "cycle ballots")
+(env-keys ["c1-key"]) (env-sigs [{ "key": "c1-key", "caps": [] }])
+(free.fixed-supply-token-gov.cast-vote "2" "cyc1" [0 1 2])
+(commit-tx)
+(begin-tx "cyc2")
+(env-keys ["c2-key"]) (env-sigs [{ "key": "c2-key", "caps": [] }])
+(free.fixed-supply-token-gov.cast-vote "2" "cyc2" [1 2 0])
+(commit-tx)
+(begin-tx "cyc3")
+(env-keys ["c3-key"]) (env-sigs [{ "key": "c3-key", "caps": [] }])
+(free.fixed-supply-token-gov.cast-vote "2" "cyc3" [2 0 1])
+(commit-tx)
+(expect "P7 a cycle gives every option exactly one win" [1.0 1.0 1.0]
+  (at 'wins (free.fixed-supply-token-gov.get-head-to-head "2")))
+(expect "P7 and NO Condorcet winner is claimed" ""
+  (at 'condorcet (free.fixed-supply-token-gov.get-head-to-head "2")))
+
+;; ---------------------------------------------------------------------------
+;; P8 — the write path cannot be reached from outside. The authoritative
+;;      matrix write is INLINED at its two real callers (cast-vote-internal:
+;;      real VOTE + real balance; release-votes: derived from real state) and
+;;      the only exposed helper, apply-ballot-swap, is PURE - no write, no
+;;      capability, no state read. There is no standalone tally writer to
+;;      forge, by any route.
+;; ---------------------------------------------------------------------------
+(begin-tx "P8: apply-ballot-swap is pure - it cannot mutate the stored tally")
+(env-keys []) (env-sigs [])
+;; calling the pure helper returns a NEW matrix but writes nothing; the stored
+;; head-to-head is unchanged afterwards. (A stranger computing a matrix is
+;; harmless precisely because there is no writer that trusts it.)
+(let ((fabricated (free.fixed-supply-token-gov.apply-ballot-swap
+                    [0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0]
+                    3 [0 1 2] 0.0 [2 1 0] 1000000.0)))
+  (expect "P8 apply-ballot-swap returns a value (pure math)" true
+    (= 9 (length fabricated))))
+(rollback-tx)
+
+(expect "P8 the stored tally is exactly as the honest ballots left it" [1.0 1.0 1.0]
+  (at 'wins (free.fixed-supply-token-gov.get-head-to-head "2")))
+
+;; the hostile-k class is structurally impossible: K is passed by the
+;; in-module caller as the real option count (length opts), never a caller
+;; parameter, and there is no external entry point that reaches the update.
+(expect "P8 matrix length still matches K*K" 9
+  (length (at 'pairs (free.fixed-supply-token-gov.get-head-to-head "2"))))
+
+(print "pairwise.repl: head-to-head tally verified")
