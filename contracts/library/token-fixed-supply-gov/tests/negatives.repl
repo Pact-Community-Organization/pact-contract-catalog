@@ -1,0 +1,873 @@
+;; negatives.repl — exhaustive "the wrong thing fails" suite.
+;;
+;; token-gov.repl covers the headline negatives inline. THIS file is the
+;; completeness sweep: one deployed + minted world, then every remaining
+;; enforce / guard / bound branch exercised as a FAILURE with its exact error
+;; substring - including both sides of every time boundary the question
+;; lifecycle enforces.
+;;
+;; REPL discipline: expect-failure does NOT roll back partial writes and
+;; commit-tx would persist the leak, so every write-capable negative lives in
+;; its own tx ended by (rollback-tx). Error substrings match the REPL Pretty
+;; column (on-chain BoundedText rendering differs).
+
+(env-exec-config ["RequireKeysetNs"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+
+;; ---------------------------------------------------------------------------
+;; Shared world: interfaces + coin + namespace + keyset + module + mint
+;; ---------------------------------------------------------------------------
+(begin-tx "interfaces + coin")
+(load "../../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../../registry/core/coin/coin-v6.pact")
+(commit-tx)
+
+(begin-tx "deploy")
+(env-data
+  { "ns": "free"
+  , "upgrade": false
+  , "token-gov":  { "keys": ["gov-a", "gov-b", "gov-c"], "pred": "keys-2" }
+  , "token-ops":  { "keys": ["gov-a"], "pred": "keys-all" }
+  , "ns-guard": { "keys": ["gov-a", "gov-b", "gov-c"], "pred": "keys-2" } })
+(env-keys ["gov-a", "gov-b"])
+(define-namespace "free" (read-keyset 'ns-guard) (read-keyset 'ns-guard))
+(namespace "free")
+(define-keyset "free.token-gov" (read-keyset 'token-gov))
+(load "../fixed-supply-token-gov.pact")
+(commit-tx)
+
+(begin-tx "governance names the ops authority")
+(env-keys ["gov-a", "gov-b"])
+(free.fixed-supply-token-gov.set-ops-guard (read-keyset 'token-ops))
+(commit-tx)
+
+(begin-tx "mint: whale + holder + reserve")
+(env-data
+  { "whale":  { "keys": ["whale-key"],  "pred": "keys-all" }
+  , "holder": { "keys": ["holder-key"], "pred": "keys-all" } })
+(env-keys ["gov-a", "gov-c"])
+(free.fixed-supply-token-gov.init-mint
+  [ { "account": "whale",  "guard": (read-keyset 'whale),  "amount": 600000.0 }
+  , { "account": "holder", "guard": (read-keyset 'holder), "amount": 300000.0 }
+  , { "account": "r:free.token-gov", "guard": (keyset-ref-guard "free.token-gov"), "amount": 100000.0 } ])
+(commit-tx)
+
+;; ===========================================================================
+;; TOKEN CORE
+;; ===========================================================================
+
+;; --- managed TRANSFER cap invariants (run in the cap body before any move) ---
+(begin-tx "transfer: sender == receiver rejected")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "whale" 1.0)] } ])
+(expect-failure "same sender and receiver" "same sender and receiver"
+  (free.fixed-supply-token-gov.transfer "whale" "whale" 1.0))
+(rollback-tx)
+
+(begin-tx "transfer: non-positive amount rejected")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "holder" 0.0)] } ])
+(expect-failure "amount must be positive" "amount must be positive"
+  (free.fixed-supply-token-gov.transfer "whale" "holder" 0.0))
+(rollback-tx)
+
+(begin-tx "transfer: over-precise amount rejected (enforce-unit)")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "holder" 1.0)] } ])
+(expect-failure "precision violation" "precision violation"
+  (free.fixed-supply-token-gov.transfer "whale" "holder" 1.0000000000001))
+(rollback-tx)
+
+(begin-tx "transfer: insufficient funds rejected")
+(env-data { "sink": { "keys": ["sink-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "holder-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "holder" "sink" 999999.0)] } ])
+(expect-failure "insufficient funds" "insufficient funds"
+  (free.fixed-supply-token-gov.transfer-create "holder" "sink" (read-keyset 'sink) 999999.0))
+(rollback-tx)
+
+(begin-tx "transfer: no signature at all (managed cap never installed)")
+(env-sigs [])
+(expect-failure "unsigned transfer rejected before any move" "Managed capability not installed"
+  (free.fixed-supply-token-gov.transfer "whale" "holder" 1.0))
+(rollback-tx)
+
+(begin-tx "transfer: exceeding the installed managed budget rejected")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "holder" 100.0)] } ])
+(free.fixed-supply-token-gov.transfer "whale" "holder" 60.0)
+(expect-failure "second leg exceeds the budget" "TRANSFER exceeded"
+  (free.fixed-supply-token-gov.transfer "whale" "holder" 60.0))
+(rollback-tx)
+
+;; --- credit-side guard binding ---
+(begin-tx "transfer-create: guard mismatch on an existing account")
+(env-data { "wrong": { "keys": ["someone-else"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "holder" 1.0)] } ])
+(expect-failure "credit to existing acct with wrong guard rejected" "account guard mismatch"
+  (free.fixed-supply-token-gov.transfer-create "whale" "holder" (read-keyset 'wrong) 1.0))
+(rollback-tx)
+
+;; --- account-name protocol (validate-account + enforce-reserved) ---
+(begin-tx "create-account: name too short")
+(env-data { "g": { "keys": ["gk"], "pred": "keys-all" } })
+(expect-failure "min length enforced" "min length"
+  (free.fixed-supply-token-gov.create-account "ab" (read-keyset 'g)))
+(rollback-tx)
+
+(begin-tx "create-account: non-latin1 charset rejected")
+(env-data { "g": { "keys": ["gk"], "pred": "keys-all" } })
+;; a snowman (U+2603, base64 "4piD") is outside latin-1, so it trips
+;; is-charset. Built via base64-decode so this file stays plain ASCII.
+(expect-failure "charset enforced" "does not conform to the token contract charset"
+  (free.fixed-supply-token-gov.create-account (+ "snow-" (base64-decode "4piD")) (read-keyset 'g)))
+(rollback-tx)
+
+(begin-tx "create-account: k: squatting (single-key protocol) rejected")
+(env-data { "foreign": { "keys": ["not-the-principal"], "pred": "keys-all" } })
+(expect-failure "k: must be the principal of its guard" "Single-key account protocol violation"
+  (free.fixed-supply-token-gov.create-account
+    "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    (read-keyset 'foreign)))
+(rollback-tx)
+
+(begin-tx "create-account: w: reserved protocol rejected under a foreign guard")
+(env-data { "foreign": { "keys": ["k1", "k2"], "pred": "keys-all" } })
+(expect-failure "w: reserved protocol violation" "Reserved protocol guard violation"
+  (free.fixed-supply-token-gov.create-account
+    "w:mismatchmismatchmismatchmismatchmismatchmis:keys-all"
+    (read-keyset 'foreign)))
+(rollback-tx)
+
+;; --- create-account uses `insert`: an existing account can never be
+;;     overwritten (a `write` here would let anyone re-guard any account) ---
+(begin-tx "create-account cannot overwrite an existing account")
+(env-data { "thief": { "keys": ["thief-key"], "pred": "keys-all" } })
+(expect-failure "re-creating an existing account is refused"
+  "Value already found while in Insert mode"
+  (free.fixed-supply-token-gov.create-account "whale" (read-keyset 'thief)))
+(rollback-tx)
+
+;; --- a NEW account opens at ZERO, and creating accounts cannot move supply ---
+(begin-tx "a newly created account opens at exactly zero")
+(env-data { "fresh": { "keys": ["fresh-key"], "pred": "keys-all" } })
+(env-sigs [])
+(free.fixed-supply-token-gov.create-account "fresh-account" (read-keyset 'fresh))
+(expect "a new account holds nothing" 0.0
+  (free.fixed-supply-token-gov.get-balance "fresh-account"))
+(rollback-tx)
+
+(begin-tx "creating accounts cannot move the supply")
+(env-data { "f1": { "keys": ["f1-key"], "pred": "keys-all" }
+          , "f2": { "keys": ["f2-key"], "pred": "keys-all" } })
+(env-sigs [])
+(let ((before (free.fixed-supply-token-gov.chain-minted)))
+  (free.fixed-supply-token-gov.create-account "opened-one" (read-keyset 'f1))
+  (free.fixed-supply-token-gov.create-account "opened-two" (read-keyset 'f2))
+  (expect "both opened at zero" 0.0
+    (+ (free.fixed-supply-token-gov.get-balance "opened-one")
+       (free.fixed-supply-token-gov.get-balance "opened-two")))
+  (expect "and chain-minted did not move" before (free.fixed-supply-token-gov.chain-minted)))
+(rollback-tx)
+
+;; --- `transfer` (not transfer-create) must FAIL for a missing receiver:
+;;     fungible-v2 requires it, and a default here would let anyone plant a
+;;     balance in an account whose guard the SENDER chose ---
+(begin-tx "transfer to a nonexistent receiver is refused")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "ghost-receiver" 1.0)] } ])
+(expect-failure "transfer refuses a receiver that does not exist"
+  "No value found in table free.fixed-supply-token-gov_accounts for key: ghost-receiver"
+  (free.fixed-supply-token-gov.transfer "whale" "ghost-receiver" 1.0))
+(rollback-tx)
+
+(begin-tx "and no row was created by the refusal")
+(expect-failure "the refused receiver still does not exist"
+  "No value found in table free.fixed-supply-token-gov_accounts for key: ghost-receiver"
+  (free.fixed-supply-token-gov.get-balance "ghost-receiver"))
+(rollback-tx)
+
+;; --- transfer-create must validate the RECEIVER's name on the credit side ---
+(begin-tx "transfer-create refuses an EMPTY receiver name")
+(env-data { "gg": { "keys": ["gg-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "" 1.0)] } ])
+(expect-failure "empty receiver name refused" "min length"
+  (free.fixed-supply-token-gov.transfer-create "whale" "" (read-keyset 'gg) 1.0))
+(rollback-tx)
+
+(begin-tx "transfer-create refuses a receiver name below the minimum")
+(env-data { "gg": { "keys": ["gg-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "a" 1.0)] } ])
+(expect-failure "1-character receiver refused" "min length"
+  (free.fixed-supply-token-gov.transfer-create "whale" "a" (read-keyset 'gg) 1.0))
+(rollback-tx)
+
+(begin-tx "transfer-create refuses a receiver name above the maximum")
+(env-data { "gg": { "keys": ["gg-key"], "pred": "keys-all" } })
+(let ((long (fold (lambda (acc:string i:integer) (+ acc "x")) "" (enumerate 1 257))))
+  (env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" long 1.0)] } ])
+  (expect "the name really is over the 256 bound" 257 (length long))
+  (expect-failure "over-long receiver refused" "max length"
+    (free.fixed-supply-token-gov.transfer-create "whale" long (read-keyset 'gg) 1.0)))
+(rollback-tx)
+
+(begin-tx "transfer-create refuses a NON-LATIN-1 receiver name")
+(env-data { "gg": { "keys": ["gg-key"], "pred": "keys-all" } })
+(let ((snowman (+ "snow-" (base64-decode "4piD"))))
+  (env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" snowman 1.0)] } ])
+  (expect-failure "non-latin1 receiver refused" "does not conform to the token contract charset"
+    (free.fixed-supply-token-gov.transfer-create "whale" snowman (read-keyset 'gg) 1.0)))
+(rollback-tx)
+
+(begin-tx "k: squatting via transfer-create is refused")
+(env-data { "foreign": { "keys": ["not-the-principal"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "whale"
+                        "k:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" 1.0)] } ])
+(expect-failure "transfer-create honours the reserved-name protocol too"
+  "Single-key account protocol violation"
+  (free.fixed-supply-token-gov.transfer-create "whale"
+    "k:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    (read-keyset 'foreign) 1.0))
+(rollback-tx)
+
+;; --- rotate: principal accounts may not escape their proper guard ---
+(begin-tx "rotate: principal account cannot rotate to a foreign guard")
+(env-data
+  { "kacct": { "keys": ["cafe0000000000000000000000000000000000000000000000000000cafe0000"], "pred": "keys-all" }
+  , "other": { "keys": ["deadbeef0000000000000000000000000000000000000000000000000000dead"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key"
+            , "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "k:cafe0000000000000000000000000000000000000000000000000000cafe0000" 1.0)] } ])
+(free.fixed-supply-token-gov.transfer-create "whale"
+  "k:cafe0000000000000000000000000000000000000000000000000000cafe0000" (read-keyset 'kacct) 1.0)
+(env-sigs [ { "key": "cafe0000000000000000000000000000000000000000000000000000cafe0000"
+            , "caps": [(free.fixed-supply-token-gov.ROTATE "k:cafe0000000000000000000000000000000000000000000000000000cafe0000" (create-principal (read-keyset 'other)))] } ])
+(expect-failure "principal cannot rotate away from its guard" "unsafe for principal accounts"
+  (free.fixed-supply-token-gov.rotate "k:cafe0000000000000000000000000000000000000000000000000000cafe0000" (read-keyset 'other)))
+(rollback-tx)
+
+(begin-tx "rotate: foreign key cannot rotate someone else's account")
+(env-data { "new": { "keys": ["new-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "someone-else", "caps": [(free.fixed-supply-token-gov.ROTATE "whale" (create-principal (read-keyset 'new)))] } ])
+(expect-failure "rotate needs the account's own guard" "Keyset failure"
+  (free.fixed-supply-token-gov.rotate "whale" (read-keyset 'new)))
+(rollback-tx)
+
+;; ===========================================================================
+;; OPS AUTHORITY (governance-owned; ops can never re-point itself)
+;; ===========================================================================
+
+(begin-tx "ops authority: the ops key cannot name its successor")
+(env-data { "hijack": { "keys": ["gov-a"], "pred": "keys-all" } })
+(env-keys ["gov-a"])                      ; the CURRENT ops authority, alone
+(expect-failure "ops cannot set the ops guard" "Keyset failure"
+  (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'hijack)))
+(rollback-tx)
+
+(begin-tx "ops authority: a holder cannot set it either")
+(env-data { "hijack": { "keys": ["whale-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key", "caps": [] } ])
+(expect-failure "a holder cannot set the ops guard" "Keyset failure"
+  (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'hijack)))
+(rollback-tx)
+
+(begin-tx "ops authority: a single governance key is not enough (2-of-3)")
+(env-data { "newops": { "keys": ["gov-x"], "pred": "keys-all" } })
+(env-keys ["gov-b"])
+(expect-failure "one gov key cannot set the ops guard" "Keyset failure"
+  (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'newops)))
+(rollback-tx)
+
+;; --- guard-type allowlist: only a LITERAL keyset may hold the authority.
+;;     Governance holds this pen, so the danger is self-injury: a guard that
+;;     ABORTS at authorization time silently freezes routine ops. ---
+(begin-tx "ops shape: r: keyset REFERENCE refused (dangling)")
+(env-data { "dangling": { "keysetref": { "ksn": "free.ghost" } } })
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "a dangling keyset-ref is refused at write time, not at use time"
+  "ops authority must be a plain keyset guard, not r:"
+  (free.fixed-supply-token-gov.set-ops-guard (read-msg 'dangling)))
+(rollback-tx)
+
+(begin-tx "ops shape: r: refused even when it RESOLVES today")
+(env-data { "live-ref": { "keysetref": { "ksn": "free.token-gov" } } })
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "a resolvable ref is refused too: the NAME could be redefined later"
+  "ops authority must be a plain keyset guard, not r:"
+  (free.fixed-supply-token-gov.set-ops-guard (read-msg 'live-ref)))
+(rollback-tx)
+
+(begin-tx "ops shape: c: capability guard refused (no signer can satisfy it)")
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "a capability guard is refused"
+  "ops authority must be a plain keyset guard, not c:"
+  (free.fixed-supply-token-gov.set-ops-guard
+    (create-capability-guard (free.fixed-supply-token-gov.GOVERNANCE))))
+(rollback-tx)
+
+(begin-tx "ops shape: u: user guard refused (module code at authorization time)")
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "a user guard is refused"
+  "ops authority must be a plain keyset guard, not u:"
+  (free.fixed-supply-token-gov.set-ops-guard
+    (create-user-guard (free.fixed-supply-token-gov.precision))))
+(rollback-tx)
+
+(begin-tx "ops shape: EMPTY keysets refused - keys-all over zero keys is vacuously true")
+(env-data { "mt-all": { "keys": [], "pred": "keys-all" }
+          , "mt-any": { "keys": [], "pred": "keys-any" }
+          , "mt-2":   { "keys": [], "pred": "keys-2" } })
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "empty keys-all (the shape that fails OPEN) refused"
+  "ops keyset must not be empty" (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'mt-all)))
+(expect-failure "empty keys-any refused too"
+  "ops keyset must not be empty" (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'mt-any)))
+(expect-failure "empty keys-2 refused too"
+  "ops keyset must not be empty" (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'mt-2)))
+(rollback-tx)
+
+(begin-tx "ops shape: custom predicates refused, including builtin impersonators")
+;; A keyset may name its own predicate function; that runs module code at
+;; authorization time. The suffix check matches ":keys-all" WITH THE LEADING
+;; COLON - create-principal emits it only as its own separator, so a module
+;; function NAMED keys-all yields ".keys-all" and can never be mistaken.
+(env-data { "cp": { "keys": ["368820f80c324bbc7c2b0610688a7da43e39f91d118732671cd9c7500ff43cca"]
+                  , "pred": "free.evil.open-pred" }
+          , "imp": { "keys": ["368820f80c324bbc7c2b0610688a7da43e39f91d118732671cd9c7500ff43cca"]
+                   , "pred": "free.evil.keys-all" }
+          , "imp2": { "keys": ["368820f80c324bbc7c2b0610688a7da43e39f91d118732671cd9c7500ff43cca"]
+                    , "pred": "free.evil.keys-2" } })
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "a custom predicate is refused"
+  "ops keyset must use a builtin predicate"
+  (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'cp)))
+(expect "the impersonator's principal ends in .keys-all, NOT :keys-all" ".keys-all"
+  (take -9 (create-principal (read-keyset 'imp))))
+(expect-failure "a predicate FUNCTION NAMED keys-all is refused"
+  "ops keyset must use a builtin predicate"
+  (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'imp)))
+(expect-failure "a predicate function named keys-2 is refused"
+  "ops keyset must use a builtin predicate"
+  (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'imp2)))
+(rollback-tx)
+
+(begin-tx "ops shape POSITIVE CONTROL: the literal keyset shapes are accepted")
+;; the k: principal form requires a REAL 64-hex key under keys-all - a
+;; symbolic REPL name yields a w: principal and would silently never
+;; exercise the k: branch
+(env-data { "one":  { "keys": ["368820f80c324bbc7c2b0610688a7da43e39f91d118732671cd9c7500ff43cca"]
+                    , "pred": "keys-all" }
+          , "many": { "keys": ["gov-a", "gov-b"], "pred": "keys-any" }
+          , "two":  { "keys": ["gov-a", "gov-b"], "pred": "keys-2" } })
+(env-keys ["gov-a", "gov-b"])
+(expect "k: principal - real single key, keys-all"
+  "k:368820f80c324bbc7c2b0610688a7da43e39f91d118732671cd9c7500ff43cca"
+  (create-principal (read-keyset 'one)))
+(expect "single-key keyset (k: principal) accepted" "ops guard set"
+  (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'one)))
+(expect "multi-key keys-any (w: principal) accepted" "ops guard set"
+  (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'many)))
+(expect "keys-2 (w: principal) accepted" "ops guard set"
+  (free.fixed-supply-token-gov.set-ops-guard (read-keyset 'two)))
+(rollback-tx)
+
+;; ===========================================================================
+;; VOTE KEY (the hot key can ONLY vote; registration is main-guard-only)
+;; ===========================================================================
+
+(begin-tx "vote key: the hot key cannot register or re-point itself")
+(env-data { "vk": { "keys": ["hot-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "hot-key", "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "whale" (create-principal (read-keyset 'vk)))] } ])
+(expect-failure "registration needs the MAIN guard" "Keyset failure"
+  (free.fixed-supply-token-gov.set-vote-key "whale" (read-keyset 'vk)))
+(rollback-tx)
+
+(begin-tx "vote key: registering for a nonexistent account fails")
+(env-data { "vk": { "keys": ["hot-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "hot-key", "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "ghost" (create-principal (read-keyset 'vk)))] } ])
+(expect-failure "no such account row" "No value found"
+  (free.fixed-supply-token-gov.set-vote-key "ghost" (read-keyset 'vk)))
+(rollback-tx)
+
+(begin-tx "vote key: clearing without a registration fails")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "whale" "")] } ])
+(expect-failure "no prior registration to clear" "No row found during update"
+  (free.fixed-supply-token-gov.clear-vote-key "whale"))
+(rollback-tx)
+
+(begin-tx "vote key: a cleared (inactive) hot key cannot vote")
+(env-keys ["gov-a"])
+(free.fixed-supply-token-gov.create-proposal "vk1" "the vote" "b" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:00:02Z") })  ; inside the window
+(env-data { "vk": { "keys": ["hot-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "whale" (create-principal (read-keyset 'vk))), (free.fixed-supply-token-gov.VOTE-KEY-ADMIN "whale" "")] } ])
+(free.fixed-supply-token-gov.set-vote-key "whale" (read-keyset 'vk))
+(free.fixed-supply-token-gov.clear-vote-key "whale")
+(env-sigs [ { "key": "hot-key", "caps": [(free.fixed-supply-token-gov.VOTE "vk1" "whale")] } ])
+(expect-failure "cleared key refused"
+  "neither account guard nor registered vote key satisfied"
+  (free.fixed-supply-token-gov.cast-vote "vk1" "whale" [0]))
+(rollback-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+
+(begin-tx "vote key: an active hot key has NO power beyond voting")
+(env-data { "vk":  { "keys": ["hot-key"], "pred": "keys-all" }
+          , "new": { "keys": ["hot-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "whale" (create-principal (read-keyset 'vk)))] } ])
+(free.fixed-supply-token-gov.set-vote-key "whale" (read-keyset 'vk))
+(env-sigs [ { "key": "hot-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "holder" 1.0)] } ])
+(expect-failure "hot key cannot transfer" "Keyset failure"
+  (free.fixed-supply-token-gov.transfer "whale" "holder" 1.0))
+(env-sigs [ { "key": "hot-key", "caps": [(free.fixed-supply-token-gov.ROTATE "whale" (create-principal (read-keyset 'new)))] } ])
+(expect-failure "hot key cannot rotate" "Keyset failure"
+  (free.fixed-supply-token-gov.rotate "whale" (read-keyset 'new)))
+(env-sigs [ { "key": "hot-key", "caps": [] } ])
+(expect-failure "hot key cannot open a question (admin-authored)"
+  "governance or ops authority required"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(env-sigs [ { "key": "hot-key", "caps": [(free.fixed-supply-token-gov.VOTE-KEY-ADMIN "whale" "")] } ])
+(expect-failure "hot key cannot clear the registration" "Keyset failure"
+  (free.fixed-supply-token-gov.clear-vote-key "whale"))
+(rollback-tx)
+
+;; ===========================================================================
+;; TIER BOUNDARIES
+;; ===========================================================================
+
+(begin-tx "tier boundary: a stranger holds no module admin")
+(env-keys ["attacker-key"])
+(expect-failure "no admin, no module admin" "Keyset failure"
+  (acquire-module-admin free.fixed-supply-token-gov))
+(rollback-tx)
+
+(begin-tx "tier boundary: the ops key alone holds no module admin")
+(env-keys ["gov-a"])
+(expect-failure "upgrade gate holds against the routine tier" "Keyset failure"
+  (acquire-module-admin free.fixed-supply-token-gov))
+(rollback-tx)
+
+(begin-tx "tier boundary: the ops key alone cannot mint")
+(env-keys ["gov-a"])
+(env-data { "x": { "keys": ["xk"], "pred": "keys-all" } })
+(expect-failure "MINT stays 2-of-3 (guard fires before the one-shot check)" "Keyset failure"
+  (free.fixed-supply-token-gov.init-mint
+    [ { "account": "x-acct", "guard": (read-keyset 'x), "amount": 1000000.0 } ]))
+(rollback-tx)
+
+(begin-tx "tier boundary: one key cannot rotate the GOVERNANCE keyset")
+(env-data { "evil-gov": { "keys": ["gov-a"], "pred": "keys-all" } })
+(env-keys ["gov-a"])
+(namespace "free")
+(expect-failure "keyset redefinition needs the current 2-of-3" "Keyset failure"
+  (define-keyset "free.token-gov" (read-keyset 'evil-gov)))
+(rollback-tx)
+
+;; ===========================================================================
+;; GOVERNANCE — create-proposal
+;; ===========================================================================
+
+(begin-tx "propose: only the operator can publish questions")
+(env-sigs [ { "key": "whale-key", "caps": [] } ])
+(expect-failure "a token holder cannot create on-chain questions"
+  "governance or ops authority required"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(env-keys ["gov-b"])
+(expect-failure "a single NON-ops governance key fails both branches"
+  "governance or ops authority required"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+;; --- question id: 1-64 chars, ASCII, ':' banned (ballot keys are
+;;     "<pid>:<account>", and account names may legally contain ':') ---
+(begin-tx "propose: id bounds")
+(env-keys ["gov-a"])
+(expect-failure "empty id refused" "proposal id must be 1-64 characters"
+  (free.fixed-supply-token-gov.create-proposal "" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(expect-failure "65-character id refused" "proposal id must be 1-64 characters"
+  (free.fixed-supply-token-gov.create-proposal (fold (+) "" (make-list 13 "aaaaa")) "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(expect-failure "non-ASCII id refused" "proposal id must be ASCII"
+  (free.fixed-supply-token-gov.create-proposal (+ "q-" (base64-decode "4piD")) "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(expect-failure "colon in the id refused" "proposal id must not contain ':'"
+  (free.fixed-supply-token-gov.create-proposal "1:alice" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+;; --- created-at skew: bounded BOTH ways against this chain's clock.
+;;     Too far forward fabricates the announce window; too far back dodges
+;;     the 12h floor by backdating. The clock here is 12:00:01. ---
+(begin-tx "propose: created-at more than 1h in the past refused")
+(env-keys ["gov-a"])
+(expect-failure "one second beyond the backward bound" "too far from this chain's clock"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T11:00:00Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(expect-failure "created-at backdated a day" "too far from this chain's clock"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-07-31T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+(begin-tx "propose: created-at more than 1h in the future refused")
+(env-keys ["gov-a"])
+(expect-failure "one second beyond the forward bound" "too far from this chain's clock"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T13:00:02Z") (time "2026-08-02T01:00:02Z") (time "2026-08-05T01:00:02Z")))
+(expect-failure "created-at a day ahead" "too far from this chain's clock"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-02T12:00:01Z") (time "2026-08-03T12:00:01Z") (time "2026-08-06T00:00:01Z")))
+(rollback-tx)
+
+(begin-tx "propose: exactly 1h of skew is ACCEPTED, both directions (boundary)")
+(env-keys ["gov-a"])
+(expect "exactly 1h behind is allowed" "back"
+  (free.fixed-supply-token-gov.create-proposal "back" "t" "b" ["a" "b"]
+    (time "2026-08-01T11:00:01Z") (time "2026-08-01T23:00:01Z") (time "2026-08-04T23:00:01Z")))
+(expect "exactly 1h ahead is allowed" "fwd"
+  (free.fixed-supply-token-gov.create-proposal "fwd" "t" "b" ["a" "b"]
+    (time "2026-08-01T13:00:01Z") (time "2026-08-02T01:00:01Z") (time "2026-08-05T01:00:01Z")))
+(rollback-tx)
+
+;; --- the 12h announce floor, measured from created-at ---
+(begin-tx "propose: voting may not open sooner than the announce floor")
+(env-keys ["gov-a"])
+(expect-failure "starts-at 11h59m out is inside the 12h floor" "at least 12h after"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-01T23:59:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+(begin-tx "propose: exactly 12h is ACCEPTED (boundary, not off-by-one)")
+(env-keys ["gov-a"])
+(expect "exactly the floor is allowed" "t"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+;; --- the voting window: ordered, and within [24h, 720h] ---
+(begin-tx "propose: the voting window may not be empty or inverted")
+(env-keys ["gov-a"])
+(expect-failure "ends-at equal to starts-at" "must close after it opens"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-02T00:00:01Z")))
+(expect-failure "ends-at before starts-at" "must close after it opens"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-01T23:00:01Z")))
+(rollback-tx)
+
+(begin-tx "propose: a voting window shorter than 24h is refused")
+(env-keys ["gov-a"])
+(expect-failure "a one-second window" "at least 24h"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-02T00:00:02Z")))
+(expect-failure "23h59m - one minute under the floor" "at least 24h"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-02T23:59:01Z")))
+(rollback-tx)
+
+(begin-tx "propose: exactly 24h is ACCEPTED (boundary, not off-by-one)")
+(env-keys ["gov-a"])
+(expect "exactly the minimum window is allowed" "t"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-03T00:00:01Z")))
+(rollback-tx)
+
+(begin-tx "propose: a question may not run longer than 30 days (720h)")
+(env-keys ["gov-a"])
+(expect-failure "a span of one year" "longer than 30 days"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2027-08-02T01:00:01Z")))
+(expect-failure "one second over 30 days" "longer than 30 days"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-09-01T00:00:02Z")))
+(rollback-tx)
+
+(begin-tx "propose: exactly 30 days is ACCEPTED (boundary, not off-by-one)")
+(env-keys ["gov-a"])
+(expect "exactly the maximum window is allowed" "t"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-09-01T00:00:01Z")))
+(rollback-tx)
+
+;; --- THE REPLICATION PROPERTY: the 12h floor is measured from the supplied
+;;     created-at, NEVER from local block time. If it were local, chains whose
+;;     clocks differ would disagree about whether the SAME starts-at is legal,
+;;     and one question would exist on some chains and not others. The chain
+;;     here is 30 minutes AHEAD, deliberately: a chain behind would accept
+;;     these parameters under either rule and prove nothing.
+;;       created-at 12:00:01 + 12h = 00:00:01  -> starts-at is exactly legal
+;;       local      12:30:01 + 12h = 00:30:01  -> a local rule would REFUSE ---
+(begin-tx "propose: the 12h floor comes from created-at, not this chain's clock")
+(env-keys ["gov-a"])
+(env-chain-data { "chain-id": "7", "block-time": (time "2026-08-01T12:30:01Z") })
+(expect "a chain 30 minutes AHEAD accepts the identical parameters" "rep"
+  (free.fixed-supply-token-gov.create-proposal "rep" "t" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+
+;; --- text bounds ---
+(begin-tx "propose: title bounds")
+(env-keys ["gov-a"])
+(expect-failure "empty title" "title 1..120"
+  (free.fixed-supply-token-gov.create-proposal "t" "" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(expect-failure "title > 120 chars" "title 1..120"
+  (free.fixed-supply-token-gov.create-proposal "t" (fold (+) "" (make-list 11 "01234567890")) "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+(begin-tx "propose: body bound")
+(env-keys ["gov-a"])
+(expect-failure "body > 2000 chars" "body <= 2000"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" (fold (+) "" (make-list 201 "0123456789")) ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+(begin-tx "propose: option-list bounds enforced")
+(env-keys ["gov-a"])
+(expect-failure "one option is not a question" "2..5 options required"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["only"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(expect-failure "more than MAX-OPTIONS refused" "2..5 options required"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "b" "c" "d" "e" "f"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(expect-failure "duplicate options refused" "options must be distinct"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" "a"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(expect-failure "empty option label refused" "each option 1..60 chars"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" ""]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(expect-failure "over-long option label refused" "each option 1..60 chars"
+  (free.fixed-supply-token-gov.create-proposal "t" "t" "b" ["a" (fold (+) "" (make-list 61 "x"))]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+;; --- the outstanding-question cap and id one-shot ---
+(begin-tx "propose: 3 open then the 4th refused")
+(env-keys ["gov-a"])
+(free.fixed-supply-token-gov.create-proposal "p1" "p1" "b" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(free.fixed-supply-token-gov.create-proposal "p2" "p2" "b" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(free.fixed-supply-token-gov.create-proposal "p3" "p3" "b" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(expect-failure "4th question refused" "too many active proposals"
+  (free.fixed-supply-token-gov.create-proposal "p4" "p4" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+(begin-tx "propose: a second create under the SAME id aborts (insert one-shot)")
+(env-keys ["gov-a"])
+(free.fixed-supply-token-gov.create-proposal "dup" "dup" "b" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(expect-failure "an id can never overwrite a live tally"
+  "Value already found while in Insert mode"
+  (free.fixed-supply-token-gov.create-proposal "dup" "dup2" "b" ["a" "b"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(rollback-tx)
+
+;; ===========================================================================
+;; GOVERNANCE — admin-cancel-proposal
+;; ===========================================================================
+
+(begin-tx "cancel: reason mandatory, authorization enforced, close is final")
+(env-keys ["gov-a"])
+(free.fixed-supply-token-gov.create-proposal "c1" "to-cancel" "b" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(env-sigs [ { "key": "whale-key", "caps": [] } ])
+(expect-failure "a holder cannot cancel" "governance or ops authority required"
+  (free.fixed-supply-token-gov.admin-cancel-proposal "c1" "r"))
+(env-keys ["gov-a"])
+(expect-failure "a public reason is mandatory" "public reason is required"
+  (free.fixed-supply-token-gov.admin-cancel-proposal "c1" ""))
+(expect-failure "reason length bounded" "public reason is required"
+  (free.fixed-supply-token-gov.admin-cancel-proposal "c1"
+    (fold (+) "" (make-list 300 "0123456789"))))
+(expect "ops cancels with a public reason" "cancelled"
+  (free.fixed-supply-token-gov.admin-cancel-proposal "c1" "withdrawn: superseded by a clearer question"))
+(expect "the slot frees immediately" [] (free.fixed-supply-token-gov.live-ids))
+(expect-failure "cannot cancel a question twice" "already cancelled"
+  (free.fixed-supply-token-gov.admin-cancel-proposal "c1" "again"))
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.VOTE "c1" "whale")] } ])
+(expect-failure "no votes on a cancelled question" "this question was cancelled"
+  (free.fixed-supply-token-gov.cast-vote "c1" "whale" [0]))
+(rollback-tx)
+
+;; --- THE CANCEL WINDOW'S FAR EDGE. admin-cancel enforces (< now starts-at):
+;;     results are readable while a question runs, so a cancel that reached
+;;     past the start would be a selective veto - an operator could watch each
+;;     chain's running tally and void the ones going the wrong way. Before the
+;;     start no ballot exists anywhere. ---
+(begin-tx "cancel: still allowed one second before voting opens")
+(env-keys ["gov-a"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+(free.fixed-supply-token-gov.create-proposal "bd" "boundary" "b" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:00:00Z") })
+(expect "one second before it opens, cancellation is still allowed" "cancelled"
+  (free.fixed-supply-token-gov.admin-cancel-proposal "bd" "withdrawn inside the announce window"))
+(rollback-tx)
+
+(begin-tx "cancel: refused AT starts-at, not one second later")
+(env-keys ["gov-a"])
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+(free.fixed-supply-token-gov.create-proposal "bd" "boundary" "b" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:00:01Z") })
+(expect-failure "AT starts-at the window is already shut" "voting has already opened"
+  (free.fixed-supply-token-gov.admin-cancel-proposal "bd" "too late"))
+(rollback-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+
+;; ===========================================================================
+;; GOVERNANCE — cast-vote
+;; ===========================================================================
+
+(begin-tx "vote: refused before starts-at (the announce window has no ballots)")
+(env-keys ["gov-a"])
+(free.fixed-supply-token-gov.create-proposal "pre" "not yet" "b" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.VOTE "pre" "whale")] } ])
+(expect-failure "no ballots inside the announce window" "voting has not opened yet"
+  (free.fixed-supply-token-gov.cast-vote "pre" "whale" [0]))
+(rollback-tx)
+
+(begin-tx "vote negatives")
+(env-keys ["gov-a"])
+(expect "question opens" "v1"
+  (free.fixed-supply-token-gov.create-proposal "v1" "the vote" "b" ["a" "b" "c"]
+    (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z")))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:00:02Z") })  ; inside the window
+
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.VOTE "v1" "whale")] } ])
+(expect-failure "empty ranking rejected" "ranking: 1..K entries"
+  (free.fixed-supply-token-gov.cast-vote "v1" "whale" []))
+(expect-failure "over-long ranking rejected" "ranking: 1..K entries"
+  (free.fixed-supply-token-gov.cast-vote "v1" "whale" [0 1 2 0]))
+(expect-failure "duplicate ranking entries rejected" "ranking entries must be distinct"
+  (free.fixed-supply-token-gov.cast-vote "v1" "whale" [0 0]))
+(expect-failure "out-of-range option index rejected" "ranking entry out of range"
+  (free.fixed-supply-token-gov.cast-vote "v1" "whale" [3]))
+(expect-failure "negative option index rejected" "ranking entry out of range"
+  (free.fixed-supply-token-gov.cast-vote "v1" "whale" [-1]))
+
+(env-sigs [ { "key": "someone-else", "caps": [(free.fixed-supply-token-gov.VOTE "v1" "whale")] } ])
+(expect-failure "foreign key cannot vote as whale"
+  "neither account guard nor registered vote key satisfied"
+  (free.fixed-supply-token-gov.cast-vote "v1" "whale" [0]))
+
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "reserve barred from voting" "reserve cannot vote"
+  (free.fixed-supply-token-gov.cast-vote "v1" "r:free.token-gov" [0]))
+
+;; zero-weight voter (a real account with no balance)
+(env-data { "empty": { "keys": ["empty-key"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "whale" "empty" 1.0)] } ])
+(free.fixed-supply-token-gov.transfer-create "whale" "empty" (read-keyset 'empty) 1.0)
+(env-sigs [ { "key": "empty-key", "caps": [(free.fixed-supply-token-gov.TRANSFER "empty" "whale" 1.0)] } ])
+(free.fixed-supply-token-gov.transfer "empty" "whale" 1.0)   ; drain to 0
+(env-sigs [ { "key": "empty-key", "caps": [(free.fixed-supply-token-gov.VOTE "v1" "empty")] } ])
+(expect-failure "zero balance has no voting weight" "no voting weight"
+  (free.fixed-supply-token-gov.cast-vote "v1" "empty" [0]))
+
+;; chain-local voting: a holder votes on the chain their tokens are on -
+;; a positive pin so the property goes red if it is ever re-restricted
+(env-chain-data { "chain-id": "2", "block-time": (time "2026-08-02T00:00:02Z") })
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.VOTE "v1" "whale")] } ])
+(expect "a ballot is accepted off the mint chain" "vote recorded"
+  (free.fixed-supply-token-gov.cast-vote "v1" "whale" [0]))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-02T00:00:02Z") })
+
+;; vote after close
+(env-chain-data { "block-time": (time "2026-08-05T00:00:01Z") })
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.VOTE "v1" "whale")] } ])
+(expect-failure "no votes after close" "voting closed"
+  (free.fixed-supply-token-gov.cast-vote "v1" "whale" [0]))
+(rollback-tx)
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-08-01T12:00:01Z") })
+
+;; cast-vote-internal is PUBLIC and its ONLY authorization is the
+;; require-capability - a caller holding no VOTE capability must be refused
+(begin-tx "cast-vote-internal refuses a caller that does not hold VOTE")
+(env-keys ["gov-a"])
+(free.fixed-supply-token-gov.create-proposal "gate" "gate" "does the gate hold?" ["a" "b"]
+  (time "2026-08-01T12:00:01Z") (time "2026-08-02T00:00:01Z") (time "2026-08-05T00:00:01Z"))
+(env-keys [])
+(env-sigs [])
+(expect-failure "the internal ballot writer is not callable without VOTE"
+  "not granted"
+  (free.fixed-supply-token-gov.cast-vote-internal "gate" "whale" [0]))
+(rollback-tx)
+
+;; ===========================================================================
+;; NON-VOTING REGISTER
+;; ===========================================================================
+
+(begin-tx "non-voting: authorization and reason branches")
+(env-keys ["attacker-key"])
+(expect-failure "a stranger cannot register an account" "Keyset failure"
+  (free.fixed-supply-token-gov.register-non-voting "holder" "malicious exclusion"))
+(expect-failure "a stranger cannot release one" "Keyset failure"
+  (free.fixed-supply-token-gov.release-non-voting "holder"))
+(env-keys ["gov-a", "gov-b"])
+(expect-failure "a reason is mandatory" "a public reason is required"
+  (free.fixed-supply-token-gov.register-non-voting "holder" ""))
+(expect-failure "releasing a NEVER-registered account fails on the missing row"
+  "No value found"
+  (free.fixed-supply-token-gov.release-non-voting "holder"))
+(free.fixed-supply-token-gov.register-non-voting "holder" "escrow test")
+(expect "release works once registered" "holder released"
+  (free.fixed-supply-token-gov.release-non-voting "holder"))
+(expect-failure "releasing an already-released account is refused"
+  "account is not registered"
+  (free.fixed-supply-token-gov.release-non-voting "holder"))
+(rollback-tx)
+
+;; ===========================================================================
+;; CROSS-CHAIN (cap-body + step-0 invariants; one case per tx - a failed
+;; defpact still occupies the tx's pact context)
+;; ===========================================================================
+
+(env-data { "whale": { "keys": ["whale-key"], "pred": "keys-all" } })
+(begin-tx "xchain: non-positive amount rejected")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "whale" "whale" 0.0 "1")] } ])
+(expect-failure "xchain amount must be positive" "cross-chain amount must be positive"
+  (free.fixed-supply-token-gov.transfer-crosschain "whale" "whale" (read-keyset 'whale) "1" 0.0))
+(rollback-tx)
+
+(begin-tx "xchain: over-precise amount rejected")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "whale" "whale" 1.0 "1")] } ])
+(expect-failure "xchain precision enforced" "precision violation"
+  (free.fixed-supply-token-gov.transfer-crosschain "whale" "whale" (read-keyset 'whale) "1" 1.0000000000001))
+(rollback-tx)
+
+(begin-tx "xchain: nonexistent target chain rejected")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "whale" "whale" 1.0 "20")] } ])
+(expect-failure "chain 20 does not exist" "not a valid chain id"
+  (free.fixed-supply-token-gov.transfer-crosschain "whale" "whale" (read-keyset 'whale) "20" 1.0))
+(rollback-tx)
+
+(begin-tx "xchain: same-chain target rejected")
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "whale" "whale" 1.0 "0")] } ])
+(expect-failure "cannot xchain to the current chain" "same chain"
+  (free.fixed-supply-token-gov.transfer-crosschain "whale" "whale" (read-keyset 'whale) "0" 1.0))
+(rollback-tx)
+
+(begin-tx "xchain: a vanity (non-principal) receiver is refused on the source chain")
+;; step 1 has no rollback, so a receiver the credit step could not protect
+;; must be refused BEFORE anything is debited
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "whale" "vanity-receiver" 1.0 "1")] } ])
+(expect-failure "vanity receiver refused before any debit"
+  "cross-chain receiver must be the principal of its guard"
+  (free.fixed-supply-token-gov.transfer-crosschain "whale" "vanity-receiver" (read-keyset 'whale) "1" 1.0))
+(rollback-tx)
+
+(begin-tx "xchain: insufficient funds rejected in the step-0 debit")
+(env-data { "wx": { "keys": ["cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"], "pred": "keys-all" } })
+(env-sigs [ { "key": "whale-key", "caps": [(free.fixed-supply-token-gov.TRANSFER_XCHAIN "whale" "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33" 999999.0 "1")] } ])
+(expect-failure "step-0 debit enforces the balance" "insufficient funds"
+  (free.fixed-supply-token-gov.transfer-crosschain "whale"
+    "k:cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"
+    (read-keyset 'wx) "1" 999999.0))
+(rollback-tx)
+
+(print "negatives.repl: ALL NEGATIVE CASES FAILED AS EXPECTED")

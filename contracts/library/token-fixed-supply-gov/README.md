@@ -1,108 +1,200 @@
-# Fixed-Supply Token with Advisory Governance
+# Fixed-Supply Token with Chain-Local Ranked-Choice Governance
 
-The [fixed-supply, non-upgradeable token](../token-fixed-supply/) extended
-with **advisory on-chain governance**: proposals plus live balance-weighted
-yes/no/abstain voting with permanent tallies. Votes are the community's
-recorded voice — **they execute nothing**, because in a frozen token there is
-nothing for them to execute: the mint is one-shot, the module cannot be
-upgraded, and no admin surface exists.
+A fixed-supply `fungible-v2` + `fungible-xchain-v1` token with **advisory
+on-chain governance**: the operator publishes ranked-choice questions, holders
+rank the options, and every chain keeps a live, permanently recorded tally.
+Votes are the community's recorded voice — **they execute nothing**: no
+quorum, no lever, no governed surface consumes a result.
 
-## The live-vote discipline
+Derived from a production contract live on Kadena mainnet (see `AUDIT.md`),
+cleaned as a fresh-deploy template.
 
-The governance design closes the classic token-voting exploits *by
-construction* rather than by snapshotting:
+## What it does
 
-- **Weight = current balance.** A vote records the voter's balance at cast
-  time; re-voting updates the recorded vote in place.
-- **Balance decreases release weight.** Every transfer-out and burn
-  automatically shrinks the account's recorded weight on every OPEN proposal
-  down to the new balance. Sold or moved tokens can never keep voting — the
-  vote-then-transfer double-count is impossible.
-- **Credits never vote.** Received tokens arrive unvoted; tallies only ever
-  grow from an explicit `cast-vote` by the holder.
-- **`release-votes` is public on purpose.** It derives everything from the
-  account's real balance, so a permissionless call can only correct stale
-  weights downward — never forge or grow a vote. Anyone may sync anyone.
-- **Bounded governance load.** At most `MAX-ACTIVE-PROPOSALS` (3) proposals
-  are open at once, so the release work a transfer or burn carries is small
-  and bounded — measured and asserted in the suite: a transfer at true worst
-  case (3 open proposals, live votes on all 3) costs ~489 gas against the
-  150k ceiling.
-- **Scoped-signature governance.** Proposing, voting, and guard rotation are
-  authorized through dedicated capabilities (`PROPOSE`, `VOTE`, `ROTATE`), so
-  a wallet can sign a vote scoped to exactly one proposal — no unscoped
-  signatures required anywhere in the module.
-- **Tallies freeze at close.** After `close-at`, votes are rejected and
-  balance changes no longer touch the proposal — the result is a permanent
-  on-chain record. The open-proposal index self-prunes.
+- **Fixed supply, one-shot mint.** `init-mint` distributes exactly
+  `TOTAL-SUPPLY` on `MINT-CHAIN`, once; there is no burn path and no
+  standalone credit path. Every balance increase is fused with a real debit,
+  behind the one-shot mint gate, or inside the cross-chain SPV resume.
+- **Ranked-choice questions, admin-authored.** The ops tier (a routine
+  authority named by governance, held as module state) publishes each
+  question with an explicit id and three **absolute instants**: `created-at`,
+  `starts-at`, `ends-at`. Holders rank 2–5 options; partial rankings are
+  allowed; re-voting replaces the ballot.
+- **Live balance weighting.** A ballot's weight is the voter's balance on
+  the chain it is cast from, at cast time. Every balance decrease (transfer
+  out, cross-chain send) automatically releases the moved weight from the
+  account's ballots on every open question — sold or moved tokens can never
+  keep voting. Received tokens arrive unvoted. `release-votes` is public on
+  purpose: it derives everything from real state, so it can only correct
+  stale weights downward.
+- **The pairwise matrix is the result; Borda is a diagnostic.** Each question
+  carries a K×K head-to-head matrix, updated with every ballot. Its cells
+  are depth-neutral — a partial ballot credits its favourite's duels exactly
+  as a full one does — which the also-published Borda scores are not (they
+  reward truncation, and are kept only as a diagnostic). `get-head-to-head`
+  reports the matrix, Copeland win counts, and the Condorcet winner, or
+  reports a cycle honestly as no winner.
+- **Two-tier signing.** Governance = the `<ns>.token-gov` keyset (upgrades,
+  mint, ops rotation, the non-voting register). Ops = a guard stored in
+  module state via `set-ops-guard` (create/cancel questions). Governance
+  always satisfies the ops gate too and is tried first, so a broken or
+  hostile ops authority can never lock governance out — and governance can
+  replace the ops authority at any time, even after the module is frozen.
+- **Dedicated vote key.** A holder can register a hot key that can ONLY
+  vote (`set-vote-key`, main guard only). The main guard always keeps
+  working; rotating the account guard deactivates the registration.
+- **Non-voting register.** Escrow accounts holding tokens that are not yet
+  anybody's are barred from voting **by name**, with a mandatory public
+  reason, both directions evented. The reserve (the `r:` principal of the
+  governance keyset) is barred by construction.
+- **Freezable.** Set `FROZEN-MODULE` to `true` and redeploy to end upgrades
+  forever. Ops rotation and the non-voting register deliberately survive the
+  freeze; code changes do not.
 
-**Disclosure duty:** if you attach off-chain or cross-module meaning to a
-tally (listing decisions, treasury actions run by other modules), state
-prominently that votes here are advisory signals, not levers.
+## The chain-local model
 
-## Deployment checklist
+Kadena runs many chains; module tables are per-chain. This template makes
+that the design instead of fighting it:
 
-Everything from the base template applies (namespace wrap, transaction-data
-parameters, `create-table` stays in the deploy transaction, `init-mint`
-once, devnet validation), plus one extra deploy-time parameter:
+- **Each chain tallies its own ballots.** A holder votes on the chain their
+  tokens are on. There is no cross-chain vote aggregation on-chain and no
+  hub: the same question is published to **every chain with identical
+  arguments** (same id, same three instants), so all copies open and close
+  together.
+- **Deadlines are absolute for a reason.** A deadline computed from local
+  block time would give every chain a different deadline — a double-vote
+  hole (vote on one chain, transfer, vote again on another before its later
+  deadline). Supplied absolute instants close it.
+- **Combine results off-chain by summing the raw matrices.** Read
+  `get-head-to-head` on every chain, **sum the K×K matrices cell by cell,
+  and decide once** on the summed matrix. **NEVER combine per-chain
+  winners** — electing whoever wins the most chains is a different (and
+  wrong) voting rule: a candidate can win many small-turnout chains and
+  lose the electorate. The matrix cells are additive across chains; the
+  winners are not. Skip cancelled copies entirely (`cancelled` is reported
+  separately from `closed` for exactly this reason).
 
-- `gov-threshold` — fraction of `TOTAL-SUPPLY` a holder needs to open a
-  proposal, enforced into `[0.001, 0.1]` (0.1%–10%).
+## Deploy checklist
 
-Voting windows are 24h–720h per proposal, chosen by the proposer.
+1. **Edit the literals** marked `;; EDIT-BEFORE-DEPLOY` in the source:
+   `SYMBOL`, `PRECISION`, `TOTAL-SUPPLY`, `MINT-CHAIN`. They are literals,
+   not tx-data parameters, because a defconst is re-evaluated on every
+   upgrade — a data-block value could be silently restated later. Only the
+   namespace stays a deploy parameter (`ns` in tx data).
+2. **Define the keyset** `<ns>.token-gov` in your namespace (a multi-sig
+   keyset; it is the upgrade, mint, and admin authority, and the reserve
+   account `r:<ns>.token-gov` derives from it).
+3. **Deploy on every chain you intend to serve**, each with tx data
+   `{ "ns": "<ns>", "upgrade": false }` — the deploy transaction creates the
+   tables and seeds the supply row. Upgrades use `"upgrade": true`.
+4. **Mint once** on `MINT-CHAIN` with the full distribution (`init-mint`
+   aborts unless the recipient amounts sum to exactly `TOTAL-SUPPLY`).
+   Distribute to principal (`k:`/`w:`) accounts. Move balances to other
+   chains with `transfer-crosschain`.
+5. **Name the ops authority** with `set-ops-guard` on every chain (a plain
+   keyset guard only; the module refuses references, user guards, custom
+   predicates, and empty keysets). Until then the governance keyset serves
+   as ops, so a fresh deploy is operable immediately.
+6. **Publish each question to every chain with identical arguments** — same
+   id, same `created-at` / `starts-at` / `ends-at`. The module enforces:
+   `created-at` within 1h of chain time, `starts-at` ≥ `created-at` + 12h
+   (the announce window: land and verify every copy before the first
+   ballot), window between 24h and 720h, and cancellation only before
+   `starts-at`.
+7. **Run the suites** (below), then validate on devnet before any
+   production deployment. The cross-chain SPV plumbing is only provable on
+   devnet.
+
+## Operational warnings
+
+1. **Upgrades must bless every previously deployed hash.** The template
+   ships without a `bless` line because a fresh deploy has no history. From
+   your second deploy onward, add `(bless "<hash>")` for **every** hash ever
+   deployed, append-only: an in-flight cross-chain transfer resolves against
+   the hash that debited it, and an unblessed hash strands it. Record every
+   deployed hash durably at deploy time — after a freeze, the recorded
+   history is all there is.
+2. **The first question closes the cheap-replacement window.** Until the
+   first question exists, a bad deploy can be fixed by redeploying wholesale
+   — the only state is the mint. Once questions and ballots exist they are
+   the permanent record the module exists to keep: from then on the only
+   honest path forward is upgrade-with-bless, and the recorded history must
+   carry forward intact. Treat the first question as the moment the deployed
+   version is committed — verify every chain's deploy (all 8 tables exist,
+   hashes match) before publishing it. A chain missing `rcv-actives` bricks
+   every debit on that chain, and after `FROZEN-MODULE` no table can ever be
+   created.
 
 ## Usage
 
 ```pact
-;; open a proposal (balance >= threshold; your guard authorizes)
-(fixed-supply-token-gov.create-proposal "k:holder" "Title" "Body" 72)
+;; the ops authority publishes one question to every chain (identical args)
+(fixed-supply-token-gov.create-proposal
+  "2031-q1" "Which integration next?" "Advisory: rank the options."
+  ["bridge" "dex" "wallet"]
+  (time "2031-01-10T12:00:00Z")     ; created-at (within 1h of chain time)
+  (time "2031-01-11T00:00:00Z")     ; starts-at  (>= created-at + 12h)
+  (time "2031-01-18T00:00:00Z"))    ; ends-at    (24h..720h after starts-at)
 
-;; vote / re-vote (weight = your current balance)
-(fixed-supply-token-gov.cast-vote "1" "k:holder" "yes")
+;; holders rank options on the chain their tokens live on (partial ok)
+(fixed-supply-token-gov.cast-vote "2031-q1" "k:holder..." [2 0])
 
-;; anyone can sync a stale vote weight down to the real balance
-(fixed-supply-token-gov.release-votes "k:whale")
+;; optional hot key that can ONLY vote
+(fixed-supply-token-gov.set-vote-key "k:holder..." (read-keyset 'vote-key))
 
-;; read the permanent record
-(fixed-supply-token-gov.get-results "1")
+;; the authoritative per-chain result (sum matrices across chains off-chain)
+(fixed-supply-token-gov.get-head-to-head "2031-q1")
 ```
 
 ## Testing
 
 ```bash
-cd examples
-pact fixed-supply-token-gov-test.repl
+cd tests
+pact token-gov.repl    # positive lifecycle: mint, transfers, questions,
+                       # ballots, release, vote key, xchain, upgrade
+pact negatives.repl    # every enforce branch as a failure, with both sides
+                       # of every time boundary
+pact pairwise.repl     # the head-to-head tally: depth-neutrality,
+                       # Borda-vs-Condorcet divergence, reversibility, cycles
 ```
 
-The suite re-proves a compact core sanity block (one-shot mint, managed
-transfers, reserved names) and then exercises the full governance delta:
-threshold and duration bounds, guard-authorized proposing/voting, re-vote
-tally exactness, the release rule on transfer AND burn, the public
-release-votes no-op property, the active-proposal cap, transfer gas under
-maximum governance load, tally freeze at close, and index self-pruning.
+Suites are self-contained: interfaces and `coin` load from this repository's
+registry tree. Cross-chain step 0 and the resume are exercised in the REPL
+via `continue-pact`; SPV proof validation itself needs devnet.
 
 ## Known limits
 
-- All base-template limits apply (load-time validation, irreversibility,
-  single chain, devnet mandate, exact-JSON deploy parameters, first-come
-  vanity names — see the base README; distribute the mint to principal
-  `k:`/`w:` accounts or mint in the deploy transaction).
-- **Proposal slots can be squatted.** Any holder above the threshold can
-  occupy all 3 active slots with 720h windows and race to re-grab them at
-  expiry. Advisory-only and recoverable (slots free at close, races are
-  contestable), but a determined threshold-holder can crowd the channel.
-  Pick `gov-threshold` with that in mind; a deposit or per-account limit
-  would need a fork of the template.
-- The deploy aborts if `floor(total-supply × gov-threshold, precision)` is
-  zero (e.g. tiny supply at precision 0) — a zero threshold would let
-  zero-balance accounts propose, so the module refuses the combination.
-- **Advisory only.** No quorum is enforced and no execution is wired —
-  readers judge turnout themselves via `get-results`. This is deliberate;
-  wiring execution to tallies would require a governed surface and a
-  different trust model.
-- Proposal titles/bodies live on-chain forever (120/2000 char bounds);
+- **Advisory only.** No quorum, no execution wiring. If you attach off-chain
+  or cross-module meaning to a result, disclose prominently that votes are
+  advisory signals.
+- **Freeze-flag rehearsal is manual.** `FROZEN-MODULE` is a source literal;
+  the refusal it produces ("Module is frozen - no further upgrades") can only
+  be exercised by flipping it and attempting an upgrade — rehearse that on
+  devnet before a mainnet freeze.
+- Until `FROZEN-MODULE` is set, module admin (the governance keyset) can
+  write tables directly, silently — `chain-minted` is a lower bound, not an
+  audit, until the freeze. This is inherent to upgradeable Pact modules;
+  the flip is what converts the fixed supply from policy into fact.
+- Question titles/bodies live on-chain forever (120/2000 char bounds);
   moderation is impossible by design.
+- The ops principal check cannot see key COUNTS (a principal encodes the
+  key-list hash), so an unsatisfiable keyset such as `keys-2` over one key
+  is accepted by `set-ops-guard`; that only bricks the ops tier and
+  governance re-points it — but verify the key count off-chain before
+  signing.
 
 ## License
 
 Apache-2.0 — see the repository [LICENSE](../../../LICENSE).
+
+## Audit dispositions (v2.0.0 cold review)
+
+- **Escrow registration is not retroactive.** A ballot cast before an account is registered
+  non-voting stays in the tally. Register every escrow before its first question opens. This is
+  deliberate: zeroing live ballots on registration would let governance strike an unfavourable
+  ballot out of a running tally — the same power the no-cancel-once-open rule exists to deny.
+- **Balance-decrease releases emit no event.** An indexer rebuilding tallies from events must
+  replay every debit against the open-question set; `get-results`/`get-head-to-head` on chain are
+  authoritative. A per-release event was rejected: it would tax every transfer.
+- **Verify every chain has all tables before the first question and before any freeze** — a chain
+  missing `rcv-actives` refuses every debit, and after a freeze there is no repair.

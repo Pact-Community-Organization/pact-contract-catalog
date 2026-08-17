@@ -209,9 +209,9 @@
 }
 ,
 {
-  "name": "Fixed-Supply Token with Advisory Governance",
+  "name": "Fixed-Supply Token with Chain-Local Ranked-Choice Governance",
   "slug": "token-fixed-supply-gov",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "repository": "https://github.com/Pact-Community-Organization/pact-contract-catalog",
   "license": "Apache-2.0",
   "authors": [
@@ -221,6 +221,7 @@
     }
   ],
   "audit_status": "self-reviewed",
+  "derivation": "derived-from-audited-production",
   "tags": [
     "token",
     "fungible",
@@ -234,7 +235,12 @@
     "pact",
     "smart-contract",
     "fungible-v2",
+    "fungible-xchain-v1",
     "fixed-supply",
+    "ranked-choice",
+    "chain-local",
+    "pairwise",
+    "condorcet",
     "live-vote",
     "advisory-governance"
   ]
