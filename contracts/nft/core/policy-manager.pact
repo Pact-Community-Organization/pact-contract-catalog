@@ -27,6 +27,14 @@
 ;; only misbehave inside the sale its own participants opted into. Policy hooks
 ;; run BEFORE the escrow capability is acquired, never inside it.
 ;;
+;; Note: the `module{fungible-v2}` annotation on the PAYLOAD-sourced quote
+;; fungible checks the tx-supplied `refSpec` interface list, not the named
+;; module's real `implements` list, and dynamic dispatch is name-based — the
+;; annotation is a shape check, never an interface-conformance guarantee. The
+;; containment above (sale-scoped escrow + conservation assert) is what
+;; actually bounds a hostile fungible; that is why the quote's fungible is a
+;; documented trust boundary rather than a validated input.
+;;
 ;; Quote rows are permanent: a settled or withdrawn sale keeps its quote row
 ;; (Pact has no row deletion; the one-shot sale defpact steps make replay
 ;; impossible). Treat `quotes` as the immutable sale-economics history.

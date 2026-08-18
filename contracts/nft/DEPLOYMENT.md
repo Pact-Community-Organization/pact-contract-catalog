@@ -9,8 +9,11 @@ cannot be walked back.
 
 ## The one-shot rule
 
-Module names are fixed by cross-references (`policy-manager` names `ledger`,
-policies name `policy-manager`, auctions name both). **A namespace gets ONE
+Module names are fixed by cross-references (`ledger` statically names
+`policy-manager` and `util`; the six policies and both auctions statically name
+`policy-manager`; `policy-manager` itself names no module statically — it holds
+the ledger and the sale contracts as runtime-registered modrefs, late-bound by
+name). **A namespace gets ONE
 shot at a clean deploy**: if a train aborts half-way and leaves wrong state, a
 redo needs either the module upgrade path or a NEW namespace — the names in the
 old one are taken forever. Interfaces are stricter still: a deployed interface
@@ -129,7 +132,47 @@ real mechanics, test value.
 
 ## Upgrades
 
-Every upgrade must `bless` the previous module hash — in-flight sales and
-cross-chain steps carry provenance from the old hash and complete against the
-blessed one. Never remove a bless while any transaction started under that
-hash can still resume.
+Pre-production, prefer a fresh deploy: with no live state to preserve, a clean
+namespace (or a wiped devnet) beats an in-place upgrade — no bless, no stale
+callers, no half-upgraded system. The rules below matter the moment a
+deployment has real state.
+
+Blessing is necessary and NOT sufficient — and it is not what makes new code
+run.
+
+**1. Bless the previous hash.** In-flight sales and cross-chain steps carry
+provenance from the old hash and complete against the blessed one. Never remove
+a bless while any transaction started under that hash can still resume. The
+bless that protects an in-flight cross-chain transfer belongs on `ledger` (the
+module that yields), not on `policy-manager`.
+
+**2. Redeploy every module that STATICALLY calls the upgraded one.** A direct
+qualified call (e.g. `policy-manager.enforce-init`) compiles the callee's
+module hash into the caller, and the caller keeps executing the OLD code until
+it is itself redeployed — silently, because bless gates table access, not
+dispatch. Blessing alone therefore converts a loud `hash not blessed` abort
+into a silent stale-code window, and a stale caller's own modref hops still
+reach CURRENT code: half-old, half-new inside one transaction.
+
+Exempt: modules that reach the upgraded one only through a modref (`m::f`) or
+only through `require-capability` — both re-resolve or drop the hash at call
+time. Interfaces cannot be upgraded at all, so interface edges never go stale.
+
+For this framework (the full static graph is in the one-shot rule above):
+
+- upgrade `policy-manager` → redeploy `ledger`, all six policies, and both
+  auctions (9 modules, depth 1 — nothing statically names any of them, so
+  there is no transitive tail);
+- upgrade `util` → redeploy `ledger`;
+- upgrade `ledger`, a policy, or an auction → redeploy nothing (every inbound
+  edge to them is a late-bound modref).
+
+Order: upgrade the callee FIRST, then redeploy each caller byte-unchanged (a
+caller redeployed before the callee upgrade recompiles against the old hash
+and stays stale), then verify every module hash. A redeployed caller gets a
+new hash of its own — bless its previous one by the same rule. Do NOT re-run
+`create-table`, `policy-manager.init`, or `register-sale-contract` on an
+upgrade pass — the registrations are late-bound by name and survive; the
+`insert`s would abort. (The deploy script's tail appends `create-table` calls
+to each module's source — an upgrade pass must submit the module source
+without that tail.)

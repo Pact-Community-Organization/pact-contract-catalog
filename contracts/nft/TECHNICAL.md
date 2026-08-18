@@ -551,7 +551,10 @@ sequenceDiagram
 **`royalty-policy`** — enforceable creator royalties.
 *Init (fail closed):* the create-token transaction **must** carry a
 `royalty_spec` payload object `{creator, creator-guard, bps, sale-only}`; the
-typed `read-msg` aborts on a missing or partial spec (the POL-1 fix). `bps` is
+typed `read-msg` aborts on a missing or partial spec (the POL-1 fix). The same
+abort fires when `bps` arrives as a bare JSON number — on the wire it must be
+boxed as `"bps": {"int": 1000}`, because a bare number decodes to a *decimal*
+(§10, wire encoding). `bps` is
 capped at `MAX-ROYALTY-BPS` = 5000 (50% — a higher rate could leave the seller
 nothing) and the creator must be the principal of `creator-guard`
 (impersonation rejected). The spec is inserted into the policy's own
@@ -1201,13 +1204,57 @@ defpact) with the quote:
 
 | Quote field | Value |
 |---|---|
-| `fungible` | the sale currency, e.g. `coin` (in raw transaction JSON a modref encodes as `{refName: {name, namespace}, refSpec: […]}` — devnet-proven from real transaction data) |
+| `fungible` | the sale currency, e.g. `coin` (wire encoding below — `refSpec` is REQUIRED) |
 | `price` | the listing price (> 0, at the fungible's precision) |
 | `seller-account` / `seller-guard` | the seller's payout principal |
 | `fee-account` | the marketplace's revenue account — **must be a principal** |
 | `fee-guard` | that account's live guard (fetch it from the fungible's `details` at listing time — never hand-build a keyset) |
 | `fee-bps` | the marketplace's rate, ≤ 1000 (the framework cap; charge less as policy) |
 | `sale-contract` | `""` |
+
+**Wire encoding (raw transaction `data`)** — the REPL builds typed values
+directly, but a real client (wallet, SDK, `pact -a`) submits JSON, and the
+JSON decoder has two hard rules:
+
+- **Integers must be boxed.** A bare JSON number decodes to a *decimal* —
+  unconditionally, `250` as much as `0` — so every `:integer` field must be
+  sent as `{"int": N}`. Decimal fields take a plain number and must **not** be
+  boxed (`{"int": …}` in a `:decimal` slot fails).
+- **`refSpec` is REQUIRED on a modref.** Omitted, it decodes to the empty
+  interface set and the typed quote read aborts.
+
+A complete fixed-price quote as it must appear in the offer transaction's
+`data` (devnet-proven from real transaction data):
+
+```json
+"quote": {
+  "fungible":       { "refName": { "name": "coin", "namespace": null },
+                      "refSpec":  [ { "name": "fungible-v2", "namespace": null } ] },
+  "price":          100.0,
+  "seller-account": "k:seller…",
+  "seller-guard":   { "keys": ["…"], "pred": "keys-all" },
+  "fee-account":    "k:marketplace…",
+  "fee-guard":      { "keys": ["…"], "pred": "keys-all" },
+  "fee-bps":        { "int": 250 },
+  "sale-contract":  ""
+}
+```
+
+The integer rule extends to **signed capability arguments**. The seller-signed
+`OFFER` and `WITHDRAW` capabilities carry the integer `timeout`:
+
+```json
+{ "name": "<ns>.ledger.OFFER",
+  "args": [ "<token-id>", "k:seller…", 1.0, { "int": 0 } ] }
+```
+
+`BUY`, `TRANSFER`, `XTRANSFER` and the auction capabilities carry no integer.
+An unboxed capability integer does not fail as a typecheck — the signature
+simply never matches the installed capability and the transaction aborts with
+`Managed capability … was not installed`, naming neither the argument nor the
+encoding. `royalty_spec.bps` follows the same integer rule at create-token
+(§5.3). The reference client (`scripts/devnet-validate/src/nft-framework.ts`)
+demonstrates every encoding against a real node.
 
 The manager settles: royalty (from the token's policy state) + the marketplace
 fee + seller remainder, conservation-asserted, merged legs (§6.3). The
@@ -1430,8 +1477,9 @@ state durability on a long-running node).
 
 **Run the deployment-shaped example yourself:** the campaign script
 (`scripts/devnet-validate/src/nft-framework.ts`) is also the reference for
-transaction construction — quote payloads, modref JSON encoding, scoped
-signatures, SPV continuation — against a real node.
+transaction construction — quote payloads, modref JSON encoding (`refSpec`
+included), integer boxing (`{"int": N}` in data and in signed capability
+arguments), scoped signatures, SPV continuation — against a real node.
 
 **Read the sources** — they are short. The entire framework is ~2,600 lines of
 Pact across 16 modules. Start where the money is:

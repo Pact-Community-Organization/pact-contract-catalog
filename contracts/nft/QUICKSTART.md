@@ -52,7 +52,11 @@ enforced by the framework on every sale, including yours.
    principal, and *your* `fee-account` / `fee-guard` / `fee-bps` (≤ 1000 bps —
    the framework's cap; charge less as policy). Economics bind in state at
    offer, signed by the seller. Nothing in the later buy transaction can change
-   them.
+   them. **Wire encoding**: in the raw transaction JSON, `fee-bps` — and every
+   other `:integer`, including the `timeout` argument of the seller-signed
+   `OFFER` capability — must be boxed as `{"int": N}`; a bare JSON number
+   decodes as a decimal and the offer aborts. The quote's `fungible` modref
+   must include `refSpec`. Full encoding reference: TECHNICAL §10.
 3. **Buying**: the buyer signs exactly two things — a `TRANSFER` of the price
    into the sale's escrow, and the buy continuation with their own account.
    The manager settles royalty + your fee + seller remainder in one

@@ -90,6 +90,25 @@
     (nft.ledger.create-token id 0 "ipfs://partial" [nft.royalty-policy] (read-keyset 'alice))))
 (rollback-tx)
 
+;; WIRE-SHAPE PIN — a COMPLETE spec whose bps arrives as a decimal is refused
+;; with the same error as a partial spec. On the wire a bare JSON number
+;; decodes to a decimal (the tx decoder's only arm for JSON numbers), so a
+;; client sending "bps": 1000 instead of "bps": {"int": 1000} produces exactly
+;; this value. Goes RED if the typed read-msg at enforce-init is ever untyped.
+(begin-tx "bps as a decimal (unboxed wire integer) -> creation aborts")
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 1000.0, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://decimal-bps", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "a complete spec with a decimal bps is rejected" "Runtime typecheck failure"
+    (nft.ledger.create-token id 0 "ipfs://decimal-bps" [nft.royalty-policy] (read-keyset 'alice))))
+(rollback-tx)
+
 (begin-tx "bps over the 50% cap -> rejected")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
