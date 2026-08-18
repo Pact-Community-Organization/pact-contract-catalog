@@ -58,6 +58,7 @@
   (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string)
     [{ 'account: "k:9999999999999999999999999999999999999999999999999999999999999999"
      , 'guard: (read-keyset 'g), 'amount: -5.0 }])
+  (defun mint-decision:string (token:object{token-info}) (identity "abstain"))
   (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string) (enforce false "no uri"))
   (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal) {})

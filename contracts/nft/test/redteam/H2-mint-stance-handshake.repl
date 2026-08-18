@@ -1,0 +1,49 @@
+;; H2 — the mint stance is reachable only from the ledger's mint path.
+;;
+;; INVARIANT (the framework's own -CALL discipline, extended to the new hook):
+;; policy-manager.mint-delegated dispatches token-policy.mint-decision over a
+;; token's attached policies. If it were callable directly, anyone could drive
+;; ANY policy's mint-decision with a FABRICATED token-info — the exact surface
+;; the MINT-CALL/INIT-CALL handshake exists to close (see C1/C2).
+;;
+;; Run: pact contracts/nft/test/redteam/H2-mint-stance-handshake.repl
+
+(load "_bootstrap.repl")
+
+(begin-tx "a real token exists")
+(env-data
+  { "ana": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec":
+    { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 500, "sale-only": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://h2", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'ana))))
+  (nft.ledger.create-token id 0 "ipfs://h2" [nft.royalty-policy] (read-keyset 'ana)))
+(commit-tx)
+
+(begin-tx "ATTACK: read the mint stance outside the ledger's mint path")
+(env-data
+  { "ana": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://h2", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'ana))))
+  ;; the genuine token-info
+  (expect-failure
+    "mint-delegated is unreachable without the ledger's MINT-CALL handshake"
+    "not granted"
+    (nft.policy-manager.mint-delegated (nft.ledger.get-token-info id)
+      "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0))
+  ;; and a FABRICATED token-info naming policies the attacker chose
+  (expect-failure
+    "a fabricated token-info cannot drive any policy's mint-decision"
+    "not granted"
+    (nft.policy-manager.mint-delegated
+      { 'id: id, 'supply: 0.0, 'precision: 0, 'uri: "ipfs://h2", 'policies: [nft.royalty-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }
+      "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0)))
+(commit-tx)
+
+(print "H2 — asserts: the mint stance dispatch is inside the ledger lifecycle")
+(print "  path only (MINT-CALL handshake); verdict is the EXIT CODE.")

@@ -49,11 +49,16 @@
   (deftable ledger-table:{account-details})
 
   (defschema token-schema
+    @doc "The token row. `author-guard` is the creation-guard the id was \
+         \derived from and enforced against at create-token — the ONE stored \
+         \authorship fact. The author ADDRESS is not stored: it is derived \
+         \(create-principal) at every read, so the two can never desync."
     id:string
     uri:string
     precision:integer
     supply:decimal
-    policies:[module{token-policy}])
+    policies:[module{token-policy}]
+    author-guard:guard)
   (deftable tokens:{token-schema})
 
   (defschema token-details
@@ -62,8 +67,14 @@
     policies:[module{token-policy}])
 
   ;; --- events -----------------------------------------------------------------
-  (defcap TOKEN:bool (id:string precision:integer policies:[module{token-policy}] uri:string creation-guard:guard)
-    @doc "Emitted once, when a token id is created."
+  (defcap TOKEN:bool (id:string precision:integer policies:[module{token-policy}] uri:string author:string creation-guard:guard)
+    @doc "Emitted when a token id first becomes resident on THIS chain: at \
+         \create-token, and again on the FIRST arrival of a relocated token \
+         \(a token relocated to chain B was never created there, so without \
+         \this an event-only indexer would never learn its author on B). \
+         \`author` is the principal of `creation-guard` — index THAT; the raw \
+         \guard is included only so a consumer can re-derive the id and check \
+         \it, and a guard's key list is NOT an author."
     @event true)
   (defcap URI-UPDATED:bool (id:string uri:string)
     @doc "Emitted when a token's uri changes (policy-authorized)."
@@ -121,6 +132,15 @@
     @doc "The creator proves control of the CREATION-GUARD the token id is \
          \derived from — the anti-forgery signature check."
     (enforce-guard creation-guard))
+
+  (defcap MINT-AUTHOR:bool (id:string account:string amount:decimal)
+    @doc "The author proves control of the CREATION-GUARD the token id is \
+         \derived from, to issue supply under it. Scopable: a signer may \
+         \restrict their signature to exactly this id/account/amount. \
+         \Skipped only when an attached policy took over mint authorization \
+         \(token-policy.mint-decision -> \"permit\")."
+    (let ((cg:guard (get-author-guard id)))
+      (enforce-guard cg)))
 
   (defcap TRANSFER:bool (id:string sender:string receiver:string amount:decimal)
     @managed amount TRANSFER-mgr
@@ -231,9 +251,26 @@
     (let ((p (precision id)))
       (enforce (= (floor amount p) amount) "precision violation")))
 
+  (defun get-author-guard:guard (id:string)
+    @doc "The creation-guard TOKEN ID was derived from — the author. Written \
+         \once by create-token from the guard CREATE-TOKEN enforced, never \
+         \from a caller's payload; the id is a hash over it, so the row is \
+         \self-certifying."
+    (at 'author-guard (read tokens id)))
+
   (defun get-token-info:object{token-info} (id:string)
-    (with-read tokens id { 'id := i, 'supply := s, 'precision := p, 'uri := u, 'policies := pol }
-      { 'id: i, 'supply: s, 'precision: p, 'uri: u, 'policies: pol }))
+    (with-read tokens id { 'id := i, 'supply := s, 'precision := p, 'uri := u
+                         , 'policies := pol, 'author-guard := ag }
+      { 'id: i, 'supply: s, 'precision: p, 'uri: u, 'policies: pol
+      , 'author: (create-principal ag), 'author-guard: ag }))
+
+  (defun get-author:string (id:string)
+    @doc "WHO MADE THIS: the author's address — the principal of the \
+         \creation-guard the token id is derived from. This is the field a \
+         \marketplace displays to tell an original from someone else's own \
+         \version of the same artwork (a different author gets a different \
+         \token id, never this one). It grants no authority."
+    (create-principal (at 'author-guard (read tokens id))))
 
   ;; --- IDENTITY (behavior kept verbatim from the correct Marmalade model) -----
   (defun canonical-policies:[module{token-policy}] (policies:[module{token-policy}])
@@ -290,10 +327,12 @@
         (enforce-token-reserved id details creation-guard))
       (with-capability (INIT-CALL id precision uri)
         (policy-manager.enforce-init
-          { 'id: id, 'supply: 0.0, 'precision: precision, 'uri: uri, 'policies: canon }))
+          { 'id: id, 'supply: 0.0, 'precision: precision, 'uri: uri, 'policies: canon
+          , 'author: (create-principal creation-guard), 'author-guard: creation-guard }))
       (with-capability (CREATE-TOKEN id creation-guard)
-        (insert tokens id { 'id: id, 'uri: uri, 'precision: precision, 'supply: 0.0, 'policies: canon })
-        (emit-event (TOKEN id precision canon uri creation-guard))
+        (insert tokens id { 'id: id, 'uri: uri, 'precision: precision, 'supply: 0.0
+                          , 'policies: canon, 'author-guard: creation-guard })
+        (emit-event (TOKEN id precision canon uri (create-principal creation-guard) creation-guard))
         true)))
 
   ;; --- update-uri (fail closed: policy-mediated, immutable by default) --------
@@ -322,8 +361,21 @@
 
   ;; --- mint / burn / transfer (routed through the manager handshake) ----------
   (defun mint:bool (id:string account:string guard:guard amount:decimal)
-    (with-capability (MINT-CALL id account amount)
-      (policy-manager.enforce-mint (get-token-info id) account guard amount))
+    @doc "Issue AMOUNT of ID to ACCOUNT. Supply under an id carries that id's \
+         \authorship, so issuing it is the AUTHOR's call: MINT-AUTHOR \
+         \enforces the creation-guard the id is derived from. The single \
+         \exception is delegation the author chose AT CREATION — an attached \
+         \policy whose mint-decision is \"permit\" (guard-policy's mint-guard, \
+         \collection-policy's operator) takes over, and the policy set is \
+         \part of the id. Fail closed: no mint-aware policy = author-only. \
+         \This gates ISSUANCE ONLY; anyone may still create their own token \
+         \(their own id, their own authorship) from the same details."
+    (let ((token:object{token-info} (get-token-info id)))
+      (with-capability (MINT-CALL id account amount)
+        (if (policy-manager.mint-delegated token account amount)
+          true
+          (with-capability (MINT-AUTHOR id account amount) true))
+        (policy-manager.enforce-mint token account guard amount)))
     (with-capability (MINT id account amount)
       (let ((receiver (credit id account guard amount))
             (sender:object{sender-balance-change} { 'account: "", 'previous: 0.0, 'current: 0.0 }))
@@ -386,21 +438,29 @@
               (update-supply id (- amount)))
             (yield { 'id: id, 'receiver: receiver, 'receiver-guard: receiver-guard, 'amount: amount
                    , 'uri: (at 'uri token-info), 'precision: (at 'precision token-info)
-                   , 'policies: (at 'policies token-info), 'passports: passports }
+                   , 'policies: (at 'policies token-info), 'passports: passports
+                   , 'author-guard: (get-author-guard id) }
               target-chain)))
         true))
     (step
       (resume { 'id := rid, 'receiver := rcv, 'receiver-guard := rg:guard, 'amount := amt
               , 'uri := ruri, 'precision := rprec:integer
-              , 'policies := rpols:[module{token-policy}], 'passports := rpass:[object] }
+              , 'policies := rpols:[module{token-policy}], 'passports := rpass:[object]
+              , 'author-guard := rag:guard }
         ;; materialize the token on first arrival; on a RETURN verify the
         ;; immutable identity (precision + policy set); the local uri stands
         (with-default-read tokens rid { 'id: "" } { 'id := existing }
           (if (= "" existing)
-            (insert tokens rid { 'id: rid, 'uri: ruri, 'precision: rprec, 'supply: 0.0, 'policies: rpols })
-            (with-read tokens rid { 'precision := lprec, 'policies := lpols }
+            (let ((_ (insert tokens rid { 'id: rid, 'uri: ruri, 'precision: rprec, 'supply: 0.0
+                                        , 'policies: rpols, 'author-guard: rag })))
+              ;; the token was never CREATED on this chain, so no TOKEN event
+              ;; ever fired here: emit it now, or an event-only indexer on this
+              ;; chain never learns who made it.
+              (emit-event (TOKEN rid rprec rpols ruri (create-principal rag) rag)))
+            (with-read tokens rid { 'precision := lprec, 'policies := lpols, 'author-guard := lag }
               (enforce (= lprec rprec) "token precision mismatch on receive")
-              (enforce (= lpols rpols) "token policy set mismatch on receive"))))
+              (enforce (= lpols rpols) "token policy set mismatch on receive")
+              (enforce (= lag rag) "token author mismatch on receive"))))
         (with-capability (XCHAIN-RECEIVE-CALL rid rcv amt)
           (policy-manager.enforce-xchain-receive (get-token-info rid) rcv rg amt rpass))
         (with-capability (XRECEIVE rid rcv amt)

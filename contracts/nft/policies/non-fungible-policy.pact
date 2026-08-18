@@ -102,6 +102,9 @@
 
 
   ;; --- uri stance: this policy has no uri concern (abstain) --------------------
+  ;; mint stance: the 1/1 shape bounds HOW MANY, never WHO — the author issues it
+  (defun mint-decision:string (token:object{token-info}) (identity "abstain"))
+
   (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (enforce false "this policy does not permit uri updates"))

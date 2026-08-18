@@ -1,0 +1,254 @@
+;; H1 — SURFACE H: issuance under someone else's authorship.
+;;
+;; INVARIANT (the founder's design position, made enforceable):
+;;   "anyone can create their own version — authorship identifies WHO made it."
+;;   A token id IS its author's fingerprint (hash of details + chain + the
+;;   creation-guard). Therefore supply issued under that id carries that
+;;   author's name, and only the author — or a delegate the author NAMED AT
+;;   CREATION in the token's own policy set — may issue it.
+;;
+;; ATTACK: mint under an id you did not author. If any of these succeeds, a
+;; stranger can print units that are indistinguishable from the author's own
+;; originals, and (with the 1/1 policy) can take the author's only edition
+;; permanently — an irreversible loss landing on someone who did not act.
+;;
+;; This file is RED on the unpatched framework (the stranger mints) and GREEN
+;; with the MINT-AUTHOR gate + the token-policy mint-decision stance.
+;;
+;; Run: pact contracts/nft/test/redteam/H1-stranger-mint.repl
+
+(load "_bootstrap.repl")
+
+;; --- the rest of the real policies -------------------------------------------
+(begin-tx "deploy the remaining real policies")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(namespace "nft")
+(load "../../policies/non-fungible-policy.pact")
+(create-table nft.non-fungible-policy.minted-table)
+(load "../../policies/guard-policy.pact")
+(create-table nft.guard-policy.op-guards)
+(load "../../policies/collection-policy.pact")
+(create-table nft.collection-policy.collections)
+(create-table nft.collection-policy.collection-tokens)
+(commit-tx)
+
+;; keys: ANA (author) 1111 · MALLORY (stranger) 3333 · MINT-KEY aaaa · CAROL (operator) 5555
+(begin-tx "identities")
+(env-data
+  { "ana":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "mintkey": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "carol":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(commit-tx)
+
+;; =============================================================================
+;; 1 — a plain token: only its AUTHOR issues supply under its id
+;; =============================================================================
+(begin-tx "ANA authors a token and mints her own edition")
+(env-data
+  { "ana": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-original", 'precision: 0, 'policies: [] } (read-keyset 'ana))))
+  (nft.ledger.create-token id 0 "ipfs://ana-original" [] (read-keyset 'ana))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+                   (read-keyset 'ana) 1.0)
+  (expect "ana's own edition exists" 1.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+(begin-tx "ATTACK 1: a stranger inflates supply under ANA's id")
+(env-data
+  { "ana":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-original", 'precision: 0, 'policies: [] } (read-keyset 'ana))))
+  (expect-failure
+    "a stranger cannot issue supply under an id they did not author"
+    "Keyset failure"
+    (nft.ledger.mint id "k:3333333333333333333333333333333333333333333333333333333333333333"
+                     (read-keyset 'mallory) 999.0))
+  (expect "supply is untouched by the attack" 1.0 (nft.ledger.total-supply id))
+  (expect-failure "the stranger never even got a balance row under ana's id" "No value found"
+    (nft.ledger.get-balance id "k:3333333333333333333333333333333333333333333333333333333333333333")))
+(commit-tx)
+
+;; =============================================================================
+;; 2 — the 1/1: a stranger cannot take the author's only edition
+;;     (the worst case: non-fungible-policy's marker is a one-way insert, so a
+;;      stolen 1/1 locks the author out of her own token FOREVER)
+;; =============================================================================
+(begin-tx "ANA authors a 1/1 and has not minted it yet")
+(env-data
+  { "ana": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-1of1", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'ana))))
+  (nft.ledger.create-token id 0 "ipfs://ana-1of1" [nft.non-fungible-policy] (read-keyset 'ana))
+  (expect "unminted" 0.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+(begin-tx "ATTACK 2: a stranger front-runs the author's only edition")
+(env-data
+  { "ana":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-1of1", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'ana))))
+  (expect-failure
+    "a stranger cannot take the author's only edition"
+    "Keyset failure"
+    (nft.ledger.mint id "k:3333333333333333333333333333333333333333333333333333333333333333"
+                     (read-keyset 'mallory) 1.0)))
+(commit-tx)
+
+(begin-tx "the attacked 1/1 is still unissued and still the author's to mint")
+(env-data
+  { "ana": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-1of1", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'ana))))
+  (expect "the stranger issued nothing" 0.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+;; positive path on a SECOND, un-attacked 1/1 (kept separate so that on the
+;; unpatched framework this file reports every assertion instead of aborting
+;; on the permanent lock-out — that lock-out is demonstrated separately)
+(begin-tx "the author mints her own 1/1")
+(env-data
+  { "ana": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-1of1-b", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            (read-keyset 'ana))))
+  (nft.ledger.create-token id 0 "ipfs://ana-1of1-b" [nft.non-fungible-policy] (read-keyset 'ana))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+                   (read-keyset 'ana) 1.0)
+  (expect "the author holds her 1/1" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(commit-tx)
+
+;; =============================================================================
+;; 3 — ANYONE CAN CREATE THEIR OWN VERSION (the founder's requirement)
+;;     Same artwork, same uri, same policies — a DIFFERENT author, so a
+;;     different id, and full issuance rights over it. No gatekeeper on creation.
+;; =============================================================================
+(begin-tx "MALLORY authors his own version of the same artwork")
+(env-data
+  { "ana":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let ((ana-id (nft.ledger.create-token-id
+                { 'uri: "ipfs://ana-original", 'precision: 0, 'policies: [] } (read-keyset 'ana)))
+      (mal-id (nft.ledger.create-token-id
+                { 'uri: "ipfs://ana-original", 'precision: 0, 'policies: [] } (read-keyset 'mallory))))
+  (expect "a different author is a different id" false (= ana-id mal-id))
+  (nft.ledger.create-token mal-id 0 "ipfs://ana-original" [] (read-keyset 'mallory))
+  (nft.ledger.mint mal-id "k:3333333333333333333333333333333333333333333333333333333333333333"
+                   (read-keyset 'mallory) 5.0)
+  (expect "he issues freely under his OWN authorship" 5.0 (nft.ledger.total-supply mal-id)))
+(commit-tx)
+
+(begin-tx "symmetry: the author of the original cannot mint under his id either")
+(env-data
+  { "ana":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((mal-id (nft.ledger.create-token-id
+                { 'uri: "ipfs://ana-original", 'precision: 0, 'policies: [] } (read-keyset 'mallory))))
+  (expect-failure
+    "authorship cuts both ways — ana cannot issue under mallory's id"
+    "Keyset failure"
+    (nft.ledger.mint mal-id "k:1111111111111111111111111111111111111111111111111111111111111111"
+                     (read-keyset 'ana) 1.0)))
+(commit-tx)
+
+;; =============================================================================
+;; 4 — DELEGATION IS PRESERVED: guard-policy's mint-guard still takes over
+;;     (the author named this delegate at creation; the policy set is part of
+;;      the id, so the delegation is visible in the token's own identity)
+;; =============================================================================
+(begin-tx "ANA authors a token whose mint authority is a SEPARATE key")
+(env-data
+  { "ana": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "operation_guards":
+    { "mint-guard":     { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "burn-guard":     { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "sale-guard":     { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "transfer-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-drop", 'precision: 0, 'policies: [nft.guard-policy] } (read-keyset 'ana))))
+  (nft.ledger.create-token id 0 "ipfs://ana-drop" [nft.guard-policy] (read-keyset 'ana)))
+(commit-tx)
+
+(begin-tx "the DELEGATE mints without the author signing at all")
+(env-data
+  { "ana":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mintkey": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-drop", 'precision: 0, 'policies: [nft.guard-policy] } (read-keyset 'ana))))
+  (nft.ledger.mint id "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                   (read-keyset 'mintkey) 3.0)
+  (expect "the author's chosen delegate issues supply" 3.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+(begin-tx "but a stranger is still refused on the delegated token")
+(env-data
+  { "ana":     { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-drop", 'precision: 0, 'policies: [nft.guard-policy] } (read-keyset 'ana))))
+  (expect-failure
+    "delegation names ONE authority — it is not an open mint"
+    "Keyset failure"
+    (nft.ledger.mint id "k:3333333333333333333333333333333333333333333333333333333333333333"
+                     (read-keyset 'mallory) 1.0)))
+(commit-tx)
+
+;; =============================================================================
+;; 5 — DELEGATION IS PRESERVED: a collection operator still issues
+;; =============================================================================
+(begin-tx "CAROL opens a collection")
+(env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(nft.collection-policy.create-collection "gallery-drop" "Gallery Drop" 0 (read-keyset 'carol))
+(commit-tx)
+
+(begin-tx "ANA's token joins the collection (operator co-signs admission)")
+(env-data
+  { "ana":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "collection_id": "gallery-drop" })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
+          , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-collected", 'precision: 0, 'policies: [nft.collection-policy] }
+            (read-keyset 'ana))))
+  (nft.ledger.create-token id 0 "ipfs://ana-collected" [nft.collection-policy] (read-keyset 'ana)))
+(commit-tx)
+
+(begin-tx "the OPERATOR issues it without the author signing")
+(env-data
+  { "ana":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://ana-collected", 'precision: 0, 'policies: [nft.collection-policy] }
+            (read-keyset 'ana))))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+                   (read-keyset 'ana) 1.0)
+  (expect "the collection operator issues the author's token" 1.0 (nft.ledger.total-supply id)))
+(commit-tx)
+
+(print "H1 — asserts: issuance under an id belongs to that id's author (or the")
+(print "  delegate the author named at creation); anyone may still author their")
+(print "  own version of the same artwork and issue it freely.")
+(print "  (verdict is the EXIT CODE / the FAILURE lines above, not this line)")

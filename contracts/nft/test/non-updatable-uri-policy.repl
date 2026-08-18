@@ -64,7 +64,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((tok:object{nft.token-policy.token-info}
         { 'id: "n:any", 'supply: 1.0, 'precision: 0, 'uri: "ipfs://frozen"
-        , 'policies: [nft.non-updatable-uri-policy] }))
+        , 'policies: [nft.non-updatable-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
   (expect-failure "the uri veto is unconditional" "the token uri is immutable"
     (nft.non-updatable-uri-policy.enforce-update-uri tok "ipfs://replaced")))
 (rollback-tx)
@@ -75,7 +75,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.non-updatable-uri-policy] }))
+        , 'policies: [nft.non-updatable-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
   (expect-failure "enforce-init is not directly callable" "not granted"
     (nft.non-updatable-uri-policy.enforce-init fake))
   (expect-failure "enforce-transfer is not directly callable" "not granted"

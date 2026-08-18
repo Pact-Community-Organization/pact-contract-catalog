@@ -1,0 +1,305 @@
+;; nft framework — AUTHORSHIP suite.
+;;
+;; The founder's requirement, stated as testable properties:
+;;   "Do NOT prevent other users creating their own version of an artwork —
+;;    that is a DIFFERENT AUTHOR, not a copy. Anyone should be able to create.
+;;    What matters is that the NFT clearly identifies WHO THE AUTHOR IS (the
+;;    author's address), so anyone can tell an Ana original from someone else's."
+;;
+;; Every check below goes RED if the property is violated. AUTH-9 is the
+;; BOUNDARY pin: it asserts what authorship deliberately does NOT do, so that
+;; a mint gate can never be added silently without the founder being asked.
+;;
+;; Run: pact contracts/nft/test/authorship.repl
+
+;; --- coin -------------------------------------------------------------------
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+;; --- framework --------------------------------------------------------------
+(begin-tx "deploy nft framework")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(commit-tx)
+
+;; --- a probe policy that RECORDS the author it was shown in token-info -------
+(begin-tx "probe policy")
+(namespace "nft")
+(module author-probe GOV
+  @doc "Test-only: records the author every hook is shown, to prove token-info \
+       \actually delivers authorship to a policy."
+  (implements token-policy)
+  (defcap GOV () (enforce-keyset "nft.admin"))
+  (use token-policy [token-info payout])
+  (defschema seen author:string author-guard:guard)
+  (deftable seen-tbl:{seen})
+  (defun saw:object{seen} (id:string) (read seen-tbl id))
+  (defun enforce-init:bool (token:object{token-info})
+    (insert seen-tbl (at 'id token)
+      { 'author: (at 'author token), 'author-guard: (at 'author-guard token) })
+    true)
+  (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal)
+    (write seen-tbl (at 'id token)
+      { 'author: (at 'author token), 'author-guard: (at 'author-guard token) })
+    true)
+  (defun enforce-burn:bool (token:object{token-info} account:string amount:decimal) true)
+  (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun mint-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string) (enforce false "no"))
+  (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) [])
+  (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal) {})
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object) true))
+(create-table nft.author-probe.seen-tbl)
+(commit-tx)
+
+;; ===========================================================================
+;; AUTH-1 / AUTH-2 / AUTH-6 / AUTH-7 — Ana creates her original
+;; ===========================================================================
+(begin-tx "ana creates her original")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "ana":     { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
+  , "mallory": { "keys": ["dead100000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
+  , "lookalike": { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "!=" } })
+(env-sigs [ { "key": "a11ce00000000000000000000000000000000000000000000000000000000000", "caps": [] } ])
+(env-events true)
+(env-events true)  ;; drain
+(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe] })
+       (id      (nft.ledger.create-token-id details (read-keyset 'ana)))
+       (_       (nft.ledger.create-token id 0 "ipfs://the-painting" [nft.author-probe] (read-keyset 'ana)))
+       (evs     (env-events true)))
+
+  ;; AUTH-1 — the NFT identifies WHO THE AUTHOR IS, from a plain state read.
+  (expect "AUTH-1 get-author returns the author's address"
+    "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+    (nft.ledger.get-author id))
+  (expect "AUTH-1b get-token-info carries the author"
+    "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+    (at 'author (nft.ledger.get-token-info id)))
+
+  ;; AUTH-2 — authorship is PROVEN, not asserted: the stored guard re-derives
+  ;; the id, so the row cannot claim an author the id does not commit to.
+  (expect "AUTH-2 the stored author-guard re-derives the token id" true
+    (= id (nft.ledger.create-token-id details
+            (at 'author-guard (nft.ledger.get-token-info id)))))
+
+  ;; AUTH-6 — a POLICY is shown the author (this is why token-info carries it).
+  (expect "AUTH-6 the policy was shown the author at enforce-init"
+    "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+    (at 'author (nft.author-probe.saw id)))
+  (expect "AUTH-6b the policy was shown the enforceable author-guard" true
+    (= (read-keyset 'ana) (at 'author-guard (nft.author-probe.saw id))))
+
+  ;; AUTH-7 — the TOKEN event carries the author PRINCIPAL, so an event-only
+  ;; indexer never has to render a guard's key list (which is forgeable).
+  (expect "AUTH-7 the TOKEN event carries the author principal" true
+    (contains "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+      (at 'params (at 0 (filter (lambda (e) (= "nft.ledger.TOKEN" (at 'name e))) evs))))))
+(commit-tx)
+
+;; ===========================================================================
+;; AUTH-3 / AUTH-4 — anyone may create their OWN version; the author tells them apart
+;; ===========================================================================
+(begin-tx "mallory creates HIS OWN version of the same artwork")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "ana":     { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
+  , "mallory": { "keys": ["dead100000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
+(env-sigs [ { "key": "dead100000000000000000000000000000000000000000000000000000000000", "caps": [] } ])
+(let* ((details  { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe] })
+       (ana-id   (nft.ledger.create-token-id details (read-keyset 'ana)))
+       (mal-id   (nft.ledger.create-token-id details (read-keyset 'mallory))))
+
+  ;; AUTH-4 — NO GATEKEEPER ON CREATION. Same artwork, different author: allowed.
+  (expect "AUTH-4 anyone may create their own version of the same artwork" true
+    (nft.ledger.create-token mal-id 0 "ipfs://the-painting" [nft.author-probe] (read-keyset 'mallory)))
+
+  ;; AUTH-3 — and anyone can TELL THEM APART, by id and by author.
+  (expect "AUTH-3 a different author gets a different token id" false (= ana-id mal-id))
+  (expect "AUTH-3b the ana original names ana"
+    "k:a11ce00000000000000000000000000000000000000000000000000000000000" (nft.ledger.get-author ana-id))
+  (expect "AUTH-3c mallory's own version names mallory"
+    "k:dead100000000000000000000000000000000000000000000000000000000000" (nft.ledger.get-author mal-id))
+  (expect "AUTH-3d the two authors are distinguishable" false
+    (= (nft.ledger.get-author ana-id) (nft.ledger.get-author mal-id))))
+(commit-tx)
+
+;; ===========================================================================
+;; AUTH-5 — DISPLAY-FORGERY PIN. A keyset {keys:[ANA], pred:"!="} satisfies
+;; enforce-guard with ZERO signatures, so anyone can create under it. Storing
+;; the PRINCIPAL (not the guard's key list) is what stops it reading as Ana.
+;; ===========================================================================
+(begin-tx "look-alike author cannot render as ana")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "ana":       { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
+  , "lookalike": { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "!=" } })
+(env-sigs [])
+(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] })
+       (fake-id (nft.ledger.create-token-id details (read-keyset 'lookalike))))
+  ;; the attack itself works — anyone can create under a look-alike guard...
+  (expect "AUTH-5a a look-alike guard needs no signature at all" true
+    (nft.ledger.create-token fake-id 0 "ipfs://the-painting" [] (read-keyset 'lookalike)))
+  ;; ...but the author it reports is NOT ana.
+  (expect "AUTH-5 a look-alike author never renders as ana" false
+    (= "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+       (nft.ledger.get-author fake-id)))
+  (expect "AUTH-5b it renders as its own w: principal, pred and all"
+    "w:GCC3E3fRG30sFVCSMvWAsFoESwfPdiHh1aIH_qoOBvE:!="
+    (nft.ledger.get-author fake-id)))
+(commit-tx)
+
+;; ===========================================================================
+;; AUTH-9 — BOUNDARY PIN. Authorship is IDENTITY, not OWNERSHIP and not a
+;; licence to issue. (a) A stranger can NO LONGER issue supply under Ana's id
+;; (the merged mint gate; H1-stranger-mint pins that surface in full).
+;; (b) But authorship does NOT follow the artwork: after Ana sells it, the
+;; OWNER is Mallory and get-author STILL names Ana. This goes RED if anyone
+;; ever makes authorship track ownership, or makes get-author authoritative
+;; for anything but display.
+;; ===========================================================================
+(begin-tx "authorship is identity, not ownership")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "ana":     { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
+  , "mallory": { "keys": ["dead100000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
+(env-sigs [ { "key": "dead100000000000000000000000000000000000000000000000000000000000", "caps": [] } ])
+(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe] })
+       (ana-id  (nft.ledger.create-token-id details (read-keyset 'ana))))
+  (expect-failure "AUTH-9 a stranger can NO LONGER issue supply under the author's id"
+    "Keyset failure"
+    (nft.ledger.mint ana-id "k:dead100000000000000000000000000000000000000000000000000000000000"
+      (read-keyset 'mallory) 999.0))
+  (expect "AUTH-9b nothing was issued" 0.0 (nft.ledger.total-supply ana-id)))
+(commit-tx)
+
+;; ownership moves; authorship does not
+(begin-tx "the artwork changes hands")
+(env-data
+  { "ana":     { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
+  , "mallory": { "keys": ["dead100000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
+(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe] })
+       (ana-id  (nft.ledger.create-token-id details (read-keyset 'ana)))
+       (ana-acct "k:a11ce00000000000000000000000000000000000000000000000000000000000")
+       (mal-acct "k:dead100000000000000000000000000000000000000000000000000000000000"))
+  ;; the AUTHOR issues her own edition (the new gate), then sells it
+  (env-sigs [ { "key": "a11ce00000000000000000000000000000000000000000000000000000000000"
+              , "caps": [ (nft.ledger.MINT-AUTHOR ana-id ana-acct 1.0)
+                        , (nft.ledger.TRANSFER ana-id ana-acct mal-acct 1.0) ] } ])
+  (expect "AUTH-9b2 the author issues her own edition" true
+    (nft.ledger.mint ana-id ana-acct (read-keyset 'ana) 1.0))
+  (nft.ledger.create-account ana-id mal-acct (read-keyset 'mallory))
+  (expect "AUTH-9c the author sells her original" true
+    (nft.ledger.transfer ana-id ana-acct mal-acct 1.0))
+  (expect "AUTH-9d the OWNER is now the buyer" 1.0 (nft.ledger.get-balance ana-id mal-acct))
+  (expect "AUTH-9e the AUTHOR is still Ana — identity does not follow the artwork"
+    "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+    (nft.ledger.get-author ana-id)))
+(commit-tx)
+
+;; ===========================================================================
+;; AUTH-8 — the author SURVIVES A RELOCATION, and the destination chain emits
+;; a TOKEN event (the token was never created there, so nothing else would).
+;; REPL TIER ONLY: SPV is unsupported in the bare repl — this proves the
+;; yield/resume mechanics, NOT a real cross-chain round trip. Devnet required.
+;; ===========================================================================
+(begin-tx "ana relocates her original to chain 1")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "auth-xc"))
+(env-data
+  { "ana": { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
+(env-sigs [ { "key": "a11ce00000000000000000000000000000000000000000000000000000000000", "caps": [] } ])
+(let* ((details { 'uri: "ipfs://the-voyager", 'precision: 0, 'policies: [] })
+       (id      (nft.ledger.create-token-id details (read-keyset 'ana))))
+  (nft.ledger.create-token id 0 "ipfs://the-voyager" [] (read-keyset 'ana))
+  (nft.ledger.mint id "k:a11ce00000000000000000000000000000000000000000000000000000000000" (read-keyset 'ana) 1.0)
+  (env-sigs [ { "key": "a11ce00000000000000000000000000000000000000000000000000000000000"
+              , "caps": [ (nft.ledger.XTRANSFER id
+                            "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+                            "k:a11ce00000000000000000000000000000000000000000000000000000000000" "1" 1.0) ] } ])
+  (nft.ledger.transfer-crosschain id
+    "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+    "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+    (read-keyset 'ana) "1" 1.0))
+(commit-tx)
+
+(begin-tx "the token arrives on chain 1 with its author intact")
+(env-chain-data { "chain-id": "1" })
+(env-data
+  { "ana": { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
+(env-events true)  ;; drain
+(continue-pact 1 false (hash "auth-xc"))
+;; the id was derived on chain 0 — recompute it under THAT chain-id
+(env-chain-data { "chain-id": "0" })
+(let* ((evs (env-events true))
+       (id  (nft.ledger.create-token-id
+              { 'uri: "ipfs://the-voyager", 'precision: 0, 'policies: [] } (read-keyset 'ana))))
+  (env-chain-data { "chain-id": "1" })
+  ;; WHAT THIS ENTAILS: the resume step BINDS 'author-guard out of the yield.
+  ;; If the yield did not carry it, continue-pact aborts with
+  ;;   Key "author-guard" not found in object
+  ;; so a completed step 1 proves the author-guard travelled; and the RETURN
+  ;; branch's (enforce (= lag rag)) proves it matched the local row.
+  (expect "AUTH-8 the relocation completed, so the author-guard travelled in the yield"
+    "k:a11ce00000000000000000000000000000000000000000000000000000000000"
+    (nft.ledger.get-author id))
+  (expect "AUTH-8b the arrived balance is on the destination chain" 1.0
+    (nft.ledger.get-balance id "k:a11ce00000000000000000000000000000000000000000000000000000000000"))
+  ;; AUTH-8c — WHY THE FIRST-ARRIVAL BRANCH IS NOT PROVEN HERE: one repl is one
+  ;; database, so the "destination chain" already holds the row and the resume
+  ;; always takes the RETURN branch. This assertion goes RED if anyone ever
+  ;; claims this file proves virgin-chain materialization. DEVNET REQUIRED for
+  ;; the first-arrival insert and its TOKEN event.
+  (expect "AUTH-8c repl tier: the row pre-exists, so this is the RETURN path, not first arrival"
+    0 (length (filter (lambda (e) (= "nft.ledger.TOKEN" (at 'name e))) evs))))
+(commit-tx)
+
+;; ===========================================================================
+;; AUTH-10 — NEGATIVE CONTROL: prove this file's assertions can actually FAIL.
+;; ===========================================================================
+(begin-tx "negative control")
+(env-chain-data { "chain-id": "0" })
+(env-data { "ana": { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
+(expect-failure "AUTH-10 get-author aborts for a token that does not exist"
+  "No value found in table"
+  (nft.ledger.get-author "n:NOSUCHTOKEN"))
+(commit-tx)
+
+(print "")
+(print "=== AUTHORSHIP: ALL GREEN ===")
+(print "  AUTH-1 the author's address is readable from state (get-author / token-info)")
+(print "  AUTH-2 the stored author-guard re-derives the token id — proven, not asserted")
+(print "  AUTH-3 different author -> different id AND different author: tellable apart")
+(print "  AUTH-4 NO gatekeeper on creation — anyone may make their own version")
+(print "  AUTH-5 a look-alike guard can never render as someone else's k: address")
+(print "  AUTH-6 policies are shown the author (the reason token-info carries it)")
+(print "  AUTH-7 the TOKEN event carries the author principal")
+(print "  AUTH-8 the author-guard travels in the xchain yield [REPL TIER; first arrival = DEVNET]")
+(print "  AUTH-9 BOUNDARY: a stranger cannot issue supply; authorship never follows ownership")

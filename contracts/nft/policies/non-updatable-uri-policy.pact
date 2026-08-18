@@ -30,6 +30,9 @@
     (enforce-keyset ADMIN-KS))
 
   ;; --- uri stance: the unconditional VETO ----------------------------------------
+  ;; mint stance: metadata immutability is not issuance authority
+  (defun mint-decision:string (token:object{token-info}) (identity "abstain"))
+
   (defun uri-decision:string (token:object{token-info}) (identity "veto"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (enforce false "the token uri is immutable"))

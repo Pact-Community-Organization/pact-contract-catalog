@@ -12,12 +12,27 @@
 
   (defschema token-info
     @doc "The token view passed to every policy hook. `policies` is the set of \
-         \policies attached to the token (self-referential list of this iface)."
+         \policies attached to the token (self-referential list of this iface). \
+         \AUTHORSHIP: `author-guard` IS the creation-guard the token id is \
+         \derived from (id = hash of [details, chain, creation-guard]); \
+         \create-token re-derives the id and enforces that guard, so a token \
+         \that EXISTS was authored by whoever controls this guard, and the \
+         \stored guard re-derives the id (self-certifying). `author` is its \
+         \principal, DERIVED on every read via create-principal — never \
+         \stored twice, never read from a tx payload. DISPLAY `author`, NEVER \
+         \the guard's key list: a keyset {keys:[ana-key], pred:\"!=\"} is \
+         \satisfied by anyone with zero signatures, but its principal is \
+         \w:...:!= and never k:ana. BOUNDARY — authorship is IDENTITY, not \
+         \AUTHORITY: these two fields gate nothing. Who may issue supply is \
+         \decided separately (see mint-decision); who may own, transfer, burn \
+         \or sell is the account guard's business, unchanged."
     id:string
     supply:decimal
     precision:integer
     uri:string
-    policies:[module{token-policy}])
+    policies:[module{token-policy}]
+    author:string
+    author-guard:guard)
 
   (defschema payout
     @doc "A cut a policy DECLARES from a sale price. The policy computes the \
@@ -39,6 +54,24 @@
     ( token:object{token-info} account:string guard:guard amount:decimal )
     @doc "Run at mint of AMOUNT of TOKEN to ACCOUNT."
     @model [ (property (!= account "")) (property (> amount 0.0)) ])
+
+  (defun mint-decision:string (token:object{token-info})
+    @doc "This policy's stance on WHO may issue supply under TOKEN's id, \
+         \evaluated over EVERY attached policy (the same \
+         \attachment-authoritative shape as uri-decision — a policy can never \
+         \be bypassed by being absent from an out-of-band registry). Return: \
+         \\"permit\"  — this policy takes over mint authorization; its own \
+         \             enforce-mint decides who may mint (e.g. a stored \
+         \             mint-guard, or a collection operator); \
+         \\"abstain\" — no opinion. Anything that is not \"permit\" is an \
+         \             abstention (fail closed). \
+         \Pure: no guard/signature check, no state write (it is read for every \
+         \policy). Supply under a token id is the AUTHOR's to issue: unless \
+         \some attached policy permits, the ledger enforces the creation-guard \
+         \the id is derived from. A token with no mint-aware policy is \
+         \therefore author-only by default, and the attached policy set is \
+         \committed in the token id itself — so a token's mint rule is \
+         \readable from its identity and can never be added by a stranger.")
 
   (defun enforce-burn:bool
     ( token:object{token-info} account:string amount:decimal )

@@ -50,6 +50,9 @@
     (at 'guard (read uri-guards token-id)))
 
   ;; --- uri stance: PERMIT, then the stored guard authorizes the update -----------
+  ;; mint stance: metadata authority is not issuance authority
+  (defun mint-decision:string (token:object{token-info}) (identity "abstain"))
+
   (defun uri-decision:string (token:object{token-info}) (identity "permit"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))

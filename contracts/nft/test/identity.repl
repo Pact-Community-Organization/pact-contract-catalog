@@ -166,6 +166,7 @@
   (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) [])
   (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
   (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun mint-decision:string (token:object{token-info}) (identity "abstain"))
   (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (enforce false "this policy does not permit uri updates"))
@@ -182,6 +183,7 @@
   (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) [])
   (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
   (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun mint-decision:string (token:object{token-info}) (identity "abstain"))
   (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (enforce false "this policy does not permit uri updates"))
@@ -221,27 +223,31 @@
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
 (expect-failure "enforce-mint cannot be called outside the ledger's mint path" "not granted"
   (nft.policy-manager.enforce-mint
-    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [] }
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }
     "k:3333333333333333333333333333333333333333333333333333333333333333"
     (read-keyset 'mallory) 1.0))
 (expect-failure "enforce-init cannot be called outside create-token" "not granted"
   (nft.policy-manager.enforce-init
-    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [] }))
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
 (expect-failure "enforce-transfer cannot be called outside the transfer path" "not granted"
   (nft.policy-manager.enforce-transfer
-    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [] }
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }
     "a" (read-keyset 'mallory) "b" 1.0))
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
 ;; accounting: mint -> transfer -> burn (supply + precision + k: protocol)
-;;   NOTE (Phase 1): mint AUTHORIZATION is a policy concern — a token created
-;;   with an empty policy list is open to mint. Phase 3 ships the guard/
-;;   non-fungible policies that gate this; the suite documents the semantics.
+;;   NOTE: mint AUTHORIZATION defaults to the AUTHOR — a token id is derived
+;;   from its creation-guard, so supply issued under it carries that author's
+;;   name and only she may issue it (MINT-AUTHOR). A policy may take that
+;;   authority over by declaring mint-decision "permit" (guard-policy's
+;;   mint-guard, collection-policy's operator); with an empty policy list
+;;   nobody took over, so the author's signature is required here.
 ;; ---------------------------------------------------------------------------
 (begin-tx "mint")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
             (read-keyset 'alice))))
@@ -331,12 +337,17 @@
 (begin-tx "burn requires the account guard")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
-(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
             (read-keyset 'alice))))
-  ;; re-mint one to alice first requires no sig (no policies); then mallory
-  ;; cannot burn it: DEBIT enforces alice's account guard
+  ;; re-mint one to alice: issuance under her id is HERS, and she scopes her
+  ;; signature to exactly this mint — so it authorizes nothing else in the tx.
+  ;; Mallory then still cannot burn it: DEBIT enforces alice's account guard,
+  ;; which her MINT-AUTHOR-scoped signature does not satisfy.
+  (env-sigs
+    [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] }
+    , { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+      , "caps": [(nft.ledger.MINT-AUTHOR id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0)] } ])
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (expect-failure "a stranger cannot burn someone's token" "Keyset failure"

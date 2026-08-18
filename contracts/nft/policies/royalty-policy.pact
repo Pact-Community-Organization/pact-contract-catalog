@@ -185,6 +185,9 @@
 
 
   ;; --- uri stance: this policy has no uri concern (abstain) --------------------
+  ;; mint stance: a royalty is an economic term, not an issuance right
+  (defun mint-decision:string (token:object{token-info}) (identity "abstain"))
+
   (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (enforce false "this policy does not permit uri updates"))

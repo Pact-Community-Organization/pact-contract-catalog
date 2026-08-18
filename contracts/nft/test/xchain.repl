@@ -267,7 +267,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 1.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.royalty-policy] }))
+        , 'policies: [nft.royalty-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
   (expect-failure "manager xchain-send is not directly callable" "not granted"
     (nft.policy-manager.enforce-xchain-send fake "k:a" "k:b" (read-keyset 'alice) "1" 1.0))
   (expect-failure "manager xchain-receive is not directly callable" "not granted"

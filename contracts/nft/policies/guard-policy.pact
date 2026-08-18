@@ -154,6 +154,9 @@
     true)
 
   ;; --- uri stance: this policy has no uri concern (abstain) --------------------
+  ;; mint stance: this policy IS the mint authority: enforce-mint enforces the stored mint-guard
+  (defun mint-decision:string (token:object{token-info}) (identity "permit"))
+
   (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (enforce false "this policy does not permit uri updates"))

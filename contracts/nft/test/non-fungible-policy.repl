@@ -126,7 +126,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.non-fungible-policy] }))
+        , 'policies: [nft.non-fungible-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
   (expect-failure "enforce-init is not directly callable" "not granted"
     (nft.non-fungible-policy.enforce-init fake))
   (expect-failure "enforce-mint is not directly callable" "not granted"
@@ -213,6 +213,10 @@
 (begin-tx "re-mint after burn is rejected — once means EVER")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+;; the AUTHOR herself attempts the re-mint: the once-ever marker must refuse
+;; even the author (without this signer the ledger's author gate refuses first
+;; and this assertion would pass for the wrong reason)
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
             (read-keyset 'alice))))

@@ -223,6 +223,24 @@
          (at 'policies token))
     true)
 
+  (defun mint-delegated:bool (token:object{token-info} account:string amount:decimal)
+    @doc "ATTACHMENT-AUTHORITATIVE mint stance — the same shape as the uri \
+         \stance below. True when SOME policy attached to TOKEN returned \
+         \\"permit\" from mint-decision: that policy takes over mint \
+         \authorization and its own enforce-mint decides who may issue \
+         \supply. False means nobody took over, and the ledger enforces the \
+         \token's own creation-guard (author-only). The stance is read from \
+         \EVERY attached policy, so it cannot be bypassed by omission, and \
+         \the attached set is committed in the token id. Pure view: no guard \
+         \check and no state write — but, like every other hook dispatch here, \
+         \it is reachable ONLY from the ledger's mint path (the MINT-CALL \
+         \handshake), so no external caller can drive a policy's \
+         \mint-decision with a fabricated token-info."
+    (let ((l:module{ledger-iface} (retrieve-ledger)))
+      (require-capability (l::MINT-CALL (at 'id token) account amount)))
+    (contains "permit"
+      (map (lambda (p:module{token-policy}) (p::mint-decision token)) (at 'policies token))))
+
   ;; --- UPDATE-URI: fail closed, ATTACHMENT-authoritative ----------------------
   ;; Every attached policy declares its uri stance via the base token-policy
   ;; uri-decision hook — so a policy can NEVER be bypassed by being absent from

@@ -148,7 +148,7 @@
     , "transfer-guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" } } })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.guard-policy] }))
+        , 'policies: [nft.guard-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
   (expect-failure "enforce-init is not directly callable" "not granted"
     (nft.guard-policy.enforce-init fake))
   (expect-failure "enforce-mint is not directly callable" "not granted"
