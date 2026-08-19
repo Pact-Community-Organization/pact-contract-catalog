@@ -90,7 +90,8 @@
 (begin-tx "invalid relocations reject")
 (env-chain-data { "chain-id": "0" })
 (env-data
-  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://voyager", 'precision: 0
             , 'policies: [nft.royalty-policy nft.non-fungible-policy nft.guarded-uri-policy] }
@@ -109,7 +110,18 @@
               , "caps": [ (nft.ledger.XTRANSFER id
                             "k:1111111111111111111111111111111111111111111111111111111111111111"
                             "k:3333333333333333333333333333333333333333333333333333333333333333" "1" 1.0) ] } ])
+  ;; the receiver-guard is mallory's own (a well-formed request), so what
+  ;; refuses is the thing under test: alice's account guard on the DEBIT
   (expect-failure "a stranger cannot relocate someone's token" "Keyset failure"
+    (nft.ledger.transfer-crosschain id
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      "k:3333333333333333333333333333333333333333333333333333333333333333"
+      (read-keyset 'mallory) "1" 1.0))
+  ;; ... and a receiver-guard that does not certify the receiver NAME is
+  ;; refused before anything is debited (an arriving credit could never match
+  ;; it, and the sender would have lost the token for good)
+  (expect-failure "a receiver-guard must certify the receiver name"
+    "single-key account protocol violation"
     (nft.ledger.transfer-crosschain id
       "k:1111111111111111111111111111111111111111111111111111111111111111"
       "k:3333333333333333333333333333333333333333333333333333333333333333"

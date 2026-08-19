@@ -87,7 +87,7 @@
               (read-keyset 'cg7))))
   (expect-failure
     "Module admin necessary for operation but has not been acquired:nft.ledger"
-    (with-capability (nft.ledger.UPDATE_SUPPLY)
+    (with-capability (nft.ledger.UPDATE_SUPPLY tid)
       (nft.ledger.update-supply tid 999999.0))))
 (commit-tx)
 

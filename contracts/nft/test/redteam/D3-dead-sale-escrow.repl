@@ -1,0 +1,384 @@
+;; D3 — SURFACE D: a sale contract that cannot see its own sale die, and
+;; escrow principals that a stranger can claim first.
+;;
+;; A quote row is permanent by design, so "a quote exists" says nothing about
+;; whether the ledger's sale defpact for that sale-id is still running, and
+;; Pact has no builtin that reads defpact completion. The manager is the only
+;; party on the path of every terminal transition (step-0 rollback ->
+;; enforce-withdraw, step 1 -> enforce-buy), so it records liveness in the
+;; quote row and publishes it; the auction gates on it.
+;;
+;; INV-1: sale-live tracks the defpact — true after offer, false after the
+;;        withdraw rollback, false after settlement.
+;; INV-2: create-auction REFUSES a sale-id whose defpact has terminated.
+;;        Without this an auction attaches to a corpse: bids escrow into it and
+;;        neither continuation exists any more, so nothing can settle them and
+;;        nothing can refund them.
+;; INV-3: place-bid REFUSES on liveness grounds — not merely because the
+;;        auction window happens to have closed. Money is only ever taken for a
+;;        sale that can still pay out.
+;; INV-4: a stranger who creates the BID ESCROW principal under their own guard
+;;        (possible on any fungible without a reserved-name protocol; coin has
+;;        one, fungible-v2 does not require one) cannot make a bid land there.
+;;        The bid escrow is the escrow that holds third-party money ACROSS
+;;        transactions, so a squat there is theft, not merely a brick.
+;; INV-5: the same refusal covers the manager's own sale escrow at buy.
+
+(load "_bootstrap.repl")
+
+;; --- a fungible with NO reserved-name protocol and NO credit-time guard
+;; --- match. Both omissions are legal for a fungible-v2 implementation to
+;; --- SHIP (the guard match is only stated in the interface docstring, and
+;; --- reserved names are a coin-v3+ convention) — and both are exactly what a
+;; --- squatter needs. coin has both, which is why coin is not exploitable.
+(begin-tx "deploy a lax fungible")
+(namespace "nft")
+(module lax-fungible GOVERNANCE
+  @doc "TEST FIXTURE — a conformant-shaped fungible-v2 that omits reserved \
+       \account-name enforcement and the credit-time guard match."
+  (defcap GOVERNANCE () (enforce-keyset "nft.admin"))
+  (implements fungible-v2)
+
+  (defschema entry balance:decimal guard:guard)
+  (deftable accounts:{entry})
+
+  (defcap DEBIT:bool (sender:string)
+    (let ((g:guard (at 'guard (read accounts sender))))
+      (enforce-guard g)))
+
+  (defcap TRANSFER:bool (sender:string receiver:string amount:decimal)
+    @managed amount TRANSFER-mgr
+    (enforce (> amount 0.0) "positive amount")
+    (enforce (!= sender receiver) "same sender and receiver")
+    (compose-capability (DEBIT sender)))
+
+  (defun TRANSFER-mgr:decimal (managed:decimal requested:decimal)
+    (let ((nb (- managed requested)))
+      (enforce (>= nb 0.0) "TRANSFER exceeded")
+      nb))
+
+  (defun precision:integer () 12)
+  (defun enforce-unit:bool (amount:decimal)
+    (enforce (= amount (floor amount 12)) "precision violation"))
+  (defun get-balance:decimal (account:string) (at 'balance (read accounts account)))
+  (defun details:object{fungible-v2.account-details} (account:string)
+    (with-read accounts account { 'balance := b, 'guard := g }
+      { 'account: account, 'balance: b, 'guard: g }))
+
+  ;; THE SQUAT PRIMITIVE: no enforce-reserved, so anyone may claim any name.
+  (defun create-account:string (account:string guard:guard)
+    (insert accounts account { 'balance: 0.0, 'guard: guard })
+    "created")
+
+  (defun rotate:string (account:string new-guard:guard)
+    (with-capability (DEBIT account)
+      (update accounts account { 'guard: new-guard }))
+    "rotated")
+
+  (defun debit:string (account:string amount:decimal)
+    (require-capability (DEBIT account))
+    (with-read accounts account { 'balance := b }
+      (enforce (>= b amount) "insufficient funds")
+      (update accounts account { 'balance: (- b amount) }))
+    "debited")
+
+  ;; THE LAX CREDIT: an existing row keeps ITS stored guard and is credited
+  ;; anyway — no (enforce (= retg guard)).
+  (defun credit:string (account:string guard:guard amount:decimal)
+    (with-default-read accounts account
+      { 'balance: -1.0, 'guard: guard } { 'balance := b, 'guard := g }
+      (write accounts account
+        { 'balance: (if (= b -1.0) amount (+ b amount)), 'guard: g }))
+    "credited")
+
+  (defun transfer:string (sender:string receiver:string amount:decimal)
+    (with-capability (TRANSFER sender receiver amount)
+      (debit sender amount)
+      (let ((g:guard (at 'guard (read accounts receiver))))
+        (credit receiver g amount)))
+    "transferred")
+
+  (defun transfer-create:string (sender:string receiver:string receiver-guard:guard amount:decimal)
+    (with-capability (TRANSFER sender receiver amount)
+      (debit sender amount)
+      (credit receiver receiver-guard amount))
+    "transferred")
+
+  (defun fund:string (account:string guard:guard amount:decimal)
+    (credit account guard amount))
+
+  (defpact transfer-crosschain:string
+    (sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (step (enforce false "no crosschain in the fixture"))
+    (step (enforce false "no crosschain in the fixture")))
+)
+(create-table nft.lax-fungible.accounts)
+(commit-tx)
+
+(begin-tx "deploy + register the conventional auction")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(namespace "nft")
+(load "../../sale/conventional-auction.pact")
+(create-table nft.conventional-auction.auctions)
+(nft.policy-manager.register-sale-contract nft.conventional-auction)
+(commit-tx)
+
+(begin-tx "fund bob + mallory in both fungibles")
+(env-data
+  { "bob":     { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyerks": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(nft.lax-fungible.fund "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(nft.lax-fungible.fund "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'buyerks) 1000.0)
+(commit-tx)
+
+;; ===========================================================================
+;; SALE 1 — offer, then withdraw. INV-1 + INV-2.
+;; ===========================================================================
+(begin-tx "alice creates + mints + OFFERS through the auction contract")
+(env-hash (hash "d3-dead"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 0, "sale-only": false }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d3a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d3a" [nft.royalty-policy] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(expect "INV-1: the sale is live right after the offer" true
+  (nft.policy-manager.sale-live (hash "d3-dead")))
+(commit-tx)
+
+(begin-tx "alice withdraws — the sale defpact TERMINATES (no auction row: consent is free)")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 10) })
+(env-data { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d3a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.WITHDRAW id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0 (hash "d3-dead")) ] } ])
+  (continue-pact 0 true (hash "d3-dead"))
+  (expect "the NFT is back with alice — the sale is over" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(expect "INV-1: the quote row SURVIVES the withdrawal (permanent by design)" 0.0
+  (nft.policy-manager.get-quote-price (hash "d3-dead")))
+(expect "INV-1: but sale-live now reports the sale as dead" false
+  (nft.policy-manager.sale-live (hash "d3-dead")))
+(commit-tx)
+
+(begin-tx "INV-2: an auction cannot be attached to the terminated sale")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 20) })
+(env-data { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d3a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (expect-failure "INV-2: create-auction on a terminated sale defpact must abort"
+    "the sale is no longer live"
+    (nft.conventional-auction.create-auction (hash "d3-dead") id 1767225700 1767226600 10.0 5.0 100)))
+(expect-failure "and no auction row was written" "No value found"
+  (nft.conventional-auction.get-auction (hash "d3-dead")))
+(rollback-tx)
+
+;; ===========================================================================
+;; SALE 2 — auction created while LIVE, ends bidless, seller withdraws.
+;; The auction row now belongs to a dead sale. INV-3.
+;; ===========================================================================
+(begin-tx "sale 2: offer + auction, created while the sale is live")
+(env-hash (hash "d3-stale"))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 100) })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 0, "sale-only": false }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d3b", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d3b" [nft.royalty-policy] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  ;; base epoch 1767225600 = 2026-01-01T00:00:00Z; start +200, end +300
+  (nft.conventional-auction.create-auction (hash "d3-stale") id 1767225800 1767225900 10.0 5.0 100))
+(commit-tx)
+
+(begin-tx "the auction ends bidless and alice withdraws — the sale dies")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 900) })
+(env-data { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d3b", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.WITHDRAW id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0 (hash "d3-stale")) ] } ])
+  (continue-pact 0 true (hash "d3-stale")))
+(expect "the sale is dead" false (nft.policy-manager.sale-live (hash "d3-stale")))
+(expect "but the auction row is still there" 10.0
+  (at 'reserve (nft.conventional-auction.get-auction (hash "d3-stale"))))
+(commit-tx)
+
+(begin-tx "INV-3: place-bid refuses on LIVENESS, not merely on the closed window")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 950) })
+(env-data { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [ (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                          (nft.conventional-auction.bid-escrow-account (hash "d3-stale")) 10.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'bob)) ] } ])
+(expect-failure "INV-3: no escrow may be taken for a sale that can no longer pay out"
+  "the sale is no longer live"
+  (nft.conventional-auction.place-bid (hash "d3-stale")
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 10.0))
+(expect "nothing was escrowed" 1000.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(rollback-tx)
+
+;; ===========================================================================
+;; SALE 3 — INV-4: a squatted BID escrow on the lax fungible.
+;; ===========================================================================
+(begin-tx "sale 3: offer priced in the lax fungible + auction")
+(env-hash (hash "d3-squat"))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1000) })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 0, "sale-only": false }
+  , "quote":
+    { "fungible": nft.lax-fungible, "price": 0.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d3c", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d3c" [nft.royalty-policy] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  ;; start +1100, end +2000
+  (nft.conventional-auction.create-auction (hash "d3-squat") id 1767226700 1767227600 10.0 5.0 100))
+(commit-tx)
+
+(begin-tx "mallory squats the bid-escrow principal under her OWN guard")
+(env-data { "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(nft.lax-fungible.create-account
+  (nft.conventional-auction.bid-escrow-account (hash "d3-squat")) (read-keyset 'mallory))
+(expect "the bid-escrow principal is now held under mallory's guard"
+  (read-keyset 'mallory)
+  (at 'guard (nft.lax-fungible.details (nft.conventional-auction.bid-escrow-account (hash "d3-squat")))))
+(commit-tx)
+
+(begin-tx "INV-4: bob's bid must NOT land in the squatted escrow")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1200) })
+(env-data { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [ (nft.lax-fungible.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                          (nft.conventional-auction.bid-escrow-account (hash "d3-squat")) 10.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'bob)) ] } ])
+(expect-failure "INV-4: a bid into a squatted bid escrow is refused"
+  "destination account is squatted"
+  (nft.conventional-auction.place-bid (hash "d3-squat")
+    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 10.0))
+(rollback-tx)
+
+;; The refusal is a POST-condition: the transfer is attempted and then the
+;; guard mismatch aborts, which on chain rolls the whole transaction back. In
+;; the REPL an `expect-failure` catches the abort WITHOUT undoing writes made
+;; earlier in the same repl transaction, so the money question has to be asked
+;; after the rollback-tx above — that is the state a chain would be left in.
+(begin-tx "INV-4: and no money moved")
+(expect "INV-4: bob still holds his funds" 1000.0
+  (nft.lax-fungible.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "INV-4: the squatted account received nothing" 0.0
+  (nft.lax-fungible.get-balance (nft.conventional-auction.bid-escrow-account (hash "d3-squat"))))
+(rollback-tx)
+
+;; ===========================================================================
+;; SALE 4 — INV-5: a squatted MANAGER sale escrow on a fixed-price sale.
+;; ===========================================================================
+(begin-tx "sale 4: a fixed-price offer priced in the lax fungible")
+(env-hash (hash "d3-squat2"))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 3000) })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 0, "sale-only": false }
+  , "quote":
+    { "fungible": nft.lax-fungible, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d3d", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d3d" [nft.royalty-policy] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+(begin-tx "mallory squats the manager's sale-escrow principal")
+(env-data { "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(nft.lax-fungible.create-account
+  (nft.policy-manager.escrow-account (hash "d3-squat2")) (read-keyset 'mallory))
+(commit-tx)
+
+(begin-tx "INV-5: the buy refuses before any money moves")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 3100) })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:7777777777777777777777777777777777777777777777777777777777777777"
+  , "buyer-guard": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:7777777777777777777777777777777777777777777777777777777777777777" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d3d", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:7777777777777777777777777777777777777777777777777777777777777777" 1.0
+                            (hash "d3-squat2"))
+                        , (nft.lax-fungible.TRANSFER "k:7777777777777777777777777777777777777777777777777777777777777777"
+                            (nft.policy-manager.escrow-account (hash "d3-squat2")) 100.0) ] } ])
+  (expect-failure "INV-5: a buy into a squatted sale escrow is refused"
+    "destination account is squatted"
+    (continue-pact 1 false (hash "d3-squat2"))))
+(rollback-tx)
+
+(begin-tx "INV-5: and no money moved")
+(expect "INV-5: the buyer still holds their funds" 1000.0
+  (nft.lax-fungible.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777"))
+(expect "INV-5: the squatted sale escrow received nothing" 0.0
+  (nft.lax-fungible.get-balance (nft.policy-manager.escrow-account (hash "d3-squat2"))))
+(rollback-tx)
+
+(print "D3 COMPLETE — dead-sale escrow + squatted escrow principals refused")

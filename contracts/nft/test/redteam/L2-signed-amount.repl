@@ -1,0 +1,59 @@
+;; L2 — SIGNED AMOUNTS INSIDE THE CAPABILITY-HOLDING FUNCTIONS.
+;;
+;; `debit`, `credit` and `update-supply` are PUBLIC defuns gated only by
+;; require-capability: anything that reaches them already holds the cap, so the
+;; cap is not the last line of defence — the argument check is. Their only
+;; amount check is enforce-unit, which compares (floor amount precision) to
+;; amount and therefore says YES to a NEGATIVE amount:
+;;     (floor -1.0 0) == -1.0
+;; so `debit` with -1000.0 ADDS 1000 to a balance (money from nothing) and
+;; `credit` with -1.0 SUBTRACTS from one (a balance below zero), while
+;; `update-supply` will write a negative supply.
+;;
+;; The caps here are granted with test-capability through the ledger's OWN
+;; compositions (MINT composes CREDIT + UPDATE_SUPPLY, BURN composes DEBIT +
+;; UPDATE_SUPPLY): this is a unit-level proof of the precondition each of these
+;; three functions must re-assert for itself.
+
+(load "_bootstrap.repl")
+
+(begin-tx "a real token with a real balance")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l2", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://l2" [] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "L2: negative amounts are refused where the write happens")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l2", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+
+  ;; --- debit: a negative amount must not create balance out of nothing ------
+  (test-capability (nft.ledger.BURN id acct 1.0))
+  (expect-failure "L2-A debit refuses a negative amount" "positive amount"
+    (nft.ledger.debit id acct -1000.0))
+  (expect "L2-A2 the balance did not grow" 1.0 (nft.ledger.get-balance id acct))
+
+  ;; --- update-supply: the supply must never be written negative -------------
+  (expect-failure "L2-B the supply cannot be written negative" "supply cannot go negative"
+    (nft.ledger.update-supply id -999.0))
+  (expect "L2-B2 the supply is intact" 1.0 (nft.ledger.total-supply id))
+
+  ;; --- credit: a negative amount must not push a balance below zero ---------
+  (test-capability (nft.ledger.MINT id acct 1.0))
+  (expect-failure "L2-C credit refuses a negative amount" "positive amount"
+    (nft.ledger.credit id acct (read-keyset 'alice) -1.0))
+  (expect "L2-C2 the balance is intact" 1.0 (nft.ledger.get-balance id acct)))
+(rollback-tx)
+
+(print "L2 COMPLETE")

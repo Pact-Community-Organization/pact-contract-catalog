@@ -1,0 +1,373 @@
+;; D4 — THE DESTINATION CHECK ITSELF: does it cover every path, and does it
+;; fail CLOSED?
+;;
+;; D3 proves the two ESCROW principals cannot be squatted. This file covers the
+;; two ways that protection was still incomplete:
+;;
+;;   D4-A  THE PATH. Escrows are not the only publicly computable destination.
+;;         policy-manager.pay-from-escrow transfer-creates EVERY payout leg —
+;;         seller proceeds, marketplace fee, and every policy cut. A royalty
+;;         creator's k: account is derived from their public key. Squatting it
+;;         on a non-conforming fungible is THEFT with a cleanly settling sale,
+;;         and the victim (the creator) is not a party to the transaction.
+;;
+;;   D4-B  THE SHAPE. A destination check written as a `try`-defaulted probe
+;;         BEFORE the transfer is fail-open: `try` yields its catch expression
+;;         on any execution error, and the catch expression is the guard the
+;;         check then compares against. So a fungible whose `details` merely
+;;         throws passes — which is exactly the fungible this check exists for.
+;;
+;; Both are fixed in one place: enforce-account-custody, read AFTER the
+;; transfer (so no `try` is needed at all) and called from the single shared
+;; payout path rather than from each caller.
+
+(load "_bootstrap.repl")
+
+(begin-tx "deploy a lax fungible")
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(namespace "nft")
+(module lax-fungible GOVERNANCE
+  @doc "TEST FIXTURE — a conformant-shaped fungible-v2 that omits reserved \
+       \account-name enforcement and the credit-time guard match."
+  (defcap GOVERNANCE () (enforce-keyset "nft.admin"))
+  (implements fungible-v2)
+
+  (defschema entry balance:decimal guard:guard)
+  (deftable accounts:{entry})
+
+  (defcap DEBIT:bool (sender:string)
+    (let ((g:guard (at 'guard (read accounts sender))))
+      (enforce-guard g)))
+
+  (defcap TRANSFER:bool (sender:string receiver:string amount:decimal)
+    @managed amount TRANSFER-mgr
+    (enforce (> amount 0.0) "positive amount")
+    (enforce (!= sender receiver) "same sender and receiver")
+    (compose-capability (DEBIT sender)))
+
+  (defun TRANSFER-mgr:decimal (managed:decimal requested:decimal)
+    (let ((nb (- managed requested)))
+      (enforce (>= nb 0.0) "TRANSFER exceeded")
+      nb))
+
+  (defun precision:integer () 12)
+  (defun enforce-unit:bool (amount:decimal)
+    (enforce (= amount (floor amount 12)) "precision violation"))
+  (defun get-balance:decimal (account:string) (at 'balance (read accounts account)))
+  (defun details:object{fungible-v2.account-details} (account:string)
+    (with-read accounts account { 'balance := b, 'guard := g }
+      { 'account: account, 'balance: b, 'guard: g }))
+
+  ;; THE SQUAT PRIMITIVE: no enforce-reserved, so anyone may claim any name.
+  (defun create-account:string (account:string guard:guard)
+    (insert accounts account { 'balance: 0.0, 'guard: guard })
+    "created")
+
+  (defun rotate:string (account:string new-guard:guard)
+    (with-capability (DEBIT account)
+      (update accounts account { 'guard: new-guard }))
+    "rotated")
+
+  (defun debit:string (account:string amount:decimal)
+    (require-capability (DEBIT account))
+    (with-read accounts account { 'balance := b }
+      (enforce (>= b amount) "insufficient funds")
+      (update accounts account { 'balance: (- b amount) }))
+    "debited")
+
+  ;; THE LAX CREDIT: an existing row keeps ITS stored guard and is credited
+  ;; anyway — no (enforce (= retg guard)).
+  (defun credit:string (account:string guard:guard amount:decimal)
+    (with-default-read accounts account
+      { 'balance: -1.0, 'guard: guard } { 'balance := b, 'guard := g }
+      (write accounts account
+        { 'balance: (if (= b -1.0) amount (+ b amount)), 'guard: g }))
+    "credited")
+
+  (defun transfer:string (sender:string receiver:string amount:decimal)
+    (with-capability (TRANSFER sender receiver amount)
+      (debit sender amount)
+      (let ((g:guard (at 'guard (read accounts receiver))))
+        (credit receiver g amount)))
+    "transferred")
+
+  (defun transfer-create:string (sender:string receiver:string receiver-guard:guard amount:decimal)
+    (with-capability (TRANSFER sender receiver amount)
+      (debit sender amount)
+      (credit receiver receiver-guard amount))
+    "transferred")
+
+  (defun fund:string (account:string guard:guard amount:decimal)
+    (credit account guard amount))
+
+  (defpact transfer-crosschain:string
+    (sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (step (enforce false "no crosschain in the fixture"))
+    (step (enforce false "no crosschain in the fixture")))
+)
+(create-table nft.lax-fungible.accounts)
+(commit-tx)
+
+(begin-tx "deploy a fungible whose details THROWS")
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(namespace "nft")
+(module throwy-fungible GOVERNANCE
+  @doc "TEST FIXTURE — a conformant-shaped fungible-v2 that omits reserved \
+       \account-name enforcement and the credit-time guard match."
+  (defcap GOVERNANCE () (enforce-keyset "nft.admin"))
+  (implements fungible-v2)
+
+  (defschema entry balance:decimal guard:guard)
+  (deftable accounts:{entry})
+
+  (defcap DEBIT:bool (sender:string)
+    (let ((g:guard (at 'guard (read accounts sender))))
+      (enforce-guard g)))
+
+  (defcap TRANSFER:bool (sender:string receiver:string amount:decimal)
+    @managed amount TRANSFER-mgr
+    (enforce (> amount 0.0) "positive amount")
+    (enforce (!= sender receiver) "same sender and receiver")
+    (compose-capability (DEBIT sender)))
+
+  (defun TRANSFER-mgr:decimal (managed:decimal requested:decimal)
+    (let ((nb (- managed requested)))
+      (enforce (>= nb 0.0) "TRANSFER exceeded")
+      nb))
+
+  (defun precision:integer () 12)
+  (defun enforce-unit:bool (amount:decimal)
+    (enforce (= amount (floor amount 12)) "precision violation"))
+  (defun get-balance:decimal (account:string) (at 'balance (read accounts account)))
+  ;; THE X3 TRIGGER: a `details` that refuses to answer for a non-k: account.
+  ;; fungible-v2 mandates nothing here, so this ships. A pre-transfer probe of
+  ;; the form (try expected (at 'guard (details acct))) yields `expected` on
+  ;; this throw and the guard check then passes on itself.
+  (defun details:object{fungible-v2.account-details} (account:string)
+    (enforce (= "k:" (take 2 account)) "details: only k: accounts are introspectable")
+    (with-read accounts account { 'balance := b, 'guard := g }
+      { 'account: account, 'balance: b, 'guard: g }))
+
+  ;; THE SQUAT PRIMITIVE: no enforce-reserved, so anyone may claim any name.
+  (defun create-account:string (account:string guard:guard)
+    (insert accounts account { 'balance: 0.0, 'guard: guard })
+    "created")
+
+  (defun rotate:string (account:string new-guard:guard)
+    (with-capability (DEBIT account)
+      (update accounts account { 'guard: new-guard }))
+    "rotated")
+
+  (defun debit:string (account:string amount:decimal)
+    (require-capability (DEBIT account))
+    (with-read accounts account { 'balance := b }
+      (enforce (>= b amount) "insufficient funds")
+      (update accounts account { 'balance: (- b amount) }))
+    "debited")
+
+  ;; THE LAX CREDIT: an existing row keeps ITS stored guard and is credited
+  ;; anyway — no (enforce (= retg guard)).
+  (defun credit:string (account:string guard:guard amount:decimal)
+    (with-default-read accounts account
+      { 'balance: -1.0, 'guard: guard } { 'balance := b, 'guard := g }
+      (write accounts account
+        { 'balance: (if (= b -1.0) amount (+ b amount)), 'guard: g }))
+    "credited")
+
+  (defun transfer:string (sender:string receiver:string amount:decimal)
+    (with-capability (TRANSFER sender receiver amount)
+      (debit sender amount)
+      (let ((g:guard (at 'guard (read accounts receiver))))
+        (credit receiver g amount)))
+    "transferred")
+
+  (defun transfer-create:string (sender:string receiver:string receiver-guard:guard amount:decimal)
+    (with-capability (TRANSFER sender receiver amount)
+      (debit sender amount)
+      (credit receiver receiver-guard amount))
+    "transferred")
+
+  (defun fund:string (account:string guard:guard amount:decimal)
+    (credit account guard amount))
+
+  (defpact transfer-crosschain:string
+    (sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (step (enforce false "no crosschain in the fixture"))
+    (step (enforce false "no crosschain in the fixture")))
+)
+(create-table nft.throwy-fungible.accounts)
+(commit-tx)
+
+
+(begin-tx "deploy + register the conventional auction")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(namespace "nft")
+(load "../../sale/conventional-auction.pact")
+(create-table nft.conventional-auction.auctions)
+(nft.policy-manager.register-sale-contract nft.conventional-auction)
+(commit-tx)
+
+(begin-tx "fund the players in both lax fungibles")
+(env-data
+  { "bob":     { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyerks": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(nft.lax-fungible.fund    "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(nft.lax-fungible.fund    "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'buyerks) 1000.0)
+(nft.throwy-fungible.fund "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+;; ===========================================================================
+;; D4-A — THE PAYOUT PATH. pay-from-escrow transfer-creates EVERY destination:
+;; the seller's proceeds, the marketplace fee, and every policy cut. A royalty
+;; creator's k: account is their public key, so it is as publicly computable as
+;; any escrow principal — and the creator is NOT a party to the sale, so the
+;; loss lands on someone who did not act. The sale must refuse.
+;; ===========================================================================
+(begin-tx "D4-A: alice mints a 5% royalty token and offers it in the lax fungible")
+(env-hash (hash "d4-royalty"))
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:5555555555555555555555555555555555555555555555555555555555555555"
+    , "creator-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+    , "bps": 500, "sale-only": false }
+  , "quote":
+    { "fungible": nft.lax-fungible, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d4a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d4a" [nft.royalty-policy] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+(begin-tx "mallory squats the CREATOR's royalty account — not an escrow at all")
+(env-data { "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(nft.lax-fungible.create-account
+  "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset 'mallory))
+(expect "D4-A0 the creator's own account name is now held under mallory's guard"
+  (read-keyset 'mallory)
+  (at 'guard (nft.lax-fungible.details "k:5555555555555555555555555555555555555555555555555555555555555555")))
+(commit-tx)
+
+(begin-tx "D4-A: the settlement must refuse rather than pay the squatter")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 100) })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:7777777777777777777777777777777777777777777777777777777777777777"
+  , "buyer-guard": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:7777777777777777777777777777777777777777777777777777777777777777" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d4a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:7777777777777777777777777777777777777777777777777777777777777777" 1.0
+                            (hash "d4-royalty"))
+                        , (nft.lax-fungible.TRANSFER "k:7777777777777777777777777777777777777777777777777777777777777777"
+                            (nft.policy-manager.escrow-account (hash "d4-royalty")) 100.0) ] } ])
+  (expect-failure "D4-A: a royalty leg landing under a stranger's guard aborts the sale"
+    "destination account is squatted"
+    (continue-pact 1 false (hash "d4-royalty"))))
+(rollback-tx)
+
+(begin-tx "D4-A: and the squatter was paid nothing")
+(expect "D4-A2 mallory did not receive the royalty" 0.0
+  (nft.lax-fungible.get-balance "k:5555555555555555555555555555555555555555555555555555555555555555"))
+(expect "D4-A3 the buyer still holds their funds" 1000.0
+  (nft.lax-fungible.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777"))
+(rollback-tx)
+
+;; ===========================================================================
+;; D4-B — THE FAIL-OPEN SHAPE. A destination check written as
+;;   (let ((actual (try expected (at 'guard (details acct))))) (enforce (= actual expected)))
+;; passes whenever `details` throws for ANY reason, because `try` yields its
+;; catch expression on any execution error (Evaluator.hs, CTry -> CEKHandler)
+;; and that catch expression IS the value being compared against. A fungible
+;; that merely refuses to introspect non-k: accounts therefore walks straight
+;; through it — and "the fungible does not conform" is this check's ENTIRE
+;; threat model. Reading AFTER the transfer needs no `try` and fails closed.
+;; ===========================================================================
+(begin-tx "D4-B: the fail-open premise, measured")
+(env-data { "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(expect-failure "D4-B0 this fungible's details THROWS on a c: escrow name"
+  "only k: accounts are introspectable"
+  (nft.throwy-fungible.details (nft.policy-manager.escrow-account (hash "d4-throwy"))))
+(let* ((expected:guard (nft.policy-manager.escrow-guard (hash "d4-throwy")))
+       (actual:guard (try expected (at 'guard (nft.throwy-fungible.details
+                                                (nft.policy-manager.escrow-account (hash "d4-throwy")))))))
+  (expect "D4-B1 a `try`-defaulted probe returns the very guard it would compare against" true
+    (= actual expected)))
+(commit-tx)
+
+(begin-tx "D4-B: alice offers, priced in the throwing fungible")
+(env-hash (hash "d4-throwy"))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 200) })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "bps": 0, "sale-only": false }
+  , "quote":
+    { "fungible": nft.throwy-fungible, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(namespace "nft")
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d4b", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d4b" [nft.royalty-policy] (read-keyset 'sg))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+(begin-tx "mallory squats the sale escrow on the throwing fungible")
+(env-data { "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(nft.throwy-fungible.create-account
+  (nft.policy-manager.escrow-account (hash "d4-throwy")) (read-keyset 'mallory))
+(commit-tx)
+
+(begin-tx "D4-B: the buy must still refuse, even though details cannot be probed")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 300) })
+(env-data
+  { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://d4b", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "d4-throwy"))
+                        , (nft.throwy-fungible.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "d4-throwy")) 100.0) ] } ])
+  ;; a pre-transfer `try` probe would have PASSED this. The post-transfer read
+  ;; has no `try`, so the throw itself aborts the settlement — fail closed.
+  (expect-failure "D4-B: a fungible that will not answer cannot buy its way past the check"
+    "only k: accounts are introspectable"
+    (continue-pact 1 false (hash "d4-throwy"))))
+(rollback-tx)
+
+(begin-tx "D4-B: and nothing was taken")
+(expect "D4-B2 the buyer still holds their funds" 1000.0
+  (nft.throwy-fungible.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "D4-B3 the squatted escrow received nothing" 0.0
+  (nft.throwy-fungible.get-balance (nft.policy-manager.escrow-account (hash "d4-throwy"))))
+(rollback-tx)
+
+(print "D4 COMPLETE — payout-leg squat refused; the destination check fails CLOSED")

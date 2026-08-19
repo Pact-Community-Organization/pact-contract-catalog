@@ -1,0 +1,104 @@
+;; L3 — A RELOCATION TARGET MUST BE A REAL CHAIN.
+;;
+;; transfer-crosschain step 0 debits the sender, decrements the supply and
+;; yields to TARGET-CHAIN. If TARGET-CHAIN is not a Chainweb chain id, the
+;; yield is addressed to a chain that will never resume it: the NFT is gone,
+;; and no later transaction can bring it back (there is no rollback on step 0
+;; and there must never be an undo). coin-v6 refuses exactly this input
+;; (registry/core/coin/coin-v6.pact:163 VALID_CHAIN_IDS, :566 the enforce) —
+;; the ledger must follow the same house rule.
+
+(load "_bootstrap.repl")
+
+(begin-tx "alice mints a 1/1")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l3", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://l3" [] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "L3-A: chain 20 does not exist")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L3-a"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l3", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  ;; "20" is the first index past the last Chainweb chain (0..19)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id acct acct "20" 1.0) ] } ])
+  (expect-failure "L3-A chain 20 does not exist" "target chain is not a valid chainweb chain id"
+    (nft.ledger.transfer-crosschain id acct acct (read-keyset 'alice) "20" 1.0))
+  (expect "L3-A2 the NFT never left this chain" 1.0 (nft.ledger.get-balance id acct))
+  (expect "L3-A3 the supply is intact" 1.0 (nft.ledger.total-supply id)))
+(rollback-tx)
+
+(begin-tx "L3-B: chain 99 does not exist")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L3-b"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l3", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id acct acct "99" 1.0) ] } ])
+  (expect-failure "L3-B chain 99 does not exist" "target chain is not a valid chainweb chain id"
+    (nft.ledger.transfer-crosschain id acct acct (read-keyset 'alice) "99" 1.0))
+  (expect "L3-B2 the NFT never left this chain" 1.0 (nft.ledger.get-balance id acct)))
+(rollback-tx)
+
+(begin-tx "L3-C: a non-canonical chain id is not a chain")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L3-c"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l3", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id acct acct "01" 1.0) ] } ])
+  (expect-failure "L3-C a non-canonical chain id (\"01\") is not a chain"
+    "target chain is not a valid chainweb chain id"
+    (nft.ledger.transfer-crosschain id acct acct (read-keyset 'alice) "01" 1.0))
+  (expect "L3-C2 the NFT never left this chain" 1.0 (nft.ledger.get-balance id acct)))
+(rollback-tx)
+
+(begin-tx "L3-D: a network name is not a chain id")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L3-d"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l3", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id acct acct "mainnet01" 1.0) ] } ])
+  (expect-failure "L3-D a network name is not a chain id"
+    "target chain is not a valid chainweb chain id"
+    (nft.ledger.transfer-crosschain id acct acct (read-keyset 'alice) "mainnet01" 1.0))
+  (expect "L3-D2 the NFT never left this chain" 1.0 (nft.ledger.get-balance id acct))
+  (expect "L3-D3 the supply is intact" 1.0 (nft.ledger.total-supply id)))
+(rollback-tx)
+
+(begin-tx "L3: a real chain id still works")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L3-ok"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l3", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id acct acct "19" 1.0) ] } ])
+  (expect "L3-G chain 19 is a real chain and the relocation proceeds" true
+    (nft.ledger.transfer-crosschain id acct acct (read-keyset 'alice) "19" 1.0)))
+(rollback-tx)
+
+(print "L3 COMPLETE")

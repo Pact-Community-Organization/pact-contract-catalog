@@ -330,6 +330,27 @@
     (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
 (commit-tx)
 
+(begin-tx "a dutch auction cannot be attached to a sale that has already ended")
+;; A quote row is permanent by design, so its existence says nothing about
+;; whether the ledger's sale defpact still runs — and Pact exposes no builtin
+;; that reads defpact completion. "da-3" was just withdrawn above, so its sale
+;; is over; attaching a listing to it would produce something that can never
+;; settle. The manager records liveness on the quote row because it is the only
+;; party on the path of BOTH terminal transitions; this contract gates on it.
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 1850) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect "the withdrawn sale reports itself dead" false
+  (nft.policy-manager.sale-live (hash "da-3")))
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (expect-failure "create-auction on a terminated sale defpact must abort"
+    "the sale is no longer live"
+    (nft.dutch-auction.create-auction (hash "da-3") id 1767229000 1767229500 100.0 40.0 100)))
+(rollback-tx)
+
 ;; --- the settlement hooks are manager-gated ------------------------------------
 (begin-tx "direct hook calls are rejected")
 (env-data { "x": 1 })
@@ -345,4 +366,5 @@
 (print "  purchase only at the current curve price (stale/low candidates reject);")
 (print "  royalty 9.4 + fee 2.35 + proceeds 82.25 = accepted price 94 (12 dp);")
 (print "  withdrawal free before start / refused live / free after unsold end;")
+(print "  no listing can be attached to a sale whose defpact already ended;")
 (print "  hooks unreachable outside the manager path.")

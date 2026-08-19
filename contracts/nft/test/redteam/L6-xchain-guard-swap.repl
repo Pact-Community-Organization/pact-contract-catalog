@@ -1,0 +1,117 @@
+;; L6 — A RELOCATION MUST NOT CHANGE THE OWNER (finding F8).
+;;
+;; royalty-policy's sale-only rule and guard-policy's transfer-guard parity
+;; both read `(= sender receiver)` as "no ownership change, nothing to gate".
+;; That reading is only true if an account NAME determines its GUARD. It did
+;; not: the receiver-guard on a relocation was free-form, so
+;;
+;;     mint into a plain-named account -> relocate that NAME to ITSELF under
+;;     SOMEBODY ELSE'S guard
+;;
+;; handed a sale-only NFT to a new owner for free, past the very policy that
+;; exists to stop it. Same for a transfer-guarded token.
+;;
+;; The fix is one refusal in the ledger's shared path — a ledger account name
+;; must be the principal of its own guard — so "the same name" IS "the same
+;; owner" and every policy that says so is telling the truth. This file walks
+;; the whole route and asserts it has no step left.
+
+(load "_bootstrap.repl")
+
+(begin-tx "alice mints a SALE-ONLY 1/1 into her principal account")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                    , "bps": 500, "sale-only": true } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://l6" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0))
+(commit-tx)
+
+;; ===========================================================================
+;; L6-A — the route's first step: a holding account whose name owns nothing
+;; ===========================================================================
+(begin-tx "L6-A: the ledger will not issue supply into an unowned name")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (expect-failure "L6-A a mint cannot create a squattable holding account"
+    "account name must be the principal of its own guard"
+    (nft.ledger.mint id "alice-vault" (read-keyset 'alice) 1.0))
+  (expect "L6-A2 no supply was issued into an unowned name" 1.0 (nft.ledger.total-supply id)))
+;; committed on purpose: on an unfixed ledger this leaves the squattable
+;; holding account in place, so L6-B below exercises the REAL route
+(commit-tx)
+
+;; ===========================================================================
+;; L6-B — and the relocation itself refuses the same name
+;; ===========================================================================
+(begin-tx "L6-B: relocating a name to ITSELF under a different guard")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L6-b"))
+(env-data
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id "alice-vault" "alice-vault" "1" 1.0) ] } ])
+  ;; sale-only sees sender == receiver and waves it through; the ledger must not
+  (expect-failure "L6-B a relocation cannot re-guard an account name"
+    "account name must be the principal of its own guard"
+    (nft.ledger.transfer-crosschain id "alice-vault" "alice-vault" (read-keyset 'mallory) "1" 1.0))
+  (expect "L6-B3 the sale-only NFT never moved" 1.0
+    (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(rollback-tx)
+
+(begin-tx "L6-B2: the same attempt on a PRINCIPAL name")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L6-b2"))
+(env-data
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  ;; a principal name pins its guard, so the same trick has never worked here —
+  ;; this assertion locks that in
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id acct acct "1" 1.0) ] } ])
+  (expect-failure "L6-B2 a principal receiver cannot arrive under a foreign guard"
+    "single-key account protocol violation"
+    (nft.ledger.transfer-crosschain id acct acct (read-keyset 'mallory) "1" 1.0))
+  (expect "L6-B4 the sale-only NFT never moved" 1.0 (nft.ledger.get-balance id acct)))
+(rollback-tx)
+
+;; ===========================================================================
+;; L6-C — the honest self-relocation still works, and lands under the SAME
+;; guard it left under: "same name" now means "same owner"
+;; ===========================================================================
+(begin-tx "L6-C: a sale-only self-relocation keeps its owner")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L6-c"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id acct acct "1" 1.0) ] } ])
+  (expect "L6-C the owner relocates a sale-only token to herself" true
+    (nft.ledger.transfer-crosschain id acct acct (read-keyset 'alice) "1" 1.0))
+  (env-chain-data { "chain-id": "1" })
+  (continue-pact 1 false (hash "L6-c"))
+  (expect "L6-C2 it arrived" 1.0 (nft.ledger.get-balance id acct))
+  (expect "L6-C3 under the SAME guard it left under" (read-keyset 'alice)
+    (at 'guard (nft.ledger.details id acct))))
+(rollback-tx)
+
+(print "L6 COMPLETE")

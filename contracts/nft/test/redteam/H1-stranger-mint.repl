@@ -219,14 +219,14 @@
 (env-data
   { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
 (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
-(nft.collection-policy.create-collection "gallery-drop" "Gallery Drop" 0 (read-keyset 'carol))
+(nft.collection-policy.create-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) "Gallery Drop" 0 (read-keyset 'carol))
 (commit-tx)
 
 (begin-tx "ANA's token joins the collection (operator co-signs admission)")
 (env-data
   { "ana":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
-  , "collection_id": "gallery-drop" })
+  , "collection_id": (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
           , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id

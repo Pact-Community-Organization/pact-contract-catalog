@@ -26,6 +26,29 @@
 ;; refunds the winner's escrowed bid first, so no path strands funds. The
 ;; grace window is auction state every bidder can read before bidding.
 ;;
+;; THE BIDDER'S OWN EXIT (reclaim-bid): the withdrawal refund above needs the
+;; SELLER to act, and an offer made with timeout 0 can only be withdrawn by the
+;; seller — so a seller who simply walks away would otherwise freeze the
+;; winner's escrow forever. reclaim-bid is the bidder-walkable exit: past
+;; end+settlement-grace — the same instant the seller's refunding withdrawal
+;; opens — the recorded bidder, signing with the guard they already bound to
+;; their bid, takes their own escrow back and the bid is struck from the
+;; auction (settlement then refuses, and withdrawal becomes the bidless case).
+;; It is not a reversal and grants no new power to anyone: the only account it
+;; can pay is the bidder's own recorded refund target.
+;; The deadline it keys on cannot be moved by the seller: update-auction is
+;; refused once the stored start is in the past, and no bid can exist before
+;; start — so from the first instant a bid is possible, `end` and
+;; `settlement-grace` are frozen. settlement-grace is additionally capped at
+;; MAX-SETTLEMENT-GRACE so the seller cannot post a deadline beyond reach.
+;;
+;; A sale contract cannot ask the engine whether its sale defpact is still
+;; alive (there is no such builtin), and a quote row outlives its sale — so
+;; create-auction and place-bid gate on policy-manager.enforce-sale-live.
+;; Without that gate an auction can be attached to an already-terminated sale
+;; and every bid escrowed into it is permanently unrecoverable: no
+;; continuation exists to settle it or to refund it.
+;;
 ;; The settlement hooks are unreachable outside the manager's path (they
 ;; require the manager's QUOTE-CALL / WITHDRAWAL-CALL capabilities).
 
@@ -49,6 +72,13 @@
   (defconst SELF-NAME:string (format "{}.conventional-auction" [(read-string 'ns)])
     @doc "This contract's fully-qualified name, captured at deploy — the name \
          \a quote must carry to route its sale here.")
+
+  (defconst MAX-SETTLEMENT-GRACE:integer 604800
+    @doc "Upper bound (7 days) on the winner's exclusive settlement window. \
+         \The grace window is the one interval in which a bidder's escrow is \
+         \locked with no exit of their own; capping it bounds how long a \
+         \seller can hold a winner's funds after the auction ends. Long \
+         \enough for anyone to land one continuation transaction.")
 
   (defschema auction
     @doc "One auction per sale-id. Times are unix seconds. highest-bid 0 = \
@@ -82,6 +112,11 @@
 
   (defcap PLACE-BID:bool (bidder-guard:guard)
     @doc "The bidder proves control of the guard their refund goes back to."
+    (enforce-guard bidder-guard))
+
+  (defcap RECLAIM-BID:bool (bidder-guard:guard)
+    @doc "The bidder proves control of the guard their escrowed bid returns \
+         \to — the same guard they bound when they placed it."
     (enforce-guard bidder-guard))
 
   (defcap REFUND:bool (sale-id:string)
@@ -118,13 +153,18 @@
     (enforce (> end start) "end must be after start")
     (enforce (> reserve 0.0) "reserve must be positive")
     (enforce (> increment 0.0) "increment must be positive")
-    (enforce (>= settlement-grace 0) "settlement grace must be >= 0"))
+    (enforce (>= settlement-grace 0) "settlement grace must be >= 0")
+    (enforce (<= settlement-grace MAX-SETTLEMENT-GRACE)
+      "settlement grace exceeds the maximum"))
 
   (defun create-auction:bool
     ( sale-id:string token-id:string start:integer end:integer
       reserve:decimal increment:decimal settlement-grace:integer )
     @doc "Attach an auction to an offered sale. Seller-only; the sale's quote \
-         \must name THIS contract and carry the 0 discovery price."
+         \must name THIS contract and carry the 0 discovery price, and that \
+         \sale must still be LIVE — a quote row outlives its sale, and an \
+         \auction on a terminated sale can never settle or refund."
+    (policy-manager.enforce-sale-live sale-id)
     (with-capability (MANAGE-AUCTION sale-id)
       (validate-schedule start end reserve increment settlement-grace)
       (let ((q (policy-manager.get-quote sale-id)))
@@ -162,7 +202,9 @@
     @doc "Escrow BID for SALE-ID. Must be inside the window, at least the \
          \reserve, and at least increment above the previous bid; the previous \
          \bidder is refunded in full first. Principal bidders only (the \
-         \refund target must be un-squattable)."
+         \refund target must be un-squattable). Refused once the sale itself \
+         \is dead: escrow taken after that has no settlement and no refund."
+    (policy-manager.enforce-sale-live sale-id)
     (with-read auctions sale-id
       { 'start := start, 'end := end, 'reserve := reserve
       , 'increment := increment, 'highest-bid := prev-bid, 'bidder := prev-bidder }
@@ -184,6 +226,15 @@
             true)
           ;; escrow the new bid with this module's per-sale guard
           (fungible::transfer-create bidder (bid-escrow-account sale-id) (bid-escrow-guard sale-id) bid)
+          ;; ...and prove it landed under OUR guard. The bid escrow's principal
+          ;; is publicly computable from the offer, so on a fungible that does
+          ;; not enforce reserved account-name protocols a stranger can hold
+          ;; that name before the first bid arrives and sweep what lands there.
+          ;; This escrow holds a third party's money ACROSS transactions, so a
+          ;; squat here is theft, not merely a brick. Checked AFTER the transfer
+          ;; so the check is fail-closed — see enforce-account-custody.
+          (policy-manager.enforce-account-custody fungible
+            (bid-escrow-account sale-id) (bid-escrow-guard sale-id))
           (update auctions sale-id
             { 'highest-bid: bid, 'bidder: bidder, 'bidder-guard: bidder-guard })
           (emit-event (BID sale-id bidder bid)))))
@@ -201,6 +252,39 @@
             (fungible::transfer escrow to bal)
             (emit-event (BID-REFUNDED sale-id to bal)))
           true)))
+    true)
+
+  (defun reclaim-bid:bool (sale-id:string)
+    @doc "The BIDDER's own exit. Past end+settlement-grace — the same instant \
+         \the seller's refunding withdrawal opens — the recorded bidder takes \
+         \their escrowed bid back with the guard they already hold, without \
+         \the seller and without any privileged party. The bid is struck from \
+         \the auction before the money moves, so settlement afterwards refuses \
+         \(no bids) and withdrawal falls to the bidless case. Not a reversal: \
+         \the only account it can pay is the bidder's own recorded target, and \
+         \a settled sale left nothing in the escrow to take. \
+         \IT IS NOT POWER-NEUTRAL, AND THE ASYMMETRY IS DELIBERATE: past \
+         \end+settlement-grace the bidder can void a won auction that nobody \
+         \settled, which before was the seller's decision alone. That is the \
+         \point — the alternative is the seller freezing the winner's money by \
+         \doing nothing. The window is the seller's to use: anyone may settle \
+         \for the whole of it, and it is capped at MAX-SETTLEMENT-GRACE, so a \
+         \seller can buy at most that much settlement certainty. After it, \
+         \reclaim and settlement race, and whichever transaction mines first \
+         \wins."
+    (with-read auctions sale-id
+      { 'end := end, 'settlement-grace := grace
+      , 'highest-bid := bid, 'bidder := bidder, 'bidder-guard := bidder-guard }
+      (enforce (> bid 0.0) "no escrowed bid to reclaim")
+      (enforce (> (curr-time) (+ end grace))
+        "the winner's settlement grace window is still open")
+      (let* ((q (policy-manager.get-quote sale-id))
+             (fungible:module{fungible-v2} (at 'fungible q)))
+        (with-capability (RECLAIM-BID bidder-guard)
+          (update auctions sale-id
+            { 'highest-bid: 0.0, 'bidder: "", 'bidder-guard: (bid-escrow-guard sale-id) })
+          (with-capability (REFUND sale-id)
+            (refund-escrow sale-id fungible bidder)))))
     true)
 
   ;; --- sale interface (manager-gated settlement hooks) --------------------------

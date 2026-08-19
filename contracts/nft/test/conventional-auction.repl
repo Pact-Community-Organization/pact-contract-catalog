@@ -13,6 +13,10 @@
 ;;   * withdrawal per sale-contract rules: refused while live, free when the
 ;;     auction ends bidless, and after the winner's grace window it refunds
 ;;     the escrowed bid — no path strands funds;
+;;   * the BIDDER has an exit of their own: past end+settlement-grace the
+;;     recorded bidder reclaims their escrow with the guard they already hold,
+;;     without the seller and without any privileged party — and the deadline
+;;     they rely on is one the seller cannot move;
 ;;   * settlement hooks are unreachable outside the manager's path.
 ;;
 ;; Run: pact contracts/nft/test/conventional-auction.repl
@@ -525,6 +529,150 @@
   (coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "ca-3"))))
 (commit-tx)
 
+;; ===========================================================================
+;; AUCTION D — the BIDDER'S OWN EXIT. The seller offered with timeout 0, so
+;; only she can trigger the withdraw rollback; she simply walks away. Without
+;; a bidder-reachable path bob's escrow would be frozen forever.
+;; Timeline (seconds after 2026-01-01T00:00:00Z): offer @2100, start 2200,
+;; end 2300, grace 100 -> the reclaim deadline is 2400.
+;; ===========================================================================
+(begin-tx "auction D: carol offers again; the settlement grace is CAPPED")
+(env-hash (hash "ca-4"))
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 2100) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:5555555555555555555555555555555555555555555555555555555555555555"
+    , "seller-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+              , "caps": [ (nft.ledger.OFFER id "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0 0)
+  (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+  ;; a grace window the bidder could never outlast is refused outright
+  (expect-failure "a settlement grace beyond the cap is refused"
+    "settlement grace exceeds the maximum"
+    (nft.conventional-auction.create-auction (hash "ca-4") id 1767227800 1767227900 10.0 5.0
+      (+ nft.conventional-auction.MAX-SETTLEMENT-GRACE 1)))
+  (expect "the cap itself is accepted" true
+    (nft.conventional-auction.create-auction (hash "ca-4") id 1767227800 1767227900 10.0 5.0
+      nft.conventional-auction.MAX-SETTLEMENT-GRACE))
+  ;; ...and reprice it to the real 100s grace before the auction starts
+  (nft.conventional-auction.update-auction (hash "ca-4") 1767227800 1767227900 10.0 5.0 100)
+  (expect "the grace window bob will rely on" 100
+    (at 'settlement-grace (nft.conventional-auction.get-auction (hash "ca-4")))))
+(commit-tx)
+
+(begin-tx "bob bids on auction D")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 2250) })
+(env-data { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [ (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                          (nft.conventional-auction.bid-escrow-account (hash "ca-4")) 10.0)
+                      , (nft.conventional-auction.PLACE-BID (read-keyset 'bob)) ] } ])
+(nft.conventional-auction.place-bid (hash "ca-4")
+  "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 10.0)
+(expect "bob's bid is escrowed on D" 10.0
+  (coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "ca-4"))))
+(commit-tx)
+
+(begin-tx "THE DEADLINE IS NOT THE SELLER'S TO MOVE once bidding is possible")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 2260) })
+(env-data { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(expect-failure "the seller cannot push out end or settlement-grace after the start"
+  "auction already started"
+  (nft.conventional-auction.update-auction (hash "ca-4") 1767999000 1767999999 10.0 5.0 604800))
+(expect "end is unchanged" 1767227900
+  (at 'end (nft.conventional-auction.get-auction (hash "ca-4"))))
+(expect "settlement-grace is unchanged" 100
+  (at 'settlement-grace (nft.conventional-auction.get-auction (hash "ca-4"))))
+(rollback-tx)
+
+(begin-tx "inside the grace window the winner may not reclaim")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 2350) })
+(env-data { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(expect-failure "the settlement window belongs to the sale until end+grace"
+  "grace window is still open"
+  (nft.conventional-auction.reclaim-bid (hash "ca-4")))
+(rollback-tx)
+
+(begin-tx "past the deadline: only the recorded bidder may reclaim")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 2450) })
+(env-data { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(expect-failure "mallory cannot reclaim bob's escrow" "Keyset failure"
+  (nft.conventional-auction.reclaim-bid (hash "ca-4")))
+(expect "the escrow is untouched" 10.0
+  (coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "ca-4"))))
+(rollback-tx)
+
+(begin-tx "BOB RECLAIMS HIS OWN ESCROW — no seller, no admin, no new power")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 2450) })
+(env-data { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+;; ONLY bob's key signs: the seller never acts in this transaction
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+            , "caps": [ (nft.conventional-auction.RECLAIM-BID (read-keyset 'bob)) ] } ])
+(expect "bob walks the exit himself" true
+  (nft.conventional-auction.reclaim-bid (hash "ca-4")))
+(expect "bob is whole again" 1000.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "the D bid escrow is empty" 0.0
+  (coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "ca-4"))))
+(expect "the bid is struck from the auction" 0.0
+  (at 'highest-bid (nft.conventional-auction.get-auction (hash "ca-4"))))
+(expect "and so is the bidder" ""
+  (at 'bidder (nft.conventional-auction.get-auction (hash "ca-4"))))
+(expect-failure "a second reclaim takes nothing" "no escrowed bid to reclaim"
+  (nft.conventional-auction.reclaim-bid (hash "ca-4")))
+(commit-tx)
+
+(begin-tx "after the reclaim the sale cannot be settled on the withdrawn bid")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 2500) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "quoted_price": 10.0 })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id
+                            "k:5555555555555555555555555555555555555555555555555555555555555555"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0
+                            (hash "ca-4"))
+                        , (coin.TRANSFER "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            (nft.policy-manager.escrow-account (hash "ca-4")) 10.0) ] } ])
+  (expect-failure "the reclaimed bid is no longer a settleable price" "no bids were placed"
+    (continue-pact 1 false (hash "ca-4"))))
+(rollback-tx)
+
+(begin-tx "and the seller's withdrawal falls to the bidless case — nothing left to refund")
+(env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 2600) })
+(env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
+              , "caps": [ (nft.ledger.WITHDRAW id
+                            "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0 0
+                            (hash "ca-4")) ] } ])
+  (continue-pact 0 true (hash "ca-4"))
+  (expect "the NFT returned to carol" 1.0
+    (nft.ledger.get-balance id "k:5555555555555555555555555555555555555555555555555555555555555555")))
+(expect "conservation: bob never lost a coin" 1000.0
+  (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(commit-tx)
+
 ;; --- the settlement hooks are manager-gated ------------------------------------
 (begin-tx "direct hook calls are rejected")
 (env-data { "x": 1 })
@@ -544,4 +692,6 @@
 (print "  settlement winner-only + state-validated + third-party executable;")
 (print "  royalty 1.5 + fee 0.375 + proceeds 13.125 = winning bid 15 (12 dp);")
 (print "  withdrawal: blocked live, free bidless, refunds the winner after grace;")
+(print "  the BIDDER'S own exit: reclaim past end+grace, seller-independent,")
+(print "  on a deadline the seller cannot move and a grace window that is capped;")
 (print "  hooks unreachable outside the manager path.")

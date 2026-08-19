@@ -37,7 +37,20 @@
 ;;
 ;; Quote rows are permanent: a settled or withdrawn sale keeps its quote row
 ;; (Pact has no row deletion; the one-shot sale defpact steps make replay
-;; impossible). Treat `quotes` as the immutable sale-economics history.
+;; impossible). Treat `quotes` as the immutable sale-economics history — so the
+;; EXISTENCE of a quote row is NOT evidence that its sale is still live.
+;;
+;; SALE LIVENESS: Pact exposes no builtin that reads defpact completion, so a
+;; registered sale contract cannot ask the engine whether the ledger's sale
+;; defpact for a sale-id is still running. This manager is the only party that
+;; can answer: EVERY terminal transition of that defpact routes through it —
+;; step-0 rollback through enforce-withdraw, step 1 through enforce-buy — so it
+;; records the answer in the quote row's `active` flag (true at offer, false at
+;; withdraw and at buy) and publishes it as `sale-live`. A sale contract that
+;; takes on obligations or escrows money for a sale-id MUST gate on
+;; `enforce-sale-live`: without it an auction can be attached to a corpse and
+;; every bid escrowed into it is unrecoverable (nothing can settle or refund
+;; once the defpact is complete).
 
 (namespace (read-string 'ns))
 
@@ -136,7 +149,8 @@
     fee-account:string
     fee-guard:guard
     fee-bps:integer
-    sale-contract:string)
+    sale-contract:string
+    active:bool)
   (deftable quotes:{quote-schema})
 
   (defconst QUOTE-MSG-KEY:string "quote"
@@ -283,7 +297,8 @@
         , 'fungible: (at 'fungible q), 'price: (at 'price q)
         , 'seller-account: (at 'seller-account q), 'seller-guard: (at 'seller-guard q)
         , 'fee-account: (at 'fee-account q), 'fee-guard: (at 'fee-guard q)
-        , 'fee-bps: (at 'fee-bps q), 'sale-contract: (at 'sale-contract q) })
+        , 'fee-bps: (at 'fee-bps q), 'sale-contract: (at 'sale-contract q)
+        , 'active: true })
       (emit-event (QUOTE sale-id (at 'id token) (at 'price q) (at 'fee-bps q) (at 'sale-contract q))))
     ;; run policy enforce-offer hooks
     (map (lambda (p:module{token-policy}) (p::enforce-offer token seller amount timeout sale-id)) (at 'policies token))
@@ -327,6 +342,9 @@
           (with-capability (WITHDRAWAL-CALL sale-id)
             (s::enforce-withdrawal sale-id)))))
     (map (lambda (p:module{token-policy}) (p::enforce-withdraw token seller amount timeout sale-id)) (at 'policies token))
+    ;; the sale defpact completes on this rollback — record it so no sale
+    ;; contract can attach to, or escrow into, a dead sale afterwards
+    (update quotes sale-id { 'active: false })
     true)
 
   ;; --- BUY: the SINGLE conservation-asserted settlement -----------------------
@@ -363,6 +381,14 @@
         ;; (whose guard requires FUNDING-CALL for this sale).
         (with-capability (FUNDING-CALL sale-id)
           (fungible::transfer-create buyer-account escrow (escrow-guard sale-id) price))
+        ;; ...and it must have landed under OUR guard. The escrow principal is
+        ;; publicly computable from the mempool-visible offer, so on a fungible
+        ;; that does not enforce reserved account-name protocols a stranger can
+        ;; hold that name first; the deposit would then either brick the sale or
+        ;; (if the fungible also skips the credit-time guard match) be swept by
+        ;; the squatter. Checked AFTER the transfer so no `try` is needed — see
+        ;; enforce-account-custody. An abort rolls back the funding with it.
+        (enforce-account-custody fungible escrow (escrow-guard sale-id))
         (let ((funded (fungible::get-balance escrow)))
           ;; policies DECLARE their cuts (computed from their own state); they
           ;; move no money. (Phase 3's royalty policy returns the creator's cut.)
@@ -394,6 +420,8 @@
             (let ((final (fungible::get-balance escrow)))
               (enforce (= final (- funded price)) "escrow not fully settled — conservation failed"))
             (emit-event (SETTLED sale-id price fee proceeds)))))
+      ;; the sale defpact completes on this step — record it (see SALE LIVENESS)
+      (update quotes sale-id { 'active: false })
       true))
 
   ;; --- payout helpers (the merged, conservation-safe settlement) --------------
@@ -412,13 +440,67 @@
           (+ acc [p])))))
 
   (defun pay-from-escrow:string (fungible:module{fungible-v2} sale-id:string p:object)
-    @doc "Pay one merged leg from the sale escrow. Requires ESCROW in scope."
+    @doc "Pay one merged leg from the sale escrow. Requires ESCROW in scope. \
+         \THIS IS THE ONE PATH EVERY PAYOUT TAKES — the seller's proceeds, the \
+         \marketplace fee and every policy cut — so the destination check \
+         \belongs here rather than at any caller. A payee principal is as \
+         \publicly computable as an escrow's (a creator's k: account is just \
+         \their public key), so on a non-conforming fungible a stranger can \
+         \hold the name first and be paid instead. That loss lands on someone \
+         \who did not act in this transaction — the royalty creator is not a \
+         \party to the sale — so the module refuses rather than leaving it to \
+         \them. Refusing turns a silent theft into an aborted sale, which is \
+         \a state the seller can see and act on."
     (require-capability (ESCROW sale-id))
     (let ((escrow (escrow-account sale-id)))
       (install-capability (fungible::TRANSFER escrow (at 'account p) (at 'amount p)))
-      (fungible::transfer-create escrow (at 'account p) (at 'guard p) (at 'amount p))))
+      (let ((res (fungible::transfer-create escrow (at 'account p) (at 'guard p) (at 'amount p))))
+        (enforce-account-custody fungible (at 'account p) (at 'guard p))
+        res)))
+
+  ;; --- destination-account integrity -------------------------------------------
+  (defun enforce-account-custody:bool (fungible:module{fungible-v2} account:string expected:guard)
+    @doc "POST-CONDITION on a transfer this module just made: ACCOUNT must be \
+         \held in FUNGIBLE under exactly EXPECTED. Call it AFTER the \
+         \transfer-create, never before. \
+         \WHY AFTER, AND WHY NO `try`. Every destination here — both escrows \
+         \and every payout leg — has a principal computable from the \
+         \mempool-visible offer, so on a fungible that does not enforce \
+         \reserved account-name protocols (coin does; fungible-v2 requires \
+         \nothing) a stranger can create it first under their OWN guard. The \
+         \obvious shape, a `try`-guarded read BEFORE the transfer so that a \
+         \not-yet-created account passes, is FAIL-OPEN and cannot be made \
+         \safe: `try` yields its catch expression on ANY execution error \
+         \(Pact/Core/IR/Eval/CEK/Evaluator.hs, CTry -> CEKHandler), so if the \
+         \catch value is the guard we are about to require, a fungible whose \
+         \`details` merely throws passes the check — and \"the fungible does \
+         \not conform\" is this check's entire threat model. Reading AFTER the \
+         \transfer needs no `try` at all: the account now exists, so a throw \
+         \is a real fault and aborts the transaction. \
+         \Nothing is lost by refusing late: an abort rolls the whole \
+         \transaction back, so the money never moved. This is a refusal, not \
+         \a reversal."
+    (let ((actual:guard (at 'guard (fungible::details account))))
+      (enforce (= actual expected)
+        "destination account is squatted: its on-chain guard is not the one declared"))
+    true)
 
   ;; --- views ------------------------------------------------------------------
   (defun get-quote:object{quote-schema} (sale-id:string) (read quotes sale-id))
   (defun get-quote-price:decimal (sale-id:string) (at 'price (read quotes sale-id)))
+
+  (defun sale-live:bool (sale-id:string)
+    @doc "True while the ledger's sale defpact for SALE-ID can still be bought \
+         \or withdrawn; false once it has settled or been withdrawn. This is \
+         \the ONLY readable answer to that question (see SALE LIVENESS) — a \
+         \bidder should check it before escrowing anything."
+    (at 'active (read quotes sale-id)))
+
+  (defun enforce-sale-live:bool (sale-id:string)
+    @doc "Abort unless SALE-ID's sale defpact is still live. Registered sale \
+         \contracts gate every obligation- and escrow-taking entry point on \
+         \this."
+    (let ((live:bool (sale-live sale-id)))
+      (enforce live "the sale is no longer live"))
+    true)
 )

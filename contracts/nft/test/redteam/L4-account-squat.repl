@@ -1,0 +1,111 @@
+;; L4 — AN ACCOUNT NAME MUST CERTIFY ITS OWN GUARD (findings F10 and F6).
+;;
+;; F10: create-account accepts ANY name with ANY guard as long as the name
+;;   carries no reserved prefix. "alice-vault" therefore belongs to whoever
+;;   names it first, and everything later sent to that name lands under the
+;;   squatter's guard. There is no owner to ask and no undo to build.
+;;
+;; F6: the same hole destroys an IN-FLIGHT NFT. transfer-crosschain step 0
+;;   debits the sender and yields; step 1 credits RECEIVER on the target chain,
+;;   and `credit` requires the arriving guard to equal the guard already on the
+;;   row. A stranger who claims the receiver row first makes step 1 fail
+;;   FOREVER — step 0 has no rollback, so the NFT is gone. Tolerating the
+;;   pre-existing row instead would hand the squatter the NFT, which is the
+;;   reversal-shaped "fix" that must never be built.
+;;
+;; Both are the same refusal, made where the mistake happens: a ledger account
+;; name must be the PRINCIPAL of the guard that holds it, and the cross-chain
+;; receiver is checked on the SOURCE chain, before anything is debited.
+
+(load "_bootstrap.repl")
+
+(begin-tx "alice mints a 1/1")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://l4" [] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0))
+(commit-tx)
+
+;; ===========================================================================
+;; F10 — a name that certifies nothing cannot be created at all
+;; ===========================================================================
+(begin-tx "L4-A: create-account refuses an unowned name")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
+  (expect-failure "L4-A a stranger cannot claim a name that certifies no guard"
+    "account name must be the principal of its own guard"
+    (nft.ledger.create-account id "alice-vault" (read-keyset 'mallory)))
+  ;; the same refusal for the honest owner: the rule is about the NAME, not
+  ;; about who is asking — an unowned name is squattable for everybody
+  (expect-failure "L4-A2 not even the honest holder may create an unowned name"
+    "account name must be the principal of its own guard"
+    (nft.ledger.create-account id "alice-vault" (read-keyset 'alice)))
+  ;; a k: name whose guard is not its key keeps its own, more specific refusal
+  (expect-failure "L4-A3 a k: name with a foreign guard is still refused"
+    "single-key account protocol violation"
+    (nft.ledger.create-account id
+      "k:1111111111111111111111111111111111111111111111111111111111111111"
+      (read-keyset 'mallory)))
+  ;; ... and a principal account is created exactly as before
+  (expect "L4-A4 a principal account is still created normally" true
+    (nft.ledger.create-account id
+      "k:3333333333333333333333333333333333333333333333333333333333333333"
+      (read-keyset 'mallory))))
+(rollback-tx)
+
+;; ===========================================================================
+;; F6 — an unroutable receiver is refused on the SOURCE chain, before the debit
+;; ===========================================================================
+(begin-tx "L4-B: the cross-chain receiver must be a principal")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L4-b"))
+(env-data
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id acct "alice-vault" "1" 1.0) ] } ])
+  (expect-failure "L4-B a squattable receiver name is refused before anything moves"
+    "account name must be the principal of its own guard"
+    (nft.ledger.transfer-crosschain id acct "alice-vault" (read-keyset 'alice) "1" 1.0))
+  (expect "L4-B2 the NFT never left the source chain" 1.0 (nft.ledger.get-balance id acct))
+  (expect "L4-B3 the supply never left the source chain" 1.0 (nft.ledger.total-supply id)))
+(rollback-tx)
+
+;; ===========================================================================
+;; the honest cross-chain path is untouched
+;; ===========================================================================
+(begin-tx "L4-C: a principal receiver relocates normally")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L4-c"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111")
+      (bacct "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id acct bacct "1" 1.0) ] } ])
+  (expect "L4-C step 0 to a principal receiver proceeds" true
+    (nft.ledger.transfer-crosschain id acct bacct (read-keyset 'bob) "1" 1.0))
+  (env-chain-data { "chain-id": "1" })
+  (continue-pact 1 false (hash "L4-c"))
+  (expect "L4-C2 the receiver holds it on the target chain" 1.0
+    (nft.ledger.get-balance id bacct)))
+(rollback-tx)
+
+(print "L4 COMPLETE")

@@ -1,7 +1,10 @@
 ;; nft framework — Phase 3: collection-policy suite.
 ;;
 ;; Proves operator-curated, size-capped collections:
-;;   * collections are self-serve but creating one proves the operator guard;
+;;   * collections are self-serve but creating one proves the operator guard,
+;;     and the collection ID is DERIVED from (name, operator-guard) — a
+;;     hand-picked id is refused, so nobody can claim someone else's
+;;     collection, here or on any other chain;
 ;;   * a token joins a collection only with the operator's signature, only
 ;;     while there is room (max-size, 0 = unbounded), and the target
 ;;     collection is REQUIRED — a missing/unknown collection id aborts (fail
@@ -68,12 +71,14 @@
 (env-data
   { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
 (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
-(expect-failure "an empty collection id is rejected" "collection id required"
+(expect-failure "an empty collection id is rejected" "collection protocol violation"
   (nft.collection-policy.create-collection "" "Gallery Drop" 2 (read-keyset 'carol)))
+(expect-failure "a hand-picked collection id is rejected" "collection protocol violation"
+  (nft.collection-policy.create-collection "gallery-drop" "Gallery Drop" 2 (read-keyset 'carol)))
 (expect-failure "an empty collection name is rejected" "collection name required"
-  (nft.collection-policy.create-collection "gallery-drop" "" 2 (read-keyset 'carol)))
+  (nft.collection-policy.create-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) "" 2 (read-keyset 'carol)))
 (expect-failure "a negative max-size is rejected" "max-size must be >= 0"
-  (nft.collection-policy.create-collection "gallery-drop" "Gallery Drop" -1 (read-keyset 'carol)))
+  (nft.collection-policy.create-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) "Gallery Drop" -1 (read-keyset 'carol)))
 (rollback-tx)
 
 (begin-tx "creating a collection proves the operator guard")
@@ -82,19 +87,24 @@
 ;; nobody signed for carol's guard
 (env-sigs [])
 (expect-failure "an unproven operator guard is rejected" "Keyset failure"
-  (nft.collection-policy.create-collection "gallery-drop" "Gallery Drop" 2 (read-keyset 'carol)))
+  (nft.collection-policy.create-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) "Gallery Drop" 2 (read-keyset 'carol)))
 (rollback-tx)
 
 (begin-tx "carol creates a size-2 collection (and an unbounded one)")
 (env-data
-  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "alice-op": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
-(nft.collection-policy.create-collection "gallery-drop" "Gallery Drop" 2 (read-keyset 'carol))
-(nft.collection-policy.create-collection "open-editions" "Open Editions" 0 (read-keyset 'carol))
-(expect-failure "a duplicate collection id is rejected" "already"
-  (nft.collection-policy.create-collection "gallery-drop" "Gallery Drop II" 5 (read-keyset 'carol)))
+(nft.collection-policy.create-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) "Gallery Drop" 2 (read-keyset 'carol))
+(nft.collection-policy.create-collection (nft.collection-policy.create-collection-id "Open Editions" (read-keyset 'carol)) "Open Editions" 0 (read-keyset 'carol))
+(expect-failure "a duplicate collection is rejected" "already"
+  (nft.collection-policy.create-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) "Gallery Drop" 5 (read-keyset 'carol)))
+;; a different NAME is a different collection, never a re-claim of this one
+(expect-failure "a stranger cannot claim carol's collection id" "collection protocol violation"
+  (nft.collection-policy.create-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) "Gallery Drop" 5
+    (read-keyset 'alice-op)))
 (expect "collection starts empty" 0
-  (at 'size (nft.collection-policy.get-collection "gallery-drop")))
+  (at 'size (nft.collection-policy.get-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)))))
 (commit-tx)
 
 ;; ===========================================================================
@@ -125,8 +135,11 @@
 
 (begin-tx "only the operator may add a token")
 (env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "collection_id": "gallery-drop" })
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "collection_id": (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) })
 ;; alice signs alone — carol (the operator) did not
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
@@ -138,8 +151,11 @@
 
 (begin-tx "two tokens join with the operator's signature; the third overflows")
 (env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "collection_id": "gallery-drop" })
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "collection_id": (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
           , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
 (let ((id1 (nft.ledger.create-token-id
@@ -154,8 +170,8 @@
   (nft.ledger.create-token id1 0 "ipfs://c1" [nft.collection-policy] (read-keyset 'alice))
   (nft.ledger.create-token id2 0 "ipfs://c2" [nft.collection-policy] (read-keyset 'alice))
   (expect "the collection tracks both tokens" 2
-    (at 'size (nft.collection-policy.get-collection "gallery-drop")))
-  (expect "token-collection binding recorded" "gallery-drop"
+    (at 'size (nft.collection-policy.get-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)))))
+  (expect "token-collection binding recorded" (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol))
     (nft.collection-policy.get-token-collection id1))
   (expect-failure "the size cap holds" "collection is full"
     (nft.ledger.create-token id3 0 "ipfs://c3" [nft.collection-policy] (read-keyset 'alice))))
@@ -165,8 +181,11 @@
 ;; two successful creates in the same tx) — redo the two persistent creates
 (begin-tx "persist the two collection tokens")
 (env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "collection_id": "gallery-drop" })
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "collection_id": (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
           , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
 (let ((id1 (nft.ledger.create-token-id
@@ -181,8 +200,11 @@
 
 (begin-tx "the unbounded collection accepts a token")
 (env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "collection_id": "open-editions" })
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "collection_id": (nft.collection-policy.create-collection-id "Open Editions" (read-keyset 'carol)) })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
           , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
@@ -190,14 +212,17 @@
             (read-keyset 'alice))))
   (nft.ledger.create-token id 0 "ipfs://open-1" [nft.collection-policy] (read-keyset 'alice))
   (expect "unbounded collection grew" 1
-    (at 'size (nft.collection-policy.get-collection "open-editions"))))
+    (at 'size (nft.collection-policy.get-collection (nft.collection-policy.create-collection-id "Open Editions" (read-keyset 'carol))))))
 (commit-tx)
 
 ;; --- no hook is reachable outside the ledger flow -----------------------------
 (begin-tx "direct hook calls are rejected")
 (env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "collection_id": "gallery-drop" })
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "collection_id": (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
         , 'policies: [nft.collection-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))

@@ -1,0 +1,121 @@
+;; L5 — A COLLECTION ID MUST BE UN-SQUATTABLE (finding F7).
+;;
+;; collection-policy returns "permit" from mint-decision, so for a collection
+;; token the ledger's author gate steps aside and the COLLECTION OPERATOR is
+;; the mint authority. The operator is read from the `collections` row for the
+;; token's collection id — and create-collection was an OPEN, first-come insert
+;; under any hand-picked id. On a chain that has never seen the collection (the
+;; destination of a relocation) a stranger could therefore claim the id, become
+;; its operator, and issue supply under the ARRIVED token's identity.
+;;
+;; The refusal is made where the mistake happens, exactly as the ledger already
+;; does for token ids: a collection id is DERIVED from (name, operator-guard),
+;; so it can only ever be claimed by the operator whose guard it hashes over —
+;; on this chain and on every other one, because the derivation carries no
+;; chain id. This file computes the expected id from the RULE, not from the
+;; module, so it also pins the derivation itself.
+
+(load "_bootstrap.repl")
+
+(begin-tx "deploy the collection policy")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(namespace "nft")
+(load "../../policies/collection-policy.pact")
+(create-table nft.collection-policy.collections)
+(create-table nft.collection-policy.collection-tokens)
+(commit-tx)
+
+;; ===========================================================================
+;; L5-A — a hand-picked collection id is refused (this is the whole squat)
+;; ===========================================================================
+(begin-tx "L5-A: a hand-picked collection id is refused")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "carol":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(expect-failure "L5-A a stranger cannot name a collection id"
+  "collection protocol violation"
+  (nft.collection-policy.create-collection "gallery-drop" "Gallery Drop" 2 (read-keyset 'mallory)))
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(expect-failure "L5-A2 the rule is about the ID, so the honest operator is refused too"
+  "collection protocol violation"
+  (nft.collection-policy.create-collection "gallery-drop" "Gallery Drop" 2 (read-keyset 'carol)))
+(rollback-tx)
+
+;; ===========================================================================
+;; L5-B — a derived id nobody has claimed yet: only its operator can claim it
+;; (this is exactly the state of a destination chain that has never seen the
+;; collection — the chain where F7's squatter took over)
+;; ===========================================================================
+(begin-tx "L5-B: a stranger cannot claim an unclaimed derived id")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "carol":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+;; the id computed from the RULE: "collection:" + hash([name, operator-guard]).
+;; No chain id goes into it, so it is the same id on every chain — which is
+;; what makes membership meaningful after a token relocates.
+(let ((cid (format "{}:{}" ["collection" (hash ["Voyager Editions" (read-keyset 'carol)])])))
+  (env-chain-data { "chain-id": "9" })
+  (expect "L5-B0 the collection id carries no chain id" cid
+    (format "{}:{}" ["collection" (hash ["Voyager Editions" (read-keyset 'carol)])]))
+  (env-chain-data { "chain-id": "0" })
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+  (expect-failure "L5-B a stranger cannot claim an unclaimed collection id"
+    "collection protocol violation"
+    (nft.collection-policy.create-collection cid "Voyager Editions" 2 (read-keyset 'mallory))))
+(rollback-tx)
+
+;; ===========================================================================
+;; L5-C — the operator's own collection, and the token that joins it
+;; ===========================================================================
+(begin-tx "L5-C: carol creates her collection under its derived id")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(let ((cid (format "{}:{}" ["collection" (hash ["Gallery Drop" (read-keyset 'carol)])])))
+  (expect "L5-C the operator creates her own collection" true
+    (nft.collection-policy.create-collection cid "Gallery Drop" 2 (read-keyset 'carol)))
+  (expect "L5-C2 the collection is hers and empty" 0
+    (at 'size (nft.collection-policy.get-collection cid))))
+(commit-tx)
+
+(begin-tx "L5-D: a token joins the collection and the operator issues it")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+;; the create-token tx names the collection by its DERIVED id
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "collection_id": (format "{}:{}" ["collection" (hash ["Gallery Drop" (read-keyset 'carol)])]) })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
+          , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+(let ((cid (format "{}:{}" ["collection" (hash ["Gallery Drop" (read-keyset 'carol)])]))
+      (id  (nft.ledger.create-token-id
+             { 'uri: "ipfs://l5", 'precision: 0, 'policies: [nft.collection-policy] } (read-keyset 'alice))))
+  (expect "L5-D the payload collection id is the derived one" cid (read-msg "collection_id"))
+  (nft.ledger.create-token id 0 "ipfs://l5" [nft.collection-policy] (read-keyset 'alice))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect "L5-D2 the token is in carol's collection" cid
+    (nft.collection-policy.get-token-collection id)))
+(commit-tx)
+
+(begin-tx "L5-E: a stranger cannot issue supply under a collection token")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://l5", 'precision: 0, 'policies: [nft.collection-policy] } (read-keyset 'alice))))
+  (expect-failure "L5-E only the collection operator issues supply" "Keyset failure"
+    (nft.ledger.mint id "k:3333333333333333333333333333333333333333333333333333333333333333"
+      (read-keyset 'mallory) 1.0))
+  (expect "L5-E2 nothing extra was issued" 1.0 (nft.ledger.total-supply id)))
+(rollback-tx)
+
+(print "L5 COMPLETE")

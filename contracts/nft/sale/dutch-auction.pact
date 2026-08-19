@@ -112,7 +112,15 @@
     ( sale-id:string token-id:string start:integer end:integer
       start-price:decimal floor-price:decimal interval-seconds:integer )
     @doc "Attach a Dutch auction to an offered sale. Seller-only; the sale's \
-         \quote must name THIS contract and carry the 0 discovery price."
+         \quote must name THIS contract and carry the 0 discovery price, and \
+         \that sale must still be LIVE. A quote row outlives its sale (they \
+         \are permanent by design), so the row's existence is not evidence the \
+         \defpact still runs; an auction attached to a terminated sale can \
+         \never settle. No money is escrowed here, so the damage is a dead \
+         \listing rather than stranded funds — but it is refusable exactly \
+         \where it happens, and whatever a frozen module tolerates becomes its \
+         \permanent spec."
+    (policy-manager.enforce-sale-live sale-id)
     (with-capability (MANAGE-AUCTION sale-id)
       (validate-schedule start end start-price floor-price interval-seconds)
       (let ((q (policy-manager.get-quote sale-id)))

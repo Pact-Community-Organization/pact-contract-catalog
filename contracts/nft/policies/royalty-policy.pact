@@ -159,7 +159,22 @@
     (with-read royalties (at 'id token)
       { 'creator := creator, 'creator-guard := creator-guard, 'bps := bps, 'sale-only := sale-only }
       ;; a sale-only token may only RELOCATE (owner to themselves): an x-chain
-      ;; ownership change would be a free transfer in two hops
+      ;; ownership change would be a free transfer in two hops.
+      ;; This reads the account NAME and means the OWNER. That inference is
+      ;; sound ONLY because of what the ledger refuses, and it needs BOTH
+      ;; halves of ledger.enforce-account-principal (applied to the receiver at
+      ;; the head of the cross-chain send, before anything is debited):
+      ;;   * the name must be the PRINCIPAL of its guard — otherwise the name
+      ;;     certifies nobody at all; and
+      ;;   * the name must use a BINDING protocol (k:/w:/c:) — a principal is
+      ;;     NOT automatically an authority. "r:vault" is the valid principal of
+      ;;     (keyset-ref-guard "vault") both before and after that keyset is
+      ;;     rotated, and on a chain that never defined it a stranger defines it
+      ;;     outright. Were r: accepted here, a holder would relocate "r:vault"
+      ;;     to "r:vault", satisfy (= sender receiver) exactly, and hand the NFT
+      ;;     to a different key on arrival — a free sale, zero royalty, straight
+      ;;     past this line. Guard EQUALITY would not have caught it either:
+      ;;     the two guard objects are identical; only their meaning differs.
       (if sale-only
         (enforce (= sender receiver) "sale-only token: cross-chain relocation only to the same owner")
         true)

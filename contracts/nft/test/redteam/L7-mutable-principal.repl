@@ -1,0 +1,195 @@
+;; L7 — A PRINCIPAL IS NOT AN AUTHORITY.
+;;
+;; The ledger refuses an account name that is not the principal of its guard
+;; (F6/F8/F10). That is necessary but NOT sufficient, and the gap is the whole
+;; point of this file: of the seven principal forms, only some bind an
+;; authority. Verified against the engine
+;; (pact/Pact/Core/IR/Eval/Runtime/Utils.hs, createPrincipalForGuard):
+;;   k: <key>          the ed25519 key IS the name          -> IMMUTABLE
+;;   w: <hash> <pred>  a hash of the key set                 -> IMMUTABLE
+;;   c: <hash>         hash of a fq cap name + args + pactid -> module-bound
+;;   r: <keyset-name>  ONLY the keyset NAME is kept          -> MUTABLE
+;;   u:/m:/p:          a module-qualified function/module name; the guard BODY
+;;                     is never hashed                       -> MUTABLE
+;;
+;; "r:vault" is the valid principal of (keyset-ref-guard "vault") both before
+;; and after that keyset is rotated to somebody else's keys — and on a chain
+;; that has never defined "vault" a stranger defines it outright. So a ledger
+;; that accepts r: names does NOT establish "the same name is the same owner",
+;; which is exactly what royalty-policy's sale-only rule reads off a
+;; cross-chain relocation.
+;;
+;; L7-A  the engine fact itself, so the premise is pinned and not remembered.
+;; L7-B  a mutable-reference name cannot open a ledger account (create-account).
+;; L7-C  ...nor via the credit path (mint), which is the way around L7-B.
+;; L7-D  THE F8 HARM: a sale-only royalty token cannot be relocated to a name
+;;       whose authority can differ on arrival. Refused on the SOURCE chain,
+;;       before anything is debited — there is no rollback on step 0.
+;; L7-E  the honest k: paths all still work.
+
+(load "_bootstrap.repl")
+
+;; ===========================================================================
+;; L7-A — the premise, measured
+;; ===========================================================================
+(begin-tx "L7-A: r: validates before AND after the authority changes")
+(env-data
+  { "v1": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "v3": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(namespace "nft")
+(define-keyset "nft.vault" (read-keyset 'v1))
+(commit-tx)
+
+(begin-tx "L7-A: rotate the keyset behind the name")
+(expect "the principal of a keyset-ref-guard is just the NAME" "r:nft.vault"
+  (create-principal (keyset-ref-guard "nft.vault")))
+(expect "and it validates" true
+  (validate-principal (keyset-ref-guard "nft.vault") "r:nft.vault"))
+(env-keys ["1111111111111111111111111111111111111111111111111111111111111111"])
+(namespace "nft")
+(define-keyset "nft.vault" (read-keyset 'v3))
+(expect "L7-A: the SAME name still validates after the authority changed" true
+  (validate-principal (keyset-ref-guard "nft.vault") "r:nft.vault"))
+(env-keys ["3333333333333333333333333333333333333333333333333333333333333333"])
+(expect "L7-A: and it is now MALLORY who satisfies it" true
+  (try false (enforce-guard (keyset-ref-guard "nft.vault"))))
+(env-keys ["1111111111111111111111111111111111111111111111111111111111111111"])
+(expect "L7-A: while alice no longer does — the name outlived its owner" false
+  (try false (enforce-guard (keyset-ref-guard "nft.vault"))))
+(commit-tx)
+
+;; ===========================================================================
+;; L7-B / L7-C — such a name cannot hold an NFT, by either row-opening path
+;; ===========================================================================
+(begin-tx "L7: alice makes a plain token and a sale-only royalty token")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "creator": "k:5555555555555555555555555555555555555555555555555555555555555555"
+    , "creator-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+    , "bps": 500, "sale-only": true } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((plain (nft.ledger.create-token-id
+               { 'uri: "ipfs://l7-plain", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (so (nft.ledger.create-token-id
+            { 'uri: "ipfs://l7-saleonly", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice))))
+  (nft.ledger.create-token plain 0 "ipfs://l7-plain" [] (read-keyset 'alice))
+  (nft.ledger.create-token so 0 "ipfs://l7-saleonly" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.mint plain "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (nft.ledger.mint so "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "L7-B: create-account refuses a mutable-reference name")
+(env-chain-data { "chain-id": "0" })
+(env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((plain (nft.ledger.create-token-id
+               { 'uri: "ipfs://l7-plain", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
+  ;; "r:nft.vault" IS the principal of this guard — the old rule was satisfied
+  (expect "L7-B0 the old rule alone would have waved this through" true
+    (validate-principal (keyset-ref-guard "nft.vault") "r:nft.vault"))
+  (expect-failure "L7-B a keyset-REFERENCE name cannot hold an NFT"
+    "account name must pin its authority immutably"
+    (nft.ledger.create-account plain "r:nft.vault" (keyset-ref-guard "nft.vault")))
+  ;; u: is the other mutable-reference form that a caller can actually build:
+  ;; createPrincipalForGuard hashes the function NAME and its ARGS, never the
+  ;; function's body, so the module's code decides what the name means.
+  (let ((ug:guard (create-user-guard (nft.util.enforce-valid-account "l7probe"))))
+    (expect "L7-B2a and it is a u: name" "u"
+      (nft.util.check-reserved (create-principal ug)))
+    (expect-failure "L7-B2 nor a user-guard name, whose body is never hashed"
+      "account name must pin its authority immutably"
+      (nft.ledger.create-account plain (create-principal ug) ug))))
+(rollback-tx)
+
+(begin-tx "L7-C: the credit path (mint) refuses it too — no way around L7-B")
+(env-chain-data { "chain-id": "0" })
+(env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((plain (nft.ledger.create-token-id
+               { 'uri: "ipfs://l7-plain", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
+  (expect-failure "L7-C minting into a keyset-reference name is refused"
+    "account name must pin its authority immutably"
+    (nft.ledger.mint plain "r:nft.vault" (keyset-ref-guard "nft.vault") 1.0))
+  (expect "L7-C2 no supply was issued into a name that outlives its owner" 1.0
+    (nft.ledger.total-supply plain)))
+(rollback-tx)
+
+;; ===========================================================================
+  ;; L7-D — THE F8 ROUTE, CLOSED AT BOTH ENDS.
+;; royalty-policy permits a cross-chain relocation when (= sender receiver),
+;; reading NAME and meaning OWNER. With a mutable reference on both sides that
+;; reading is false: identical names, different authority on arrival, NFT
+;; handed over for free, zero royalty. The route needs two things, and the
+;; ledger now refuses both:
+;;   (1) alice must first HOLD the token in such a name — refused at L7-B/L7-C,
+;;       which is the choke point: without a holding there is no relocation to
+;;       make, so the sale-only variant never gets off the ground.
+;;   (2) the relocation must name such a receiver — refused here.
+;; L7-D uses the PLAIN token deliberately, so that nothing but the ledger's own
+;; receiver rule can be what refuses; on the sale-only token a policy would
+;; also object and the assertion would not pin the rule it names.
+;; ===========================================================================
+(begin-tx "L7-D: a relocation to a mutable-reference receiver is refused")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L7-D"))
+(env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((plain (nft.ledger.create-token-id
+               { 'uri: "ipfs://l7-plain", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER plain acct "r:nft.vault" "1" 1.0) ] } ])
+  (expect-failure "L7-D a relocation to a keyset-reference name is refused"
+    "account name must pin its authority immutably"
+    (nft.ledger.transfer-crosschain plain acct "r:nft.vault" (keyset-ref-guard "nft.vault") "1" 1.0))
+  (expect "L7-D2 the NFT never left this chain" 1.0 (nft.ledger.get-balance plain acct))
+  (expect "L7-D3 the supply is intact" 1.0 (nft.ledger.total-supply plain)))
+(rollback-tx)
+
+(begin-tx "L7-D4: the refusal is on the SOURCE chain, ahead of the token's policies")
+;; step 0 has no rollback, so a receiver that can only be rejected on arrival
+;; would mean an unrecoverable loss. The sale-only token carries a policy that
+;; aborts every relocation this test could make; what L7-D4 pins is that the
+;; ledger's own receiver rule is what answers first, so the refusal does not
+;; depend on any policy choosing to object.
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L7-D4"))
+(env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((so (nft.ledger.create-token-id
+            { 'uri: "ipfs://l7-saleonly", 'precision: 0, 'policies: [nft.royalty-policy] }
+            (read-keyset 'alice)))
+      (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER so acct "r:nft.vault" "1" 1.0) ] } ])
+  (expect-failure "L7-D4 the LEDGER refuses the receiver name, not the policy"
+    "account name must pin its authority immutably"
+    (nft.ledger.transfer-crosschain so acct "r:nft.vault" (keyset-ref-guard "nft.vault") "1" 1.0))
+  (expect "L7-D5 the sale-only NFT never left this chain" 1.0 (nft.ledger.get-balance so acct)))
+(rollback-tx)
+
+;; ===========================================================================
+;; L7-E — the honest paths are untouched
+;; ===========================================================================
+(begin-tx "L7-E: k: accounts still work normally")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "l7ms":  { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"
+                       ,"5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-any" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((plain (nft.ledger.create-token-id
+               { 'uri: "ipfs://l7-plain", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
+  (expect "L7-E create-account on a k: principal still works" true
+    (nft.ledger.create-account plain
+      "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob)))
+  (expect "L7-E2 a w: multisig principal is accepted — vaults are not shut out" true
+    (nft.ledger.create-account plain
+      (create-principal (read-keyset 'l7ms)) (read-keyset 'l7ms))))
+(rollback-tx)
+
+(print "L7 COMPLETE")

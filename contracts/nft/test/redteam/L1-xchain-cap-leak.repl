@@ -1,0 +1,135 @@
+;; L1 — CAPABILITY LEAK ACROSS AN UNTRUSTED MODREF (cross-chain send).
+;;
+;; INVARIANT: the token's creator-written policies are ARBITRARY THIRD-PARTY
+;; CODE. The ledger must never be holding a value-writing capability while it
+;; dispatches to them. `transfer` runs its hook inside TRANSFER-CALL *before*
+;; acquiring TRANSFER; the receive step runs its hook inside
+;; XCHAIN-RECEIVE-CALL *before* acquiring XRECEIVE. The send step must match.
+;;
+;; ATTACK: the attacker attaches their own policy module to their own throwaway
+;; token and relocates 1.0 of it. If the ledger dispatches from inside the
+;; XTRANSFER scope, the hook inherits DEBIT(id,sender) + UPDATE_SUPPLY and can
+;;   (a) write the supply of a VICTIM token it has nothing to do with, and
+;;   (b) debit the sender past the amount the sender actually signed for.
+;; Both must be "not granted".
+
+(load "_bootstrap.repl")
+
+;; --- VICTIM: alice's plain token (no policy at all) --------------------------
+(begin-tx "victim token")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((vid (nft.ledger.create-token-id
+             { 'uri: "ipfs://victim", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
+  (nft.ledger.create-token vid 0 "ipfs://victim" [] (read-keyset 'alice))
+  (nft.ledger.mint vid "k:1111111111111111111111111111111111111111111111111111111111111111"
+    (read-keyset 'alice) 1.0)
+  (expect "L1-0 the victim starts at supply 1.0" 1.0 (nft.ledger.total-supply vid)))
+(commit-tx)
+
+;; --- the attacker's policy module, in the attacker's OWN namespace ------------
+(begin-tx "attacker policy")
+(env-data { "mal": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-keys ["2222222222222222222222222222222222222222222222222222222222222222"])
+(define-namespace "evil" (read-keyset 'mal) (read-keyset 'mal))
+(namespace "evil")
+(define-keyset "evil.admin" (read-keyset 'mal))
+(module evilpol GOV
+  (implements nft.token-policy)
+  (defcap GOV () (enforce-keyset "evil.admin"))
+  (use nft.token-policy [token-info payout])
+  (defschema cfg mode:string victim:string amt:decimal)
+  (deftable cfgt:{cfg})
+  (defun arm (m:string v:string a:decimal) (write cfgt "c" { 'mode: m, 'victim: v, 'amt: a }) true)
+  (defun enforce-init:bool (token:object{token-info}) true)
+  (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal) true)
+  (defun mint-decision:string (token:object{token-info}) (identity "permit"))
+  (defun enforce-burn:bool (token:object{token-info} account:string amount:decimal) true)
+  (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-withdraw:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string) true)
+  (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string) [])
+  (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal) true)
+  (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
+  (defun enforce-update-uri:bool (token:object{token-info} new-uri:string) (enforce false "no"))
+  (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object) true)
+  (defun enforce-xchain-send:object
+    (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
+    (with-read cfgt "c" { 'mode := m, 'victim := vic, 'amt := a }
+      (if (= m "supply")
+        ;; a supply write on a token this transfer has nothing to do with
+        (nft.ledger.update-supply vic a)
+        ;; spend the sender past the budget they signed for
+        (let ((_ (nft.ledger.debit (at 'id token) sender
+                   (- (nft.ledger.get-balance (at 'id token) sender) amount))))
+          true)))
+    {})
+)
+(create-table cfgt)
+(commit-tx)
+
+;; --- the attacker's own throwaway token, evilpol attached ---------------------
+(begin-tx "attacker token")
+(env-chain-data { "chain-id": "0" })
+(env-data { "mal": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(let ((aid (nft.ledger.create-token-id { 'uri: "ipfs://bait", 'precision: 0, 'policies: [evil.evilpol] } (read-keyset 'mal))))
+  (nft.ledger.create-token aid 0 "ipfs://bait" [evil.evilpol] (read-keyset 'mal))
+  (nft.ledger.mint aid "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'mal) 5.0))
+(commit-tx)
+
+;; ===========================================================================
+;; L1-A — the hook must not be able to write an unrelated token's supply
+;; ===========================================================================
+(begin-tx "ATTACK A: supply write on a victim token from inside the send hook")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L1-A"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mal":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((vid (nft.ledger.create-token-id { 'uri: "ipfs://victim", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (aid (nft.ledger.create-token-id { 'uri: "ipfs://bait", 'precision: 0, 'policies: [evil.evilpol] } (read-keyset 'mal))))
+  (evil.evilpol.arm "supply" vid 999999.0)
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.XTRANSFER aid
+                            "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" "1" 1.0) ] } ])
+  (expect-failure "L1-A a policy modref holds NO supply authority during a cross-chain send"
+    "not granted"
+    (nft.ledger.transfer-crosschain aid
+      "k:2222222222222222222222222222222222222222222222222222222222222222"
+      "k:2222222222222222222222222222222222222222222222222222222222222222"
+      (read-keyset 'mal) "1" 1.0))
+  (expect "L1-A2 the victim's supply is untouched" 1.0 (nft.ledger.total-supply vid))
+  (expect "L1-A3 the victim's balance is untouched" 1.0
+    (nft.ledger.get-balance vid "k:1111111111111111111111111111111111111111111111111111111111111111")))
+(rollback-tx)
+
+;; ===========================================================================
+;; L1-B — the hook must not be able to debit the sender past the signed budget
+;; ===========================================================================
+(begin-tx "ATTACK B: over-debit the sender from inside the send hook")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "L1-B"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mal":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((vid (nft.ledger.create-token-id { 'uri: "ipfs://victim", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+      (aid (nft.ledger.create-token-id { 'uri: "ipfs://bait", 'precision: 0, 'policies: [evil.evilpol] } (read-keyset 'mal))))
+  (evil.evilpol.arm "debit" vid 0.0)
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.XTRANSFER aid
+                            "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            "k:2222222222222222222222222222222222222222222222222222222222222222" "1" 1.0) ] } ])
+  (expect-failure "L1-B a policy modref holds NO debit authority during a cross-chain send"
+    "not granted"
+    (nft.ledger.transfer-crosschain aid
+      "k:2222222222222222222222222222222222222222222222222222222222222222"
+      "k:2222222222222222222222222222222222222222222222222222222222222222"
+      (read-keyset 'mal) "1" 1.0))
+  (expect "L1-B2 the sender keeps every unit they did not sign away" 5.0
+    (nft.ledger.get-balance aid "k:2222222222222222222222222222222222222222222222222222222222222222")))
+(rollback-tx)
+
+(print "L1 COMPLETE")

@@ -1,0 +1,108 @@
+;; L8 — A DERIVED COLLECTION ID IS ONLY AS BINDING AS THE GUARD IT HASHES.
+;;
+;; collection-policy derives the collection id as hash[name, operator-guard]
+;; so that a stranger cannot claim someone else's collection — which matters
+;; most OFF the creating chain, because collection-policy's mint-decision
+;; returns "permit", so the collection operator IS the mint authority for
+;; every token in it.
+;;
+;; But `hash` serialises the guard OBJECT, and a keyset-ref-guard serialises
+;; to the keyset NAME alone. Two chains with different keysets behind the same
+;; name therefore derive the SAME collection id — so the derivation would have
+;; certified nothing at all, and the destination-chain operator squat it exists
+;; to prevent would still be open. Only k: (a key) and w: (a key set) put the
+;; key material itself into the id.
+;;
+;; L8-A  the measurement: the same id derives from two different authorities.
+;; L8-B  so create-collection refuses such an operator guard outright.
+;; L8-C  k: and w: operators still work, and the id still pins the operator.
+
+(load "_bootstrap.repl")
+
+(begin-tx "L8: the collection policy is not in the shared bootstrap")
+(env-data { "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(namespace "nft")
+(load "../../policies/collection-policy.pact")
+(create-table nft.collection-policy.collections)
+(create-table nft.collection-policy.collection-tokens)
+(commit-tx)
+
+(begin-tx "L8: two different keysets can share one keyset NAME")
+(env-data
+  { "carol":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(namespace "nft")
+(define-keyset "nft.gallery-op" (read-keyset 'carol))
+(commit-tx)
+
+;; ===========================================================================
+;; L8-A — the id does not distinguish the two authorities
+;; ===========================================================================
+(begin-tx "L8-A: the derived id is identical before and after the swap")
+(env-data
+  { "carol":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let ((id-under-carol (nft.collection-policy.create-collection-id
+                        "Gallery Drop" (keyset-ref-guard "nft.gallery-op"))))
+  ;; rotate the authority behind the name — on another chain this is not even a
+  ;; rotation, it is a stranger defining a name nobody had defined there yet
+  (env-keys ["5555555555555555555555555555555555555555555555555555555555555555"])
+  (namespace "nft")
+  (define-keyset "nft.gallery-op" (read-keyset 'mallory))
+  (expect "L8-A the collection id is UNCHANGED by a change of operator" id-under-carol
+    (nft.collection-policy.create-collection-id "Gallery Drop" (keyset-ref-guard "nft.gallery-op")))
+  (env-keys ["3333333333333333333333333333333333333333333333333333333333333333"])
+  (expect "L8-A2 ...and mallory now satisfies that operator guard" true
+    (try false (enforce-guard (keyset-ref-guard "nft.gallery-op")))))
+(commit-tx)
+
+;; ===========================================================================
+;; L8-B — so the guard form is refused where the collection is claimed
+;; ===========================================================================
+(begin-tx "L8-B: a keyset-reference operator cannot own a collection")
+(env-data { "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+;; note mallory PASSES every other gate: she satisfies the operator guard and
+;; her id re-derives correctly. The only thing that stops her is the form.
+(expect "L8-B0 she does satisfy the guard she is claiming" true
+  (try false (enforce-guard (keyset-ref-guard "nft.gallery-op"))))
+(expect-failure "L8-B a keyset-reference operator guard is refused"
+  "collection operator must be a key or keyset guard"
+  (nft.collection-policy.create-collection
+    (nft.collection-policy.create-collection-id "Gallery Drop" (keyset-ref-guard "nft.gallery-op"))
+    "Gallery Drop" 0 (keyset-ref-guard "nft.gallery-op")))
+(expect-failure "L8-B2 and so is a user-guard operator"
+  "collection operator must be a key or keyset guard"
+  (let ((ug:guard (create-user-guard (nft.util.enforce-valid-account "l8probe"))))
+    (nft.collection-policy.create-collection
+      (nft.collection-policy.create-collection-id "Gallery Drop" ug) "Gallery Drop" 0 ug)))
+(rollback-tx)
+
+;; ===========================================================================
+;; L8-C — the honest operators still work
+;; ===========================================================================
+(begin-tx "L8-C: k: and w: operators are unaffected")
+(env-data
+  { "carol": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "duo":   { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"
+                       ,"1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] }
+          , { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect "L8-C a single-key (k:) operator still creates a collection" true
+  (nft.collection-policy.create-collection
+    (nft.collection-policy.create-collection-id "Carol Solo" (read-keyset 'carol))
+    "Carol Solo" 0 (read-keyset 'carol)))
+(expect "L8-C2 a multisig (w:) operator does too — vaults are not shut out" true
+  (nft.collection-policy.create-collection
+    (nft.collection-policy.create-collection-id "Carol Duo" (read-keyset 'duo))
+    "Carol Duo" 0 (read-keyset 'duo)))
+;; and the id still refuses to be claimed by anyone else
+(expect-failure "L8-C3 a stranger still cannot claim carol's id" "collection protocol violation"
+  (nft.collection-policy.create-collection
+    (nft.collection-policy.create-collection-id "Carol Solo" (read-keyset 'carol))
+    "Carol Solo" 0 (read-keyset 'duo)))
+(rollback-tx)
+
+(print "L8 COMPLETE")

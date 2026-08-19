@@ -44,6 +44,34 @@
     @doc "Our token-id reserved protocol prefix (n:...).")
   (defconst URI-RESERVED-PREFIX:string "nft:"
     @doc "Reserved uri prefix nobody may self-assign.")
+  (defconst VALID-CHAIN-IDS:[string] (map (int-to-str 10) (enumerate 0 19))
+    @doc "Every Chainweb chain id. A relocation names its target chain in the \
+         \yield; a target that is not one of these is a chain that will never \
+         \resume the pact, so the token is destroyed and no later transaction \
+         \can bring it back. coin-v6 refuses the same input (its \
+         \VALID_CHAIN_IDS) — same house rule here.")
+  (defconst BINDING-ACCOUNT-PROTOCOLS:[string] ["k" "w" "c"]
+    @doc "The ONLY account-name protocols this ledger accepts. A name may hold \
+         \an NFT only if the name itself pins the authority that may spend it, \
+         \for all time and on every chain. Verified against the engine \
+         \(Pact/Core/IR/Eval/Runtime/Utils.hs createPrincipalForGuard): \
+         \  k: <key>            — the ed25519 key IS the name. Immutable. \
+         \  w: <hash> <pred>    — a hash of the key set. Immutable. \
+         \  c: <hash>           — a hash of a fully-qualified capability name, \
+         \                        its args and the defpact id; required by \
+         \                        this ledger's own per-sale NFT escrow. \
+         \REFUSED, because their names bind a MUTABLE REFERENCE rather than an \
+         \authority — validate-principal says yes both before and after the \
+         \authority behind them changes: \
+         \  r: <keyset-name>    — createPrincipalForGuard keeps only the NAME. \
+         \                        define-keyset rotates the keys under it, and \
+         \                        on a chain where the name is undefined a \
+         \                        stranger defines it outright. That is what \
+         \                        makes a name-equality read of ownership \
+         \                        (royalty-policy's sale-only rule) false. \
+         \  u: / m: / p:        — a module-qualified function or module name; \
+         \                        the guard's BODY is never hashed, so the \
+         \                        module's code decides what the name means.")
 
   ;; --- schemas / tables -----------------------------------------------------
   (deftable ledger-table:{account-details})
@@ -162,17 +190,16 @@
     @managed amount TRANSFER-mgr
     (enforce (> amount 0.0) "positive amount")
     (enforce-unit id amount)
-    (enforce (!= "" target-chain) "target chain required")
-    (enforce (!= target-chain (at 'chain-id (chain-data))) "cannot relocate to the same chain")
+    (enforce-xchain-target target-chain)
     (compose-capability (DEBIT id sender))
-    (compose-capability (UPDATE_SUPPLY)))
+    (compose-capability (UPDATE_SUPPLY id)))
 
   (defcap XRECEIVE:bool (id:string receiver:string amount:decimal)
     @doc "Target-chain credit scope for a relocation. Weak body by design: \
          \the ONLY acquisition site is the SPV-continued receive step of \
          \transfer-crosschain — unreachable except through the pact machinery."
     (compose-capability (CREDIT id receiver))
-    (compose-capability (UPDATE_SUPPLY)))
+    (compose-capability (UPDATE_SUPPLY id)))
 
   (defcap DEBIT:bool (id:string sender:string)
     @doc "Debit authority: the sender's account guard (bound in arg position — \
@@ -184,9 +211,12 @@
          \TRANSFER/MINT, never acquired externally."
     true)
 
-  (defcap UPDATE_SUPPLY:bool ()
-    @doc "Internal supply-update token. Weak body by design: only composed into \
-         \MINT/BURN, never acquired externally."
+  (defcap UPDATE_SUPPLY:bool (id:string)
+    @doc "Internal supply-update token for ONE token id. Weak body by design: \
+         \only composed into MINT/BURN/XTRANSFER/XRECEIVE, never acquired \
+         \externally. It carries the id because a nullary supply cap \
+         \authorizes a write on EVERY row of the table — a standing amplifier \
+         \that turns any leak of it into a whole-ledger problem."
     true)
 
   (defcap MINT:bool (id:string account:string amount:decimal)
@@ -195,13 +225,13 @@
          \one; Phase 3 ships the concrete policy set)."
     (enforce (> amount 0.0) "positive amount")
     (compose-capability (CREDIT id account))
-    (compose-capability (UPDATE_SUPPLY)))
+    (compose-capability (UPDATE_SUPPLY id)))
 
   (defcap BURN:bool (id:string account:string amount:decimal)
     @doc "Burn scope: composes DEBIT (account-guard authorization) + UPDATE_SUPPLY."
     (enforce (> amount 0.0) "positive amount")
     (compose-capability (DEBIT id account))
-    (compose-capability (UPDATE_SUPPLY)))
+    (compose-capability (UPDATE_SUPPLY id)))
 
   ;; --- ledger-iface -CALL caps (the modref handshake with the manager) --------
   ;; Weak bodies by design: each is acquired ONLY by this ledger around the
@@ -250,6 +280,40 @@
   (defun enforce-unit:bool (id:string amount:decimal)
     (let ((p (precision id)))
       (enforce (= (floor amount p) amount) "precision violation")))
+
+  (defun enforce-account-principal:bool (account:string guard:guard)
+    @doc "An account name must PIN its own authority. Two conditions, both \
+         \necessary: the name must be the PRINCIPAL of the guard that holds it, \
+         \AND it must use a protocol whose name binds that authority \
+         \immutably (BINDING-ACCOUNT-PROTOCOLS). \
+         \Without the first, a name certifies nothing: the first caller to \
+         \claim it takes custody of everything sent there afterwards, and an \
+         \in-flight relocation aimed at one is destroyed by a stranger who \
+         \claims the row first (the arriving credit cannot match the \
+         \squatter's guard, and step 0 has no rollback). \
+         \Without the second, the name is the principal of a guard that can \
+         \MEAN something else later or elsewhere — r:vault validates against \
+         \keyset-ref-guard \"vault\" both before and after that keyset is \
+         \rotated, and on a chain that has never defined it a stranger \
+         \defines it. Only the second condition makes it sound to read \
+         \(= sender receiver) as \"the same owner\" across a relocation, which \
+         \is exactly what royalty-policy's sale-only rule does. \
+         \Neither condition is an undo: both refuse the name at the point of \
+         \the mistake, before anything moves."
+    (enforce (validate-principal guard account)
+      "account name must be the principal of its own guard")
+    (enforce (contains (util.check-reserved account) BINDING-ACCOUNT-PROTOCOLS)
+      "account name must pin its authority immutably (k:, w: or c:)"))
+
+  (defun enforce-xchain-target:bool (target-chain:string)
+    @doc "A relocation target must be a REAL chain. A token yielded to a chain \
+         \id that does not exist is destroyed: nothing will ever resume the \
+         \pact, step 0 has no rollback, and an undo must never be built."
+    (enforce (!= "" target-chain) "target chain required")
+    (let ((this-chain:string (at 'chain-id (chain-data))))
+      (enforce (!= target-chain this-chain) "cannot relocate to the same chain"))
+    (enforce (contains target-chain VALID-CHAIN-IDS)
+      "target chain is not a valid chainweb chain id"))
 
   (defun get-author-guard:guard (id:string)
     @doc "The creation-guard TOKEN ID was derived from — the author. Written \
@@ -350,8 +414,13 @@
 
   ;; --- accounts ----------------------------------------------------------------
   (defun create-account:bool (id:string account:string guard:guard)
+    @doc "Open an empty balance row for ACCOUNT under ID. The name must be the \
+         \PRINCIPAL of GUARD: an unowned name would belong to whoever claims \
+         \it first, and everything later sent there would land under their \
+         \guard."
     (util.enforce-valid-account account)
     (util.enforce-reserved account guard)
+    (enforce-account-principal account guard)
     ;; token must exist (a balance row for a non-token is meaningless)
     (precision id)
     (insert ledger-table (key id account)
@@ -425,13 +494,30 @@
   ;; state (guarded policies), so a RETURNING token keeps this chain's uri.
   (defpact transfer-crosschain:bool (id:string sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
     (step
-      (with-capability (XTRANSFER id sender receiver target-chain amount)
+      ;; ORDER: validate the request, THEN run the token's policies, THEN take
+      ;; the value capabilities. A policy is a creator-written modref — third
+      ;; party code — so it must never run while this ledger is holding DEBIT
+      ;; or UPDATE_SUPPLY: `debit` and `update-supply` are public defuns gated
+      ;; only by require-capability, so a hook that inherits those caps can
+      ;; spend the sender past the amount they signed for and write the supply
+      ;; of a token that has nothing to do with this transfer. This is the same
+      ;; order `transfer` uses (hook inside TRANSFER-CALL, before TRANSFER) and
+      ;; the same order the receive step below uses (hook inside
+      ;; XCHAIN-RECEIVE-CALL, before XRECEIVE).
+      (let ((token-info:object{token-info} (get-token-info id)))
         (util.enforce-valid-account receiver)
         (util.enforce-reserved receiver receiver-guard)
-        (let ((token-info (get-token-info id)))
-          (let ((passports:[object]
-                  (with-capability (XCHAIN-SEND-CALL id sender receiver target-chain amount)
-                    (policy-manager.enforce-xchain-send token-info sender receiver receiver-guard target-chain amount))))
+        ;; the receiver must be a PRINCIPAL: on the target chain a name that
+        ;; certifies nothing can be claimed by a stranger, and the arriving
+        ;; credit would then fail forever (step 0 has no rollback, so the token
+        ;; is destroyed); and a policy reading (= sender receiver) as "the same
+        ;; owner" would otherwise be wrong.
+        (enforce-account-principal receiver receiver-guard)
+        (enforce-xchain-target target-chain)
+        (let ((passports:[object]
+                (with-capability (XCHAIN-SEND-CALL id sender receiver target-chain amount)
+                  (policy-manager.enforce-xchain-send token-info sender receiver receiver-guard target-chain amount))))
+          (with-capability (XTRANSFER id sender receiver target-chain amount)
             (let ((sender-change (debit id sender amount))
                   (receiver-change:object{receiver-balance-change} { 'account: "", 'previous: 0.0, 'current: 0.0 }))
               (emit-event (RECONCILE id amount sender-change receiver-change))
@@ -440,8 +526,8 @@
                    , 'uri: (at 'uri token-info), 'precision: (at 'precision token-info)
                    , 'policies: (at 'policies token-info), 'passports: passports
                    , 'author-guard: (get-author-guard id) }
-              target-chain)))
-        true))
+              target-chain))
+          true)))
     (step
       (resume { 'id := rid, 'receiver := rcv, 'receiver-guard := rg:guard, 'amount := amt
               , 'uri := ruri, 'precision := rprec:integer
@@ -472,7 +558,13 @@
 
   ;; --- internal debit / credit / supply ----------------------------------------
   (defun debit:object{sender-balance-change} (id:string account:string amount:decimal)
+    @doc "Move AMOUNT out of ACCOUNT. The capability is not the last line of \
+         \defence: anything that reaches here already holds it, so the \
+         \ARGUMENT is checked here. enforce-unit only compares precision — \
+         \(floor -1.0 0) is -1.0 — so without the sign check a negative \
+         \amount would ADD to the balance and mint value out of nothing."
     (require-capability (DEBIT id account))
+    (enforce (> amount 0.0) "positive amount")
     (enforce-unit id amount)
     (with-read ledger-table (key id account) { 'balance := bal }
       (enforce (<= amount bal) "insufficient funds")
@@ -481,10 +573,16 @@
         { 'account: account, 'previous: bal, 'current: new-bal })))
 
   (defun credit:object{receiver-balance-change} (id:string account:string guard:guard amount:decimal)
+    @doc "Move AMOUNT into ACCOUNT, opening the row on first credit. Same rule \
+         \as `debit`: the capability got us here, the argument checks decide. \
+         \A negative amount would drive a balance below zero; a name that is \
+         \not its guard's principal would open a squattable row."
     (require-capability (CREDIT id account))
+    (enforce (> amount 0.0) "positive amount")
     (enforce-unit id amount)
     (util.enforce-valid-account account)
     (util.enforce-reserved account guard)
+    (enforce-account-principal account guard)
     (with-default-read ledger-table (key id account)
       { 'balance: -1.0, 'guard: guard }
       { 'balance := bal, 'guard := existing }
@@ -496,9 +594,14 @@
           { 'account: account, 'previous: prev, 'current: new-bal }))))
 
   (defun update-supply:bool (id:string amount:decimal)
-    (require-capability (UPDATE_SUPPLY))
+    @doc "Add AMOUNT (signed: mint/receive positive, burn/send negative) to \
+         \ID's supply. The capability names the id, so it can never write \
+         \another token's row; the floor is checked here because a negative \
+         \supply is not a state this ledger has any meaning for."
+    (require-capability (UPDATE_SUPPLY id))
     (with-default-read tokens id { 'supply: 0.0 } { 'supply := s }
       (let ((new-s (+ s amount)))
+        (enforce (>= new-s 0.0) "supply cannot go negative")
         (update tokens id { 'supply: new-s })
         (emit-event (SUPPLY id new-s))
         true)))
