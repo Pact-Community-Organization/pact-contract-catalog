@@ -220,9 +220,8 @@
     true)
 
   (defcap MINT:bool (id:string account:string amount:decimal)
-    @doc "Mint scope: composes CREDIT + UPDATE_SUPPLY. Mint AUTHORIZATION is a \
-         \policy concern (a token with no guard/mint policy is open — attach \
-         \one; Phase 3 ships the concrete policy set)."
+    @doc "Mint scope: composes CREDIT + UPDATE_SUPPLY for ID. Authorization is \
+         \the AUTHOR's unless an attached policy permits (see mint-decision)."
     (enforce (> amount 0.0) "positive amount")
     (compose-capability (CREDIT id account))
     (compose-capability (UPDATE_SUPPLY id)))
