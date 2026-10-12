@@ -1,0 +1,251 @@
+;; nft framework — attributes-policy suite (ADR-NFT-010).
+;;
+;; Proves the bounded, shared, readable state surface:
+;;   * the spec is REQUIRED and validated (keys, bound, history mode);
+;;   * only a key's writer may set it; unknown keys refused; size bounded;
+;;   * versions increment; events trail; on-chain history keeps old values;
+;;   * holder freeze: only when enabled, only by the holder of the whole supply,
+;;     one-way; writes refused afterwards;
+;;   * attributes travel with the token and the newer version wins;
+;;   * no hook is reachable outside the ledger's lifecycle path (-CALL gate).
+;; Each expect goes RED if the mechanism it names is removed.
+;;
+;; Run: pact contracts/nft/test/attributes-policy.repl
+
+(begin-tx "deploy nft framework")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../core/util.pact")
+(load "../core/venue-registry.pact")
+(create-table nft.venue-registry.venues)
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.params)
+(create-table nft.policy-manager.creation-venues)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../policies/attributes-policy.pact")
+(create-table nft.attributes-policy.specs)
+(create-table nft.attributes-policy.attributes)
+(create-table nft.attributes-policy.attr-history)
+(commit-tx)
+
+;; personas: alice k:1111 (creator/holder), game key g:aaaa writes "level", studio key bbbb writes "art"
+;; ---------------------------------------------------------------------------
+;; creation: spec required and validated
+;; ---------------------------------------------------------------------------
+(begin-tx "creation fails closed without a spec and refuses bad specs")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hero", 'precision: 0, 'policies: [nft.attributes-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect-failure "no attributes_spec aborts creation" "read-msg failure"
+    (nft.ledger.create-token id 0 "ipfs://hero" [nft.attributes-policy] "" (read-keyset 'alice)))
+  (env-data
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "attributes_spec": { "writers": [], "max-value-bytes": 64, "history": "events", "holder-freeze": false } })
+  (expect-failure "an empty key set is refused" "at least one attribute key"
+    (nft.ledger.create-token id 0 "ipfs://hero" [nft.attributes-policy] "" (read-keyset 'alice)))
+  (env-data
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "attributes_spec": { "writers": [ { "key": "level", "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+                                      , { "key": "level", "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } } ]
+                        , "max-value-bytes": 64, "history": "events", "holder-freeze": false } })
+  (expect-failure "a duplicate key is refused" "duplicate attribute key"
+    (nft.ledger.create-token id 0 "ipfs://hero" [nft.attributes-policy] "" (read-keyset 'alice)))
+  (env-data
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "attributes_spec": { "writers": [ { "key": "level", "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } } ]
+                        , "max-value-bytes": 64, "history": "sometimes", "holder-freeze": false } })
+  (expect-failure "an unknown history mode is refused" "history must be"
+    (nft.ledger.create-token id 0 "ipfs://hero" [nft.attributes-policy] "" (read-keyset 'alice))))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; the hero card: "level" written by the game key, "art" by the studio key,
+;; on-chain history, holder freeze enabled
+;; ---------------------------------------------------------------------------
+(begin-tx "create the hero")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "attributes_spec":
+    { "writers": [ { "key": "level", "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+                 , { "key": "art",   "guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" } } ]
+    , "max-value-bytes": 16, "history": "onchain", "holder-freeze": true } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(env-events true)
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hero", 'precision: 0, 'policies: [nft.attributes-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect "creation binds the spec" true
+    (nft.ledger.create-token id 0 "ipfs://hero" [nft.attributes-policy] "" (read-keyset 'alice)))
+  (expect "keys readable" ["level" "art"] (nft.attributes-policy.get-keys id))
+  (expect "unwritten keys read at version 0" 0 (at 'version (at 0 (nft.attributes-policy.get-attributes id))))
+  (expect "default read works" "1" (nft.attributes-policy.get-attribute-or id "level" "1"))
+  (expect "ATTRIBUTES event fired" 1
+    (length (filter (lambda (e) (= "nft.attributes-policy.ATTRIBUTES" (at 'name e))) (env-events true))))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "writes: only the key's writer; bounded; versioned; history kept")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-02T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hero", 'precision: 0, 'policies: [nft.attributes-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (expect-failure "the holder cannot write a key she is not the writer of" "Keyset failure"
+    (nft.attributes-policy.set-attribute id "level" "2"))
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+  (expect-failure "an unknown key is refused" "unknown attribute key"
+    (nft.attributes-policy.set-attribute id "mana" "9"))
+  (expect-failure "the game key cannot write the studio's key" "Keyset failure"
+    (nft.attributes-policy.set-attribute id "art" "x"))
+  (expect-failure "a value over the bound is refused" "attribute value too long"
+    (nft.attributes-policy.set-attribute id "level" "this value is far too long"))
+  (expect "the game writes level 2" true (nft.attributes-policy.set-attribute id "level" "2"))
+  (expect "level reads 2 at version 1" { 'value: "2", 'version: 1 }
+    (let ((a (nft.attributes-policy.get-attribute id "level"))) { 'value: (at 'value a), 'version: (at 'version a) }))
+  (expect "the game writes level 3" true (nft.attributes-policy.set-attribute id "level" "3"))
+  (expect "version 2" 2 (at 'version (nft.attributes-policy.get-attribute id "level")))
+  (expect "on-chain history kept the value version 2 replaced" "2"
+    (at 'value (nft.attributes-policy.get-attribute-at id "level" 2)))
+  (expect-failure "no history row exists for the first write (nothing was replaced)" "No value found"
+    (nft.attributes-policy.get-attribute-at id "level" 1)))
+(commit-tx)
+
+(begin-tx "holder freeze: only the sole holder, one-way, writes refused after")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-03T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://hero", 'precision: 0, 'policies: [nft.attributes-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+      (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (expect-failure "a stranger with no balance row cannot freeze" "No value found"
+    (nft.attributes-policy.freeze-copy id bob))
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+  (expect-failure "the writer cannot freeze in the holder's name" "Keyset failure"
+    (nft.attributes-policy.freeze-copy id alice))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (expect "the sole holder freezes" true (nft.attributes-policy.freeze-copy id alice))
+  (expect "frozen" true (nft.attributes-policy.is-frozen id))
+  (expect-failure "a second freeze is refused" "already frozen" (nft.attributes-policy.freeze-copy id alice))
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+  (expect-failure "the writer can no longer write" "frozen by the holder"
+    (nft.attributes-policy.set-attribute id "level" "4"))
+  (expect "the frozen value stands" "3" (at 'value (nft.attributes-policy.get-attribute id "level"))))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; freeze is refused when the creator did not enable it, and for a partial holder
+;; ---------------------------------------------------------------------------
+(begin-tx "a run of 2 without holder-freeze; a half holder cannot freeze either way")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-04T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "attributes_spec":
+    { "writers": [ { "key": "level", "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } } ]
+    , "max-value-bytes": 16, "history": "events", "holder-freeze": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://common", 'precision: 0, 'policies: [nft.attributes-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+      (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (nft.ledger.create-token id 0 "ipfs://common" [nft.attributes-policy] "" (read-keyset 'alice))
+  (nft.ledger.mint id alice (read-keyset 'alice) 2.0)
+  (expect-failure "freeze is refused when the creator did not enable it" "does not allow a holder freeze"
+    (nft.attributes-policy.freeze-copy id alice)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; travel: attributes relocate with the token; the newer version wins
+;; ---------------------------------------------------------------------------
+(begin-tx "a second hero, written once, relocates to chain 1")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-05T00:00:00Z") })
+(env-hash (hash "attr-xc"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "attributes_spec":
+    { "writers": [ { "key": "level", "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } } ]
+    , "max-value-bytes": 16, "history": "events", "holder-freeze": false } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://traveller", 'precision: 0, 'policies: [nft.attributes-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (nft.ledger.create-token id 0 "ipfs://traveller" [nft.attributes-policy] "" (read-keyset 'alice))
+  (nft.ledger.mint id alice (read-keyset 'alice) 1.0)
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+  (nft.attributes-policy.set-attribute id "level" "7")
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id alice alice "1" 1.0) ] } ])
+  (nft.ledger.transfer-crosschain id alice alice (read-keyset 'alice) "1" 1.0))
+(commit-tx)
+
+(begin-tx "step 1 on chain 1: the attribute arrived; the game keeps writing there")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-01-05T00:01:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(continue-pact 1 false (hash "attr-xc"))
+(env-chain-data { "chain-id": "0" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://traveller", 'precision: 0, 'policies: [nft.attributes-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (env-chain-data { "chain-id": "1" })
+  (expect "level 7 at version 1 arrived" { 'value: "7", 'version: 1 }
+    (let ((a (nft.attributes-policy.get-attribute id "level"))) { 'value: (at 'value a), 'version: (at 'version a) }))
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+  (expect "the game writes level 8 on chain 1" true (nft.attributes-policy.set-attribute id "level" "8")))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; the -CALL gate
+;; ---------------------------------------------------------------------------
+(begin-tx "direct calls are rejected")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "attributes_spec":
+    { "writers": [ { "key": "level", "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } } ]
+    , "max-value-bytes": 16, "history": "events", "holder-freeze": false } })
+(let ((fake { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [nft.attributes-policy]
+            , 'author: "k:1111111111111111111111111111111111111111111111111111111111111111"
+            , 'author-guard: (read-keyset 'alice), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }))
+  (expect-failure "enforce-init is not callable directly" "not granted"
+    (nft.attributes-policy.enforce-init fake))
+  (expect-failure "enforce-xchain-receive is not callable directly" "not granted"
+    (nft.attributes-policy.enforce-xchain-receive fake "k:1" (read-keyset 'alice) 1.0
+      { 'writers: [], 'max-value-bytes: 16, 'history: "events", 'holder-freeze: false, 'frozen: false, 'attributes: [] })))
+(rollback-tx)
+
+(print "")
+(print "=== ATTRIBUTES POLICY: ALL GREEN ===")
+(print "  spec required + validated; per-key writers; bounded values; versions + on-chain")
+(print "  history; holder freeze one-way and sole-holder only; attributes travel; -CALL gate.")

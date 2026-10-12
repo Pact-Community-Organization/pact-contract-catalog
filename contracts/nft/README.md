@@ -89,9 +89,9 @@ proving-ground record.
 |---|---|
 | `interfaces/` | `token-policy` (the hook surface + payout schema + uri stance + the cross-chain passport hooks), `poly-fungible` (the multi-token accounting standard), `ledger-iface` (the `-CALL` handshake), `sale` (price-discovery sale contracts), `account-protocols` |
 | `core/` | `ledger` (identity + balances + the offer/withdraw/buy sale defpact + policy-mediated `update-uri` + the `transfer-crosschain` defpact), `policy-manager` (dispatch, the single conservation-asserted settlement with the protocol leg and the creation-venue leg, the 100% rule, the governance-registered sale-contract whitelist, the attachment-authoritative uri-update routing), `venue-registry` (permissionless workshops / stores / galleries with primary, resale and listing rates, snapshotted into tokens at creation and into quotes at offer) |
-| `policies/` | `royalty-policy`, `guard-policy`, `non-fungible-policy` (strict 1/1, minted once ever), `issuance-policy` (a fixed print run: max-issued + min-mint bound at creation, a cumulative counter that burns and relocations never lower, minting only on the origin chain), `transfer-mode-policy` (how a token may change hands, fixed at creation: `free`, `sale-only` or `bound`), `collection-policy`, `guarded-uri-policy` (guard-bound uri updates), `non-updatable-uri-policy` (unconditional uri veto) |
+| `policies/` | `royalty-policy`, `guard-policy`, `non-fungible-policy` (strict 1/1, minted once ever), `issuance-policy` (a fixed print run: max-issued + min-mint bound at creation, a cumulative counter that burns and relocations never lower, minting only on the origin chain), `transfer-mode-policy` (how a token may change hands, fixed at creation: `free`, `sale-only` or `bound`), `collection-policy`, `guarded-uri-policy` (guard-bound uri updates, optional on-chain history, optional holder freeze), `non-updatable-uri-policy` (unconditional uri veto), `attributes-policy` (bounded on-chain key/value state with a fixed writer per key, readable by any contract, versioned, travels with the token) |
 | `sale/` | `conventional-auction` (escrowed ascending bids, increment-enforced outbidding with full refunds, winner-only settlement, grace-windowed withdrawal), `dutch-auction` (interval-stepped declining curve) |
-| `test/` | **18 suites**: `identity` (incl. provenance: origin-chain and serial), `authorship`, `settlement`, `negative-payout` (non-positive policy legs rejected), an adversarial suite per policy (`royalty-policy`, `guard-policy`, `non-fungible-policy`, `issuance-policy`, `transfer-mode-policy`, `collection-policy`, `non-updatable-uri-policy`; `guarded-uri-policy` is exercised in `update-uri` and `xchain`), one per sale contract (`conventional-auction`, `dutch-auction`), `composition`, `update-uri` (incl. the veto composition case), `xchain` (the passport mechanics) and `marketplace-sim` (create on chain 0 -> sell on marketplace A -> relocate to chain 1 -> auction on marketplace B, all legs reconciled) |
+| `test/` | **19 suites**: `identity` (incl. provenance: origin-chain and serial), `authorship`, `settlement`, `negative-payout` (non-positive policy legs rejected), an adversarial suite per policy (`royalty-policy`, `guard-policy`, `non-fungible-policy`, `issuance-policy`, `transfer-mode-policy`, `attributes-policy`, `collection-policy`, `non-updatable-uri-policy`; `guarded-uri-policy` is exercised in `update-uri` and `xchain`), one per sale contract (`conventional-auction`, `dutch-auction`), `composition`, `update-uri` (incl. the veto composition case), `xchain` (the passport mechanics) and `marketplace-sim` (create on chain 0 -> sell on marketplace A -> relocate to chain 1 -> auction on marketplace B, all legs reconciled) |
 
 ## Price-discovery sales (auctions)
 
@@ -118,9 +118,9 @@ is enforced on every chain the token ever sells on. A `sale-only` or `bound` tok
 token (`guard-policy`) a relocation that changes the owner must satisfy the **transfer-guard** —
 same-chain parity — while an owner relocating to themselves stays ungated. The id needs no re-derivation
 on arrival and cannot be forged there: `create-token` re-derives with the LOCAL chain-id, so the
-relocated id fails the protocol check for everyone, on every other chain, forever. The uri is
-chain-local mutable state — a returning token keeps the local uri; all other passport state is
-immutable and verified equal on return.
+relocated id fails the protocol check for everyone, on every other chain, forever. The uri travels
+with its version (ADR-NFT-005): a returning token brings the newer uri, an older arrival never
+downgrades it, and all other passport state is immutable and verified equal on return.
 
 ## URI updates (fail closed)
 

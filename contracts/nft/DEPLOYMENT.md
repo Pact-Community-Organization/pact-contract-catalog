@@ -73,7 +73,7 @@ flowchart TD
    `creation-venues`); then governance sets the protocol leg once with
    `set-protocol-fee` (50 bps to the PCO account at launch, founder 2026-10-12)
 5. **`core/ledger`** + its tables (`ledger-table`, `tokens`)
-6. **Policies** (each + its tables): `royalty-policy`, `non-fungible-policy`, `issuance-policy`, `transfer-mode-policy`,
+6. **Policies** (each + its tables; `guarded-uri-policy` has two: `uri-guards`, `uri-history`; `attributes-policy` three: `specs`, `attributes`, `attr-history`): `royalty-policy`, `non-fungible-policy`, `issuance-policy`, `transfer-mode-policy`, `attributes-policy`,
    and whichever of `collection-policy` / `guard-policy` / `guarded-uri-policy`
    / `non-updatable-uri-policy` the deployment needs. Policies are independent;
    deploy only what will be used — more can be added later.

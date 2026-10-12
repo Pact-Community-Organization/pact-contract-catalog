@@ -54,6 +54,7 @@
 (load "../policies/non-updatable-uri-policy.pact")
 (load "../policies/guarded-uri-policy.pact")
 (create-table nft.guarded-uri-policy.uri-guards)
+(create-table nft.guarded-uri-policy.uri-history)
 ;; NO registry: a uri policy participates simply by being ATTACHED to the
 ;; token (the manager evaluates every attached policy's uri-decision stance).
 (commit-tx)
@@ -173,7 +174,7 @@
 (env-sigs [ { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 1.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.guarded-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
+        , 'policies: [nft.guarded-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }))
   (expect-failure "the manager's routing is not directly callable" "not granted"
     (nft.policy-manager.enforce-update-uri fake "ipfs://evil"))
   (expect-failure "the guarded policy's hook is not directly callable" "not granted"
@@ -198,6 +199,108 @@
     (read-keyset 'dave) 1.0)
   (expect "dave holds token A" 1.0
     (nft.ledger.get-balance id "k:3333333333333333333333333333333333333333333333333333333333333333")))
+(commit-tx)
+
+;; ===========================================================================
+;; ADR-NFT-005 — versions, event history, on-chain history, holder freeze, travel
+;; ===========================================================================
+(begin-tx "versions and the URI-UPDATED trail")
+(env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect "token A is at uri-version 1 after its one update" 1 (nft.ledger.get-uri-version id))
+  (expect "token A defaulted to event history and no holder freeze" { 'history: "events", 'holder-freeze: false }
+    (let ((o (nft.guarded-uri-policy.get-uri-options id))) { 'history: (at 'history o), 'holder-freeze: (at 'holder-freeze o) }))
+  (env-sigs [ { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (env-events true)
+  (nft.ledger.update-uri id "ipfs://a-3")
+  (let ((ev (at 0 (filter (lambda (e) (= "nft.ledger.URI-UPDATED" (at 'name e))) (env-events true)))))
+    (expect "URI-UPDATED carries version, old and new" [id 2 "ipfs://a-2" "ipfs://a-3"] (at 'params ev)))
+  (expect "version 2" 2 (nft.ledger.get-uri-version id)))
+(commit-tx)
+
+(begin-tx "token H: on-chain history + holder freeze")
+(env-chain-data { "block-time": (time "2026-02-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "uri_guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }
+  , "uri_history": "onchain", "uri_holder_freeze": true })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://h-1", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (nft.ledger.create-token id 0 "ipfs://h-1" [nft.guarded-uri-policy] "" (read-keyset 'alice))
+  (nft.ledger.mint id alice (read-keyset 'alice) 1.0)
+  (env-sigs [ { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (nft.ledger.update-uri id "ipfs://h-2")
+  (expect "on-chain history kept the uri version 1 replaced" "ipfs://h-1"
+    (at 'uri (nft.guarded-uri-policy.get-uri-at id 1)))
+  ;; freeze: the curator cannot, a stranger cannot, the sole holder can
+  (expect-failure "the curator key cannot freeze in the holder's name" "Keyset failure"
+    (nft.guarded-uri-policy.freeze-copy id alice))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (expect "the sole holder freezes the uri" true (nft.guarded-uri-policy.freeze-copy id alice))
+  (env-sigs [ { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (expect-failure "the curator can no longer update" "frozen by its holder"
+    (nft.ledger.update-uri id "ipfs://h-3"))
+  (expect "the uri stands" "ipfs://h-2" (nft.ledger.get-uri id)))
+(commit-tx)
+
+(begin-tx "an unknown history mode is refused at creation; freeze refused when not enabled")
+(env-chain-data { "block-time": (time "2026-02-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "uri_guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }
+  , "uri_history": "later" })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://bad", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect-failure "uri_history must be events or onchain" "uri_history must be"
+    (nft.ledger.create-token id 0 "ipfs://bad" [nft.guarded-uri-policy] "" (read-keyset 'alice))))
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect-failure "token A (freeze not enabled) cannot be frozen" "does not allow a holder freeze"
+    (nft.guarded-uri-policy.freeze-copy id "k:3333333333333333333333333333333333333333333333333333333333333333")))
+(rollback-tx)
+
+(begin-tx "travel: the newer uri arrives with the token (step 0 on chain 0)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-01T00:00:00Z") })
+(env-hash (hash "uri-xc"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "uri_guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://t-1", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (nft.ledger.create-token id 0 "ipfs://t-1" [nft.guarded-uri-policy] "" (read-keyset 'alice))
+  (nft.ledger.mint id alice (read-keyset 'alice) 1.0)
+  (env-sigs [ { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
+  (nft.ledger.update-uri id "ipfs://t-2")
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id alice alice "1" 1.0) ] } ])
+  (nft.ledger.transfer-crosschain id alice alice (read-keyset 'alice) "1" 1.0))
+(commit-tx)
+
+(begin-tx "travel: step 1 on chain 1 shows the updated uri and version")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-03-01T00:01:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(continue-pact 1 false (hash "uri-xc"))
+(env-chain-data { "chain-id": "0" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://t-1", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (env-chain-data { "chain-id": "1" })
+  (expect "the uri on chain 1 is the updated one" "ipfs://t-2" (nft.ledger.get-uri id))
+  (expect "the version travelled" 1 (nft.ledger.get-uri-version id)))
 (commit-tx)
 
 (print "")

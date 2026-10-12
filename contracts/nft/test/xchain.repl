@@ -66,6 +66,7 @@
 (create-table nft.non-fungible-policy.minted-table)
 (load "../policies/guarded-uri-policy.pact")
 (create-table nft.guarded-uri-policy.uri-guards)
+(create-table nft.guarded-uri-policy.uri-history)
 (load "../policies/guard-policy.pact")
 (create-table nft.guard-policy.op-guards)
 (commit-tx)
@@ -286,7 +287,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 1.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.royalty-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
+        , 'policies: [nft.royalty-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }))
   (expect-failure "manager xchain-send is not directly callable" "not granted"
     (nft.policy-manager.enforce-xchain-send fake "k:a" "k:b" (read-keyset 'alice) "1" 1.0))
   (expect-failure "manager xchain-receive is not directly callable" "not granted"

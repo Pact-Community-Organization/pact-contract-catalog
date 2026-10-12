@@ -229,7 +229,7 @@
   , "collection_id": (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.collection-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
+        , 'policies: [nft.collection-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }))
   (expect-failure "enforce-init is not directly callable" "not granted"
     (nft.collection-policy.enforce-init fake))
   (expect-failure "enforce-mint is not directly callable" "not granted"

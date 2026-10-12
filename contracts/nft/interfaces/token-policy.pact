@@ -31,7 +31,10 @@
          \a wallet can read where it was born after any number of relocations \
          \(issuance-policy mints ONLY there). `serial` is the creator-chosen \
          \distinguisher hashed into the id so two tokens identical in every \
-         \other respect are still two ids; \"\" when the creator wants none."
+         \other respect are still two ids; \"\" when the creator wants none. \
+         \`uri-version` counts uri updates (ADR-NFT-005): it travels with the \
+         \token so the newest metadata wins on every chain, and a policy that \
+         \keeps on-chain history keys its rows by it."
     id:string
     supply:decimal
     precision:integer
@@ -40,7 +43,8 @@
     author:string
     author-guard:guard
     origin-chain:string
-    serial:string)
+    serial:string
+    uri-version:integer)
 
   (defschema payout
     @doc "A cut a policy DECLARES from a sale price. The policy computes the \

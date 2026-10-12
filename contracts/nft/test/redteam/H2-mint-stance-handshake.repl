@@ -38,7 +38,7 @@
     "a fabricated token-info cannot drive any policy's mint-decision"
     "not granted"
     (nft.policy-manager.mint-delegated
-      { 'id: id, 'supply: 0.0, 'precision: 0, 'uri: "ipfs://h2", 'policies: [nft.royalty-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }
+      { 'id: id, 'supply: 0.0, 'precision: 0, 'uri: "ipfs://h2", 'policies: [nft.royalty-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }
       "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0)))
 (commit-tx)
 

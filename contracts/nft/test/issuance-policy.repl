@@ -267,7 +267,7 @@
   , "issuance_spec": { "max-issued": 3.0, "min-mint": 1.0 } })
 (let ((fake { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [nft.issuance-policy]
             , 'author: "k:1111111111111111111111111111111111111111111111111111111111111111"
-            , 'author-guard: (read-keyset 'alice), 'origin-chain: "0", 'serial: "" }))
+            , 'author-guard: (read-keyset 'alice), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }))
   (expect-failure "enforce-init is not callable directly" "not granted"
     (nft.issuance-policy.enforce-init fake))
   (expect-failure "enforce-mint is not callable directly" "not granted"

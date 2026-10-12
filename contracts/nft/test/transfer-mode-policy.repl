@@ -286,7 +286,7 @@
   , "transfer_mode": "free" })
 (let ((fake { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [nft.transfer-mode-policy]
             , 'author: "k:1111111111111111111111111111111111111111111111111111111111111111"
-            , 'author-guard: (read-keyset 'alice), 'origin-chain: "0", 'serial: "" }))
+            , 'author-guard: (read-keyset 'alice), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }))
   (expect-failure "enforce-init is not callable directly" "not granted"
     (nft.transfer-mode-policy.enforce-init fake))
   (expect-failure "enforce-transfer is not callable directly" "not granted"

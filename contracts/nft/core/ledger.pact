@@ -96,7 +96,8 @@
     policies:[module{token-policy}]
     author-guard:guard
     origin-chain:string
-    serial:string)
+    serial:string
+    uri-version:integer)
   (deftable tokens:{token-schema})
 
   (defschema token-details
@@ -118,8 +119,11 @@
          \it, and a guard's key list is NOT an author. `origin-chain` and \
          \`serial` are the provenance fields of ADR-NFT-001."
     @event true)
-  (defcap URI-UPDATED:bool (id:string uri:string)
-    @doc "Emitted when a token's uri changes (policy-authorized)."
+  (defcap URI-UPDATED:bool (id:string version:integer old-uri:string new-uri:string)
+    @doc "Emitted when a token's uri changes (policy-authorized), with the new \
+         \version number and both uris: the event trail IS the default metadata \
+         \history (ADR-NFT-005). Also emitted when a relocation brings a newer \
+         \uri onto this chain."
     @event true)
   (defcap SUPPLY:bool (id:string supply:decimal)
     @doc "Emitted when the supply of ID changes."
@@ -338,10 +342,19 @@
   (defun get-token-info:object{token-info} (id:string)
     (with-read tokens id { 'id := i, 'supply := s, 'precision := p, 'uri := u
                          , 'policies := pol, 'author-guard := ag
-                         , 'origin-chain := oc, 'serial := sn }
+                         , 'origin-chain := oc, 'serial := sn, 'uri-version := uv }
       { 'id: i, 'supply: s, 'precision: p, 'uri: u, 'policies: pol
       , 'author: (create-principal ag), 'author-guard: ag
-      , 'origin-chain: oc, 'serial: sn }))
+      , 'origin-chain: oc, 'serial: sn, 'uri-version: uv }))
+
+  (defun get-uri-version:integer (id:string)
+    @doc "How many times the uri has changed (0 = as created)."
+    (at 'uri-version (read tokens id)))
+
+  ;; --- ledger-iface read-only views (reachable by policies through the modref) ----
+  (defun holder-guard:guard (id:string account:string) (account-guard id account))
+  (defun holder-balance:decimal (id:string account:string) (get-balance id account))
+  (defun token-supply:decimal (id:string) (total-supply id))
 
   (defun get-origin-chain:string (id:string)
     @doc "WHERE THIS WAS BORN: the chain-id hashed into the token id at \
@@ -424,11 +437,11 @@
         (policy-manager.enforce-init
           { 'id: id, 'supply: 0.0, 'precision: precision, 'uri: uri, 'policies: canon
           , 'author: (create-principal creation-guard), 'author-guard: creation-guard
-          , 'origin-chain: origin, 'serial: serial }))
+          , 'origin-chain: origin, 'serial: serial, 'uri-version: 0 }))
       (with-capability (CREATE-TOKEN id creation-guard)
         (insert tokens id { 'id: id, 'uri: uri, 'precision: precision, 'supply: 0.0
                           , 'policies: canon, 'author-guard: creation-guard
-                          , 'origin-chain: origin, 'serial: serial })
+                          , 'origin-chain: origin, 'serial: serial, 'uri-version: 0 })
         (emit-event (TOKEN id precision canon uri (create-principal creation-guard) creation-guard origin serial))
         true)))
 
@@ -439,10 +452,12 @@
          \permits the update (and a non-updatable-uri veto is final), so a \
          \token without such a policy has an immutable uri."
     (enforce-uri-reserved new-uri)
-    (with-capability (UPDATE-URI-CALL id new-uri)
-      (policy-manager.enforce-update-uri (get-token-info id) new-uri))
-    (update tokens id { 'uri: new-uri })
-    (emit-event (URI-UPDATED id new-uri))
+    (let ((token:object{token-info} (get-token-info id)))
+      (with-capability (UPDATE-URI-CALL id new-uri)
+        (policy-manager.enforce-update-uri token new-uri))
+      (let ((v (+ 1 (at 'uri-version token))))
+        (update tokens id { 'uri: new-uri, 'uri-version: v })
+        (emit-event (URI-UPDATED id v (at 'uri token) new-uri))))
     true)
 
   ;; --- accounts ----------------------------------------------------------------
@@ -523,8 +538,9 @@
   ;; is impossible off the minting chain and unnecessary: `create-token` on
   ;; this chain can never mint a colliding id because its re-derivation uses
   ;; THIS chain's id); policies re-bind their passports; the receiver is
-  ;; credited and the supply incremented. The uri is chain-local mutable
-  ;; state (guarded policies), so a RETURNING token keeps this chain's uri.
+  ;; credited and the supply incremented. The uri TRAVELS with its version
+  ;; (ADR-NFT-005): a returning token brings the newer uri with it, so one
+  ;; token has one look on every chain; an older arrival never downgrades.
   (defpact transfer-crosschain:bool (id:string sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
     (step
       ;; ORDER: validate the request, THEN run the token's policies, THEN take
@@ -559,37 +575,48 @@
                    , 'uri: (at 'uri token-info), 'precision: (at 'precision token-info)
                    , 'policies: (at 'policies token-info), 'passports: passports
                    , 'author-guard: (get-author-guard id)
-                   , 'origin-chain: (at 'origin-chain token-info), 'serial: (at 'serial token-info) }
+                   , 'origin-chain: (at 'origin-chain token-info), 'serial: (at 'serial token-info)
+                   , 'uri-version: (at 'uri-version token-info) }
               target-chain))
           true)))
     (step
       (resume { 'id := rid, 'receiver := rcv, 'receiver-guard := rg:guard, 'amount := amt
               , 'uri := ruri, 'precision := rprec:integer
               , 'policies := rpols:[module{token-policy}], 'passports := rpass:[object]
-              , 'author-guard := rag:guard, 'origin-chain := roc:string, 'serial := rsn:string }
+              , 'author-guard := rag:guard, 'origin-chain := roc:string, 'serial := rsn:string
+              , 'uri-version := ruv:integer }
         ;; a token's origin is the chain that DERIVED its id; a yield claiming
         ;; it was born on THIS chain cannot be genuine (it would have been
         ;; created here, not relocated here) — refuse before touching state
         (enforce (!= roc (at 'chain-id (chain-data))) "relocated token cannot claim this chain as origin")
         ;; materialize the token on first arrival; on a RETURN verify the
-        ;; immutable identity (precision + policy set + author + provenance);
-        ;; the local uri stands
+        ;; immutable identity (precision + policy set + author + provenance) and
+        ;; let the NEWER uri win (ADR-NFT-005: one card, one look, on every
+        ;; chain) — equal versions must carry the same uri; an older arrival
+        ;; never downgrades the local metadata
         (with-default-read tokens rid { 'id: "" } { 'id := existing }
           (if (= "" existing)
             (let ((_ (insert tokens rid { 'id: rid, 'uri: ruri, 'precision: rprec, 'supply: 0.0
                                         , 'policies: rpols, 'author-guard: rag
-                                        , 'origin-chain: roc, 'serial: rsn })))
+                                        , 'origin-chain: roc, 'serial: rsn, 'uri-version: ruv })))
               ;; the token was never CREATED on this chain, so no TOKEN event
               ;; ever fired here: emit it now, or an event-only indexer on this
               ;; chain never learns who made it.
               (emit-event (TOKEN rid rprec rpols ruri (create-principal rag) rag roc rsn)))
             (with-read tokens rid { 'precision := lprec, 'policies := lpols, 'author-guard := lag
-                                  , 'origin-chain := loc, 'serial := lsn }
+                                  , 'origin-chain := loc, 'serial := lsn
+                                  , 'uri := luri, 'uri-version := luv }
               (enforce (= lprec rprec) "token precision mismatch on receive")
               (enforce (= lpols rpols) "token policy set mismatch on receive")
               (enforce (= lag rag) "token author mismatch on receive")
               (enforce (= loc roc) "token origin-chain mismatch on receive")
-              (enforce (= lsn rsn) "token serial mismatch on receive"))))
+              (enforce (= lsn rsn) "token serial mismatch on receive")
+              (if (> ruv luv)
+                (let ((_ (update tokens rid { 'uri: ruri, 'uri-version: ruv })))
+                  (emit-event (URI-UPDATED rid ruv luri ruri)))
+                (if (= ruv luv)
+                  (enforce (= luri ruri) "token uri mismatch on receive at the same version")
+                  true)))))
         (with-capability (XCHAIN-RECEIVE-CALL rid rcv amt)
           (policy-manager.enforce-xchain-receive (get-token-info rid) rcv rg amt rpass))
         (with-capability (XRECEIVE rid rcv amt)

@@ -38,4 +38,15 @@
 
   (defcap XCHAIN-RECEIVE-CALL:bool (id:string receiver:string amount:decimal)
     @doc "Secures the modref call to a policy's enforce-xchain-receive (target chain).")
+
+  ;; --- read-only ownership views a policy may consult through the modref --------
+  ;; (ADR-NFT-005 / ADR-NFT-010: a holder-only action such as freezing a copy's
+  ;; metadata needs the holder's guard and balance; policies reach them through
+  ;; the manager's registered ledger, never through a static module reference.)
+  (defun holder-guard:guard (id:string account:string)
+    @doc "The guard of ACCOUNT's balance row under ID (aborts if absent).")
+  (defun holder-balance:decimal (id:string account:string)
+    @doc "ACCOUNT's balance under ID (aborts if absent).")
+  (defun token-supply:decimal (id:string)
+    @doc "The supply of ID on this chain.")
 )

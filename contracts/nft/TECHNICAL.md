@@ -297,6 +297,7 @@ flowchart TB
 | `policies/royalty-policy` | enforceable creator royalties | `royalties` |
 | `policies/transfer-mode-policy` | free / sale-only / bound, fixed at creation | `modes` |
 | `policies/issuance-policy` | fixed print run, minted only on the origin chain | `issuance` |
+| `policies/attributes-policy` | bounded on-chain key/value state, fixed writer per key, versioned, travels | `specs`, `attributes`, `attr-history` |
 | `policies/guard-policy` | four required per-operation guards | `op-guards` |
 | `policies/non-fungible-policy` | strict 1/1: precision 0, minted once ever, burned whole | `minted-table` |
 | `policies/collection-policy` | operator-curated, size-capped collections | `collections`, `collection-tokens` |
@@ -663,10 +664,27 @@ collection token is likewise operator-authorized: curation covers both admission
 and issuance. Proof: [test/collection-policy.repl](test/collection-policy.repl)
 (22 assertions).
 
-**`guarded-uri-policy`** — guard-authorized metadata updates.
+**`guarded-uri-policy`** — guard-authorized metadata updates (ADR-NFT-005).
 Init requires a `uri_guard` payload (fail closed); the stored guard then
 authorizes each specific update through `enforce-update-uri`. It votes
-`"permit"` in the stance protocol below.
+`"permit"` in the stance protocol below. Two creation-time options with safe
+defaults: `uri_history` = `"events"` (the ledger's `URI-UPDATED(id, version, old, new)`
+trail is the history) or `"onchain"` (every superseded uri is also kept in `uri-history`,
+keyed by version, readable by any contract); `uri_holder_freeze` = `false` or `true` (the
+holder of the WHOLE supply may call `freeze-copy` once; afterwards no updater can change
+the uri — one-way, owner-only, no admin counterpart). The ledger counts `uri-version` and
+the uri travels with it (§9).
+
+**`attributes-policy`** — bounded on-chain state other contracts can read (ADR-NFT-010).
+Init requires `attributes_spec = {writers: [{key, guard}], max-value-bytes, history,
+holder-freeze}` (fail closed): a fixed key set (≤ 32), each key with its own writer guard,
+a per-token value bound (≤ 4096 bytes), the same two options as above. `set-attribute`
+runs under `WRITE(id, key)`, which enforces that key's writer; versions increment;
+`ATTRIBUTE-SET` is the event trail and `attr-history` the optional on-chain one; any
+contract reads with `get-attribute` / `get-attributes`. The whole attribute set travels in
+the passport and the newer version of each key wins on return. No key can be added, no
+writer rotated, no admin path exists. Proof:
+[test/attributes-policy.repl](test/attributes-policy.repl).
 
 **`non-updatable-uri-policy`** — the immutability marker.
 Votes `"veto"` unconditionally; its `enforce-update-uri` is `(enforce false …)`.
@@ -1203,8 +1221,9 @@ The mechanisms worth naming:
   token, the immutable parts are **verified equal** instead — royalty spec,
   operation guards, 1/1 marker, collection id, uri guard must all match what
   this chain already recorded; a tampered or drifted passport aborts. The one
-  deliberate exception: the **uri is chain-local mutable state** (guarded
-  policies may have updated it here), so a returning token keeps the local uri.
+  the **uri travels with its version** (ADR-NFT-005): a returning token brings
+  the newer uri and version, equal versions must carry the same uri, and an
+  older arrival never downgrades the local metadata.
 - **Supply is net-zero.** Step 0 debits the sender and decrements supply;
   step 1 credits and increments. Mid-flight, the token exists on no chain's
   books — there is never a moment with two live copies.

@@ -229,15 +229,15 @@
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
 (expect-failure "enforce-mint cannot be called outside the ledger's mint path" "not granted"
   (nft.policy-manager.enforce-mint
-    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }
     "k:3333333333333333333333333333333333333333333333333333333333333333"
     (read-keyset 'mallory) 1.0))
 (expect-failure "enforce-init cannot be called outside create-token" "not granted"
   (nft.policy-manager.enforce-init
-    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }))
 (expect-failure "enforce-transfer cannot be called outside the transfer path" "not granted"
   (nft.policy-manager.enforce-transfer
-    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "", 'uri-version: 0 }
     "a" (read-keyset 'mallory) "b" 1.0))
 (rollback-tx)
 
