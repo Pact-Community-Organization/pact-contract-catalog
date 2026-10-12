@@ -68,8 +68,10 @@ flowchart TD
    hardware-backed.
 2. **Interfaces** — `interfaces/` in one transaction: `account-protocols`,
    `token-policy`, `poly-fungible`, `ledger-iface`, `sale`. Frozen at deploy.
-3. **`core/util`**
-4. **`core/policy-manager`** + its tables (`ledgers`, `quotes`, `sale-contracts`)
+3. **`core/util`**, then **`core/venue-registry`** + its table (`venues`)
+4. **`core/policy-manager`** + its tables (`ledgers`, `quotes`, `sale-contracts`, `params`,
+   `creation-venues`); then governance sets the protocol leg once with
+   `set-protocol-fee` (50 bps to the PCO account at launch, founder 2026-10-12)
 5. **`core/ledger`** + its tables (`ledger-table`, `tokens`)
 6. **Policies** (each + its tables): `royalty-policy`, `non-fungible-policy`, `issuance-policy`, `transfer-mode-policy`,
    and whichever of `collection-policy` / `guard-policy` / `guarded-uri-policy`

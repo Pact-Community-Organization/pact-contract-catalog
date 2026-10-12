@@ -36,10 +36,14 @@
 (load "../interfaces/ledger-iface.pact")
 (load "../interfaces/sale.pact")
 (load "../core/util.pact")
+(load "../core/venue-registry.pact")
+(create-table nft.venue-registry.venues)
 (load "../core/policy-manager.pact")
 (create-table nft.policy-manager.ledgers)
 (create-table nft.policy-manager.quotes)
 (create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.params)
+(create-table nft.policy-manager.creation-venues)
 (load "../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
@@ -81,8 +85,7 @@
 (begin-tx "partial spec (missing bps) -> creation aborts (fail closed)")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 1000, "label": "creator" } ] } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://partial", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
@@ -99,9 +102,7 @@
 (begin-tx "bps as a decimal (unboxed wire integer) -> creation aborts")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 1000.0 } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 1000.0, "label": "creator" } ], "primary": [] } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://decimal-bps", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
@@ -110,31 +111,37 @@
     (nft.ledger.create-token id 0 "ipfs://decimal-bps" [nft.royalty-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
-(begin-tx "bps over the 50% cap -> rejected")
+;; FREE MARKET (founder, 2026-10-12): there is no per-leg cap any more — 60% is
+;; a creator's right. The ONE rule is the total: a plan over 100% is refused.
+(begin-tx "a 60% royalty is accepted; a plan over 100% is rejected")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 6000 } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 6000, "label": "creator" } ], "primary": [] } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://greedy", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (expect-failure "a 60% royalty is rejected" "royalty bps must be in"
+  (expect "a 60% royalty is accepted (no per-leg cap)" true
     (nft.ledger.create-token id 0 "ipfs://greedy" [nft.royalty-policy] "" (read-keyset 'alice))))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 10001, "label": "creator" } ], "primary": [] } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://greedier", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect-failure "a plan over 100% is rejected" "total exceeds 100%"
+    (nft.ledger.create-token id 0 "ipfs://greedier" [nft.royalty-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
 (begin-tx "negative bps -> rejected")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": -1 } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": -1, "label": "creator" } ], "primary": [] } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://negative", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (expect-failure "a negative royalty is rejected" "royalty bps must be in"
+  (expect-failure "a negative royalty is rejected" "bps must not be negative"
     (nft.ledger.create-token id 0 "ipfs://negative" [nft.royalty-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
@@ -144,15 +151,13 @@
 ;; to an account its guard does not own.
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:6666666666666666666666666666666666666666666666666666666666666666"
-                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 1000 } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:6666666666666666666666666666666666666666666666666666666666666666", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 1000, "label": "creator" } ], "primary": [] } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://impersonated", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "an account/guard mismatch in the spec is rejected"
-    "creator must be the principal account of creator-guard"
+    "account must be the principal of its guard"
     (nft.ledger.create-token id 0 "ipfs://impersonated" [nft.royalty-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
@@ -162,9 +167,7 @@
 (begin-tx "create + mint token-1")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 1000 } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 1000, "label": "creator" } ], "primary": [] } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://art-1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
@@ -175,16 +178,14 @@
   (expect "alice owns token-1" 1.0
     (nft.ledger.get-balance id "k:1111111111111111111111111111111111111111111111111111111111111111"))
   (expect "the royalty terms are bound on-chain" 1000
-    (at 'bps (nft.royalty-policy.get-royalty id))))
+    (at 'bps (at 0 (at 'beneficiaries (nft.royalty-policy.get-royalty id))))))
 (commit-tx)
 
 ;; --- no hook is reachable outside the ledger flow -----------------------------
 (begin-tx "direct hook calls are rejected")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:6666666666666666666666666666666666666666666666666666666666666666"
-                    , "creator-guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
-                    , "bps": 5000 } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:6666666666666666666666666666666666666666666666666666666666666666", "guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }, "bps": 5000, "label": "creator" } ], "primary": [] } })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
         , 'policies: [nft.royalty-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
@@ -229,7 +230,7 @@
     , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
     , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
     , "fee-account": "", "fee-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
-    , "fee-bps": 0, "sale-contract": "" } })
+    , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://art-1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
@@ -256,7 +257,7 @@
     , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
     , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
     , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
-    , "fee-bps": 250, "sale-contract": "" } })
+    , "fee-bps": 250, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://art-1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
@@ -276,9 +277,7 @@
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
   ;; bogus economics in the buy tx MUST be ignored (state quote wins)
   , "quote": { "fee-bps": 0, "price": 1.0 }
-  , "royalty_spec": { "creator": "k:2222222222222222222222222222222222222222222222222222222222222222"
-                    , "creator-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
-                    , "bps": 0 } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:2222222222222222222222222222222222222222222222222222222222222222", "guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }, "bps": 0, "label": "creator" } ], "primary": [] } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://art-1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
@@ -313,9 +312,7 @@
 (begin-tx "create + mint token-2 (5% royalty, sale-only)")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-                    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 500 }
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 500, "label": "creator" } ], "primary": [] }
   , "transfer_mode": "sale-only" })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
@@ -354,7 +351,7 @@
     , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "fee-bps": 0, "sale-contract": "" } })
+    , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://art-2", 'precision: 0, 'policies: [nft.royalty-policy nft.transfer-mode-policy], 'serial: "" }
             (read-keyset 'alice))))

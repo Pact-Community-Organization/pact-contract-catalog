@@ -43,10 +43,14 @@
 (load "../interfaces/ledger-iface.pact")
 (load "../interfaces/sale.pact")
 (load "../core/util.pact")
+(load "../core/venue-registry.pact")
+(create-table nft.venue-registry.venues)
 (load "../core/policy-manager.pact")
 (create-table nft.policy-manager.ledgers)
 (create-table nft.policy-manager.quotes)
 (create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.params)
+(create-table nft.policy-manager.creation-venues)
 (load "../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
@@ -77,6 +81,7 @@
   (defun uri-decision:string (token:object{token-info}) (identity "abstain"))
   (defun enforce-update-uri:bool (token:object{token-info} new-uri:string)
     (enforce false "this policy does not permit uri updates"))
+  (defun payout-bps:integer (token:object{token-info}) 0)
   (defun enforce-buy:[object{payout}] (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string)
     (with-read rt (at 'id token) { 'creator := c, 'creator-guard := cg, 'bps := bps }
       (let ((roy (floor (/ (* (policy-manager.get-quote-price sale-id) (dec bps)) 10000.0) (coin.precision))))
@@ -131,7 +136,7 @@
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
     , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
-    , "fee-bps": 250, "sale-contract": "" } })
+    , "fee-bps": 250, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
@@ -213,7 +218,7 @@
     , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
     , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
     , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
-    , "fee-bps": 0, "sale-contract": "" } })
+    , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
@@ -264,7 +269,7 @@
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
     , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
-    , "fee-bps": 250, "sale-contract": "", "ATTACKER-EXTRA": "pwn" } })
+    , "fee-bps": 250, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "", "ATTACKER-EXTRA": "pwn" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://pin-extra", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
@@ -299,7 +304,7 @@
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
     , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
-    , "fee-bps": 250.0, "sale-contract": "" } })
+    , "fee-bps": 250.0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://pin-decimal", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }

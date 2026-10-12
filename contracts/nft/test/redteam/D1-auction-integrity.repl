@@ -34,10 +34,14 @@
 (load "../../interfaces/ledger-iface.pact")
 (load "../../interfaces/sale.pact")
 (load "../../core/util.pact")
+(load "../../core/venue-registry.pact")
+(create-table nft.venue-registry.venues)
 (load "../../core/policy-manager.pact")
 (create-table nft.policy-manager.ledgers)
 (create-table nft.policy-manager.quotes)
 (create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.params)
+(create-table nft.policy-manager.creation-venues)
 (load "../../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
@@ -67,9 +71,7 @@
 (begin-tx "create+mint")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "bps": 1000 } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 1000, "label": "creator" } ], "primary": [] } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
@@ -90,7 +92,7 @@
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
     , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
-    , "fee-bps": 250, "sale-contract": "nft.conventional-auction" } })
+    , "fee-bps": 250, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "nft.conventional-auction" } })
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://auc", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))))

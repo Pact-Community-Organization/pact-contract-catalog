@@ -68,8 +68,67 @@
     (enforce-keyset ADMIN-KS))
 
   (defconst BPS-DENOM:integer 10000)
-  (defconst MAX-FEE-BPS:integer 1000
-    @doc "Cap on the marketplace fee a quote may set: 10%.")
+
+  ;; --- the protocol leg (ADR-NFT-006): one governance-set rate, every sale -------
+  ;; Founder, 2026-10-12: the PCO protocol fee is fixed (0.5% at launch); every
+  ;; other fee is a free market bounded only by the 100% rule below. The rate
+  ;; and payee live in state, never in a quote or a buy payload. Unset = 0.
+  (defschema protocol-params
+    bps:integer
+    account:string
+    guard:guard)
+  (deftable params:{protocol-params})
+  (defconst PARAMS-KEY:string "protocol")
+
+  (defun set-protocol-fee:bool (bps:integer account:string guard:guard)
+    @doc "Governance sets the protocol leg: rate in bps and the payee, whose \
+         \name must be the principal of its guard."
+    (enforce (and (>= bps 0) (<= bps BPS-DENOM)) "protocol bps must be in [0, 10000]")
+    (if (> bps 0)
+      (enforce (validate-principal guard account) "protocol account must be the principal of its guard")
+      true)
+    (with-capability (GOVERNANCE)
+      (write params PARAMS-KEY { 'bps: bps, 'account: account, 'guard: guard }))
+    true)
+
+  (defun protocol-bps:integer ()
+    (with-default-read params PARAMS-KEY { 'bps: 0 } { 'bps := b } b))
+  (defun get-protocol:object{protocol-params} ()
+    (with-default-read params PARAMS-KEY
+      { 'bps: 0, 'account: "", 'guard: (create-capability-guard (GOVERNANCE)) }
+      { 'bps := b, 'account := a, 'guard := g } { 'bps: b, 'account: a, 'guard: g }))
+
+  ;; --- the creation venue (ADR-NFT-011): the workshop's two rates, per token ----
+  ;; A creator who creates through a venue names its id in the creation payload;
+  ;; the venue's primary and resale rates are COPIED here at that moment and never
+  ;; change for this token, whatever the venue does to its rates later.
+  (defschema creation-venue
+    venue-id:string
+    account:string
+    guard:guard
+    primary-bps:integer
+    resale-bps:integer)
+  (deftable creation-venues:{creation-venue})
+  (defconst CREATION-VENUE-MSG-KEY:string "creation_venue"
+    @doc "Optional create-token-tx payload key: the id of the venue (workshop) \
+         \the token is created through. Absent = no creation-venue leg.")
+
+  (defun get-creation-venue:object{creation-venue} (token-id:string)
+    (with-default-read creation-venues token-id
+      { 'venue-id: "", 'account: "", 'guard: (create-capability-guard (GOVERNANCE)), 'primary-bps: 0, 'resale-bps: 0 }
+      { 'venue-id := v, 'account := a, 'guard := g, 'primary-bps := p, 'resale-bps := r }
+      { 'venue-id: v, 'account: a, 'guard: g, 'primary-bps: p, 'resale-bps: r }))
+
+  (defun creation-venue-bps:integer (token-id:string seller:string author:string)
+    @doc "The creation venue's rate for THIS sale: primary when the seller is \
+         \the token's author, resale otherwise."
+    (let ((cv (get-creation-venue token-id)))
+      (if (= seller author) (at 'primary-bps cv) (at 'resale-bps cv))))
+
+  (defun policies-bps:integer (token:object{token-info})
+    @doc "Σ payout-bps over every attached policy: the most the policies will \
+         \ever claim from a sale of TOKEN."
+    (fold (+) 0 (map (lambda (p:module{token-policy}) (p::payout-bps token)) (at 'policies token))))
 
   ;; --- the registered ledger (set once at init) -------------------------------
   (defschema ledger-ref ledger:module{ledger-iface})
@@ -133,9 +192,11 @@
     price:decimal
     seller-account:string
     seller-guard:guard
+    venue-id:string
     fee-account:string
     fee-guard:guard
     fee-bps:integer
+    buyer-share-bps:integer
     sale-contract:string)
 
   (defschema quote-schema
@@ -146,25 +207,38 @@
     price:decimal
     seller-account:string
     seller-guard:guard
+    venue-id:string
     fee-account:string
     fee-guard:guard
     fee-bps:integer
+    buyer-share-bps:integer
     sale-contract:string
     active:bool)
   (deftable quotes:{quote-schema})
 
   (defconst QUOTE-MSG-KEY:string "quote"
-    @doc "Offer-tx payload key carrying the quote-spec (SELLER's tx — safe).")
+    @doc "Offer-tx payload key carrying the quote-spec (SELLER's tx — safe). \
+         \venue-id \"\" means the raw fee-account/fee-guard/fee-bps apply; a \
+         \registered venue id means the registry's listing rate, account and \
+         \guard are COPIED into the quote at offer (the raw fields are \
+         \ignored). buyer-share-bps (≤ fee-bps) is the part of the listing fee \
+         \the listing venue agrees to hand to a buyer-side venue named in the \
+         \buy tx (ADR-NFT-011).")
   (defconst BUYER-ACCT-KEY:string "buyer_fungible_account"
     @doc "Buy-tx payload key: the buyer's OWN paying account (not economics).")
+  (defconst BUYER-VENUE-KEY:string "buyer_venue_id"
+    @doc "Optional buy-tx payload key: the registered venue that brought the \
+         \buyer. It can only RECEIVE the share the seller's quote already \
+         \granted; it changes no other leg.")
   (defconst QUOTED-PRICE-MSG-KEY:string "quoted_price"
     @doc "Buy-tx payload key for a quoted sale: the CANDIDATE final price. It \
          \is only a carrier — the sale contract must validate it against its \
          \own on-chain state (recorded bids / the price curve) before the \
          \manager binds and settles it.")
 
-  (defcap QUOTE:bool (sale-id:string token-id:string price:decimal fee-bps:integer sale-contract:string) @event true)
-  (defcap SETTLED:bool (sale-id:string price:decimal fee:decimal proceeds:decimal) @event true)
+  (defcap QUOTE:bool (sale-id:string token-id:string price:decimal venue-id:string fee-bps:integer sale-contract:string) @event true)
+  (defcap SETTLED:bool (sale-id:string price:decimal protocol:decimal creation-venue:decimal fee:decimal proceeds:decimal) @event true)
+  (defcap CREATION-VENUE:bool (token-id:string venue-id:string primary-bps:integer resale-bps:integer) @event true)
 
   ;; --- the fungible escrow (one per sale-id, capability-guarded) --------------
   (defcap ESCROW:bool (sale-id:string)
@@ -193,6 +267,27 @@
     (let ((l:module{ledger-iface} (retrieve-ledger)))
       (require-capability (l::INIT-CALL (at 'id token) (at 'precision token) (at 'uri token))))
     (map (lambda (p:module{token-policy}) (p::enforce-init token)) (at 'policies token))
+    ;; the CREATION VENUE (optional): copy the named venue's two rates into
+    ;; this token, now and forever (ADR-NFT-011)
+    (let ((venue-id:string (try "" (read-string CREATION-VENUE-MSG-KEY))))
+      (if (= "" venue-id)
+        true
+        (let ((v (venue-registry.get-venue venue-id)))
+          (insert creation-venues (at 'id token)
+            { 'venue-id: venue-id, 'account: (at 'account v), 'guard: (at 'guard v)
+            , 'primary-bps: (at 'primary-bps v), 'resale-bps: (at 'resale-bps v) })
+          (emit-event (CREATION-VENUE (at 'id token) venue-id (at 'primary-bps v) (at 'resale-bps v))))))
+    ;; THE ONE RULE (founder, 2026-10-12): the total can never exceed 100%.
+    ;; At creation: protocol + the creation venue's LARGER rate + every
+    ;; policy's declared maximum must fit, so the token is always sellable by
+    ;; its own creator. The listing venue is checked against the remainder at
+    ;; offer (validate-quote).
+    (let* ((cv (get-creation-venue (at 'id token)))
+           (venue-max (if (> (at 'primary-bps cv) (at 'resale-bps cv)) (at 'primary-bps cv) (at 'resale-bps cv)))
+           (total (+ (protocol-bps) (+ venue-max (policies-bps token)))))
+      (enforce (<= total BPS-DENOM)
+        (format "payout plans exceed 100%: protocol {} + creation venue {} + policies {} bps"
+          [(protocol-bps) venue-max (policies-bps token)])))
     true)
 
   (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal)
@@ -289,25 +384,39 @@
   (defun enforce-offer:bool (token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string)
     (let ((l:module{ledger-iface} (retrieve-ledger)))
       (require-capability (l::OFFER-CALL (at 'id token) seller amount timeout sale-id)))
-    ;; the quote comes from the SELLER's offer tx and is STORED (not the buyer's)
-    (let ((q:object{quote-spec} (read-msg QUOTE-MSG-KEY)))
-      (validate-quote q)
+    ;; the quote comes from the SELLER's offer tx and is STORED (not the buyer's);
+    ;; a registered listing venue's rate, account and guard are COPIED in now
+    (let* ((raw:object{quote-spec} (read-msg QUOTE-MSG-KEY))
+           (q:object{quote-spec} (resolve-venue raw)))
+      (validate-quote q token seller)
       (insert quotes sale-id
         { 'token-id: (at 'id token), 'seller: seller, 'amount: amount
         , 'fungible: (at 'fungible q), 'price: (at 'price q)
         , 'seller-account: (at 'seller-account q), 'seller-guard: (at 'seller-guard q)
+        , 'venue-id: (at 'venue-id q)
         , 'fee-account: (at 'fee-account q), 'fee-guard: (at 'fee-guard q)
-        , 'fee-bps: (at 'fee-bps q), 'sale-contract: (at 'sale-contract q)
+        , 'fee-bps: (at 'fee-bps q), 'buyer-share-bps: (at 'buyer-share-bps q)
+        , 'sale-contract: (at 'sale-contract q)
         , 'active: true })
-      (emit-event (QUOTE sale-id (at 'id token) (at 'price q) (at 'fee-bps q) (at 'sale-contract q))))
+      (emit-event (QUOTE sale-id (at 'id token) (at 'price q) (at 'venue-id q) (at 'fee-bps q) (at 'sale-contract q))))
     ;; run policy enforce-offer hooks
     (map (lambda (p:module{token-policy}) (p::enforce-offer token seller amount timeout sale-id)) (at 'policies token))
     true)
 
-  (defun validate-quote:bool (q:object{quote-spec})
+  (defun resolve-venue:object{quote-spec} (q:object{quote-spec})
+    @doc "A quote naming a registered venue takes the venue's listing rate, \
+         \account and guard from the registry (snapshot at offer); the raw fee \
+         \fields are ignored. \"\" keeps the raw fields."
+    (if (= "" (at 'venue-id q))
+      q
+      (let ((v (venue-registry.get-venue (at 'venue-id q))))
+        (+ { 'fee-account: (at 'account v), 'fee-guard: (at 'guard v), 'fee-bps: (at 'listing-bps v) } q))))
+
+  (defun validate-quote:bool (q:object{quote-spec} token:object{token-info} seller:string)
     (let ((fungible:module{fungible-v2} (at 'fungible q))
           (price:decimal (at 'price q))
           (fee-bps:integer (at 'fee-bps q))
+          (share-bps:integer (at 'buyer-share-bps q))
           (sale-contract:string (at 'sale-contract q)))
       (if (= "" sale-contract)
         ;; fixed price: bound now, forever
@@ -318,14 +427,25 @@
           (enforce (at 'enabled sc) "sale contract is disabled")
           (enforce (= price 0.0) "a quoted sale's price must start at 0")))
       (fungible::enforce-unit price)
-      (enforce (and (>= fee-bps 0) (<= fee-bps MAX-FEE-BPS))
-        (format "fee-bps must be in [0, {}]" [MAX-FEE-BPS]))
+      (enforce (>= fee-bps 0) "fee-bps must not be negative")
+      (enforce (and (>= share-bps 0) (<= share-bps fee-bps))
+        "buyer-share-bps must be in [0, fee-bps]")
       (enforce (validate-principal (at 'seller-guard q) (at 'seller-account q))
         "seller-account must be a principal")
       (if (> fee-bps 0)
         (enforce (validate-principal (at 'fee-guard q) (at 'fee-account q))
           "fee-account must be a principal when a fee is charged")
-        true)))
+        true)
+      ;; THE ONE RULE at offer: protocol + this sale's creation-venue rate +
+      ;; the policies' maximum + the listing fee must fit in 100%. A venue whose
+      ;; fee does not fit cannot list this token; the message says the headroom.
+      (let* ((committed (+ (protocol-bps)
+                           (+ (creation-venue-bps (at 'id token) seller (at 'author token))
+                              (policies-bps token))))
+             (headroom (- BPS-DENOM committed)))
+        (enforce (<= fee-bps headroom)
+          (format "listing fee {} bps exceeds the headroom {} bps left by protocol, creation venue and policies"
+            [fee-bps headroom])))))
 
   ;; --- WITHDRAW: no manager fungible moved (the NFT returns via the ledger) ---
   ;; A quoted sale's contract must CONSENT (e.g. an auction refuses while live,
@@ -355,6 +475,7 @@
       { 'fungible := fungible:module{fungible-v2}, 'price := stored-price
       , 'seller-account := seller-account, 'seller-guard := seller-guard
       , 'fee-account := fee-account, 'fee-guard := fee-guard, 'fee-bps := fee-bps
+      , 'buyer-share-bps := share-bps
       , 'sale-contract := sale-contract }
       (let ((prec (fungible::precision))
             (escrow (escrow-account sale-id))
@@ -404,14 +525,35 @@
                                         (enforce (> (at 'amount p) 0.0)
                                           "a policy declared a non-positive payout"))
                                       policy-payouts))
-                 (fee:decimal (if (> fee-bps 0) (floor (/ (* price (dec fee-bps)) (dec BPS-DENOM)) prec) 0.0))
+                 (bps-cut (lambda (bps:integer) (if (> bps 0) (floor (/ (* price (dec bps)) (dec BPS-DENOM)) prec) 0.0)))
+                 ;; the PROTOCOL leg (governance-set, ADR-NFT-006)
+                 (proto (get-protocol))
+                 (protocol:decimal (bps-cut (at 'bps proto)))
+                 ;; the CREATION VENUE leg: primary rate when the seller is the
+                 ;; author, resale rate otherwise (ADR-NFT-011)
+                 (cv (get-creation-venue (at 'id token)))
+                 (cv-fee:decimal (bps-cut (creation-venue-bps (at 'id token) seller (at 'author token))))
+                 ;; the LISTING VENUE leg, optionally split with the venue that
+                 ;; brought the buyer (named in the buy tx; it can only RECEIVE
+                 ;; the share the seller's quote already granted)
+                 (fee:decimal (bps-cut fee-bps))
+                 (buyer-venue-id:string (try "" (read-string BUYER-VENUE-KEY)))
+                 (share:decimal (if (and (> share-bps 0) (!= "" buyer-venue-id)) (bps-cut share-bps) 0.0))
+                 (listing-fee:decimal (- fee share))
                  (cuts-total:decimal (fold (+) 0.0 (map (at 'amount) policy-payouts)))
-                 (proceeds:decimal (- price (+ cuts-total fee))))
-            (enforce (>= proceeds 0.0) "policy cuts + fee exceed the price")
-            ;; the full payout set: policy cuts + marketplace fee + seller remainder
-            (let* ((fee-leg (if (> fee 0.0) [{ 'account: fee-account, 'guard: fee-guard, 'amount: fee }] []))
-                   (seller-leg [{ 'account: seller-account, 'guard: seller-guard, 'amount: proceeds }])
-                   (raw (+ policy-payouts (+ fee-leg seller-leg)))
+                 (proceeds:decimal (- price (+ protocol (+ cv-fee (+ cuts-total fee))))))
+            (enforce (>= proceeds 0.0) "protocol + venues + policy cuts exceed the price")
+            ;; the full payout set, in commitment order: protocol -> creation
+            ;; venue -> policy cuts -> listing venue (split) -> seller remainder
+            (let* ((protocol-leg (if (> protocol 0.0) [{ 'account: (at 'account proto), 'guard: (at 'guard proto), 'amount: protocol }] []))
+                   (cv-leg (if (> cv-fee 0.0) [{ 'account: (at 'account cv), 'guard: (at 'guard cv), 'amount: cv-fee }] []))
+                   (fee-leg (if (> listing-fee 0.0) [{ 'account: fee-account, 'guard: fee-guard, 'amount: listing-fee }] []))
+                   (share-leg (if (> share 0.0)
+                                (let ((bv (venue-registry.get-venue buyer-venue-id)))
+                                  [{ 'account: (at 'account bv), 'guard: (at 'guard bv), 'amount: share }])
+                                []))
+                   (seller-leg (if (> proceeds 0.0) [{ 'account: seller-account, 'guard: seller-guard, 'amount: proceeds }] []))
+                   (raw (+ protocol-leg (+ cv-leg (+ policy-payouts (+ fee-leg (+ share-leg seller-leg))))))
                    (merged (fold (merge-payout) [] raw)))
               ;; INTERACTION 2: pay every leg from the escrow, once each
               (with-capability (ESCROW sale-id)
@@ -419,7 +561,7 @@
             ;; CONSERVATION: exactly `price` left the escrow (dust-robust)
             (let ((final (fungible::get-balance escrow)))
               (enforce (= final (- funded price)) "escrow not fully settled — conservation failed"))
-            (emit-event (SETTLED sale-id price fee proceeds)))))
+            (emit-event (SETTLED sale-id price protocol cv-fee fee proceeds)))))
       ;; the sale defpact completes on this step — record it (see SALE LIVENESS)
       (update quotes sale-id { 'active: false })
       true))

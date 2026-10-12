@@ -140,12 +140,12 @@ Three statements capture the relationship exactly:
    tracks' events sees the same economic invariants because both enforce them
    the same way — not because one defers to the other.
 
-One number that deliberately differs and must not be averaged: the framework
-caps any quote's marketplace fee at `MAX-FEE-BPS` = 1000 (**10%**, in
-`policy-manager`); standalone implementations set their own policy (Gallery, for
-instance, holds itself to an immutable 5% cap with a 2.5% default in its own
-module). Both tracks cap creator royalties at 5000 bps (**50%**) — in this
-framework that constant lives in `royalty-policy` (`MAX-ROYALTY-BPS`).
+One rule that deliberately differs and must not be averaged: the framework has
+**no per-leg cap** (ADR-NFT-006/011, founder 2026-10-12). Every fee but the
+governance-set protocol leg is a free market; the only rule is that the total of
+every leg on a sale can never exceed 100%, enforced at creation and at offer
+(§6.2). Standalone implementations set their own policy (Gallery, for instance,
+holds itself to an immutable 5% cap with a 2.5% default in its own module).
 
 ---
 
@@ -291,7 +291,8 @@ flowchart TB
 | `interfaces/sale` | what a price-discovery sale contract implements | — |
 | `interfaces/account-protocols` | account/amount validity + reserved-name protocols | — |
 | `core/ledger` | identity, balances, supply; the sale defpact; `transfer-crosschain` | `tokens`, `ledger-table` |
-| `core/policy-manager` | `-CALL` verification, quote store, **the** settlement, sale-contract registry | `quotes`, `ledgers`, `sale-contracts` |
+| `core/policy-manager` | `-CALL` verification, quote store, **the** settlement, sale-contract registry, protocol leg, creation-venue snapshots, the 100% rule | `quotes`, `ledgers`, `sale-contracts`, `params`, `creation-venues` |
+| `core/venue-registry` | permissionless venues (workshops, stores, galleries) with primary / resale / listing rates, snapshotted at use | `venues` |
 | `core/util` | `enforce-reserved` and friends | — |
 | `policies/royalty-policy` | enforceable creator royalties | `royalties` |
 | `policies/transfer-mode-policy` | free / sale-only / bound, fixed at creation | `modes` |
@@ -564,12 +565,13 @@ sequenceDiagram
 typed `read-msg` aborts on a missing or partial spec (the POL-1 fix). The same
 abort fires when `bps` arrives as a bare JSON number — on the wire it must be
 boxed as `"bps": {"int": 1000}`, because a bare number decodes to a *decimal*
-(§10, wire encoding). `bps` is
-capped at `MAX-ROYALTY-BPS` = 5000 (50% — a higher rate could leave the seller
-nothing) and the creator must be the principal of `creator-guard`
-(impersonation rejected). The spec is inserted into the policy's own
-`royalties` table — immutable thereafter (no update path) — and the `ROYALTY`
-event is emitted.
+(§10, wire encoding). The spec is a **payout plan** (ADR-NFT-011):
+`{beneficiaries: [{account, guard, bps, label}], primary: [...]}` — up to 8 payees per list,
+each account the principal of its guard (impersonation rejected), no per-leg cap; `primary`
+applies to a sale whose seller is the token's author (empty = same as `beneficiaries`). The
+policy's `payout-bps` reports the larger list total so the manager can enforce the 100% rule.
+The plan is inserted into the policy's own `royalties` table — immutable thereafter (no update
+path) — and the `ROYALTY` event is emitted.
 *Settlement (declare, don't move):* `enforce-buy` computes
 `floor(quote-price × bps / 10000)` at the quote fungible's precision — the price
 read from the manager's state-bound quote, never a payload — and returns it as a
@@ -777,11 +779,24 @@ validated and **stored** at offer time:
 
 `validate-quote` enforces: price > 0 for a fixed-price sale (or exactly 0 for a
 quoted sale naming a registered, enabled sale contract — §8); price meets the
-fungible's precision; `fee-bps ∈ [0, 1000]` (`MAX-FEE-BPS`, the 10% cap); seller
+fungible's precision; `fee-bps ≥ 0` and `buyer-share-bps ∈ [0, fee-bps]`; seller
 and — whenever a fee is charged — fee payee are principal accounts validated
-against their guards. The `QUOTE` event publishes the binding. Reading the
-payload here is safe *because it is the seller's transaction*: the seller signs
-the economics they are agreeing to.
+against their guards; and **the 100% rule**: `protocol + creation-venue rate (primary
+when the seller is the author, resale otherwise) + Σ policy payout-bps + fee-bps ≤ 10000`,
+else the offer is refused with the headroom in the message ("this venue cannot list this
+token"). `payout-bps` is each policy's **declared maximum** (for the royalty policy, the larger
+of its two lists), so the check is conservative: a settlement can never exceed what was checked,
+and when the applicable list is the smaller one the seller keeps the difference. A quote naming a registered `venue-id` takes the venue's listing rate, account and
+guard from `venue-registry` at offer (the raw fee fields are ignored). The `QUOTE` event
+publishes the binding. Reading the payload here is safe *because it is the seller's
+transaction*: the seller signs the economics they are agreeing to.
+
+Settlement then pays, in commitment order, from one escrow: the **protocol leg** (governance
+parameter, ADR-NFT-006), the **creation-venue leg** (the workshop's rate copied into the token at
+creation, ADR-NFT-011), every policy's declared cuts, the **listing-venue leg** (minus the share
+granted to a buyer-side venue named in the buy transaction, which can only receive what the
+seller's quote already granted), and the seller remainder, which may be exactly zero. The
+conservation assert covers all of them.
 
 At buy, the *only* things read from the buyer's transaction are the buyer's own
 paying account (`buyer_fungible_account`), the buyer identity for the ledger

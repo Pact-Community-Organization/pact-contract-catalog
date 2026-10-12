@@ -90,6 +90,17 @@
     ( token:object{token-info} seller:string amount:decimal timeout:integer sale-id:string )
     @doc "Run when SELLER offers AMOUNT of TOKEN for sale SALE-ID.")
 
+  (defun payout-bps:integer (token:object{token-info})
+    @doc "The MOST this policy will ever claim from any sale of TOKEN, in basis \
+         \points of the price (ADR-NFT-011). The manager sums this over every \
+         \attached policy at creation (with the protocol leg and the creation \
+         \venue's larger rate) and at offer (with the listing venue's fee) to \
+         \enforce the one rule every payout obeys: the total can never exceed \
+         \100%. Pure: no guard check, no state write; a policy that declares \
+         \no payouts returns 0. A policy whose enforce-buy could claim more \
+         \than it declares here breaks conservation on purpose and must be \
+         \treated as hostile.")
+
   (defun enforce-buy:[object{payout}]
     ( token:object{token-info} seller:string buyer:string buyer-guard:guard
       amount:decimal sale-id:string )

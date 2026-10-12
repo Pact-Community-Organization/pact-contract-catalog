@@ -230,15 +230,13 @@
 (env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
 (env-data
   { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:5555555555555555555555555555555555555555555555555555555555555555"
-    , "creator-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
-    , "bps": 500 }
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:5555555555555555555555555555555555555555555555555555555555555555", "guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }, "bps": 500, "label": "creator" } ], "primary": [] }
   , "quote":
     { "fungible": nft.lax-fungible, "price": 100.0
     , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "fee-bps": 0, "sale-contract": "" } })
+    , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
@@ -314,15 +312,13 @@
 (env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 200) })
 (env-data
   { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "bps": 0 }
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 0, "label": "creator" } ], "primary": [] }
   , "quote":
     { "fungible": nft.throwy-fungible, "price": 100.0
     , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "fee-bps": 0, "sale-contract": "" } })
+    , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id

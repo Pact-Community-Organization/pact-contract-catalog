@@ -71,6 +71,9 @@
       (emit-event (TRANSFER-MODE (at 'id token) mode)))
     true)
 
+  ;; payout stance (ADR-NFT-011): this policy claims nothing from a sale
+  (defun payout-bps:integer (token:object{token-info}) 0)
+
   (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal)
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::MINT-CALL (at 'id token) account amount)))

@@ -3,7 +3,7 @@
 ;; INVARIANT (conservation): for EVERY sale that settles, escrow-in == Σ payouts
 ;;   at the fungible's full precision — no dust created or lost, no leg double-
 ;;   paid, no leg dropped.
-;; INVARIANT (fee cap): fee-bps > MAX-FEE-BPS (10%) is rejected at offer.
+;; INVARIANT (the 100% rule): a listing fee that does not fit in the headroom left by protocol, creation venue and policies is rejected at offer.
 ;; INVARIANT (no negative proceeds): royalty + fee that exceed the price abort
 ;;   the sale (DoS acceptable — better than paying a negative seller remainder).
 ;; INVARIANT (dust royalty): a price whose floored royalty is 0 is rejected
@@ -24,9 +24,7 @@
 (begin-tx "create token (royalty 25%) for fee-cap test")
 (env-data
   { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "bps": 2500 } })
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 2500, "label": "creator" } ], "primary": [] } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
@@ -36,7 +34,7 @@
   (env-data { "a1id": id }))
 (commit-tx)
 
-(begin-tx "offer with fee-bps 1500 (>10% cap) must fail")
+(begin-tx "offer with fee-bps 9000 (over the headroom) must fail")
 (env-hash (hash "a1-feecap"))
 (env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
 (env-data
@@ -47,13 +45,13 @@
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
     , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
-    , "fee-bps": 1500, "sale-contract": "" } })
+    , "fee-bps": 9000, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://a1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
-  (expect-failure "fee-bps must be in [0, 1000]"
+  (expect-failure "a listing fee over the headroom is refused at offer" "exceeds the headroom"
     (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0)))
 (commit-tx)
 
@@ -70,7 +68,7 @@
     , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "fee-bps": 0, "sale-contract": "" } })
+    , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://a1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
@@ -93,7 +91,7 @@
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
     , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
-    , "fee-bps": 1000, "sale-contract": "" } })
+    , "fee-bps": 1000, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://a1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))

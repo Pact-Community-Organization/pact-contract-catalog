@@ -32,10 +32,14 @@
 (load "../../interfaces/ledger-iface.pact")
 (load "../../interfaces/sale.pact")
 (load "../../core/util.pact")
+(load "../../core/venue-registry.pact")
+(create-table nft.venue-registry.venues)
 (load "../../core/policy-manager.pact")
 (create-table nft.policy-manager.ledgers)
 (create-table nft.policy-manager.quotes)
 (create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.params)
+(create-table nft.policy-manager.creation-venues)
 (load "../../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
@@ -60,15 +64,13 @@
 (env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "bps": 0 }
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 0, "label": "creator" } ], "primary": [] }
   , "quote":
     { "fungible": coin, "price": 0.0
     , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
+    , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "nft.conventional-auction" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
@@ -123,15 +125,13 @@
 (env-chain-data { "block-time": (time "2026-01-01T00:00:00Z") })
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
-    , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "bps": 0 }
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 0, "label": "creator" } ], "primary": [] }
   , "quote":
     { "fungible": coin, "price": 0.0
     , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
     , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-    , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
+    , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "nft.conventional-auction" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id

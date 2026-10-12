@@ -62,10 +62,17 @@ async function deployStack(chainId: ChainId, gov: Keypair): Promise<void> {
     signers: [{ kp: SENDER00 }], data: deployData, chainId,
   });
   await send({
+    code: src('core/venue-registry.pact') + '\n(create-table free.venue-registry.venues)',
+    label: `ch${chainId}: deploy venue-registry (+table)`,
+    signers: [{ kp: SENDER00 }], data: deployData, chainId,
+  });
+  await send({
     code: src('core/policy-manager.pact')
       + '\n(create-table free.policy-manager.ledgers)'
       + '(create-table free.policy-manager.quotes)'
-      + '(create-table free.policy-manager.sale-contracts)',
+      + '(create-table free.policy-manager.sale-contracts)'
+      + '(create-table free.policy-manager.params)'
+      + '(create-table free.policy-manager.creation-venues)',
     label: `ch${chainId}: deploy policy-manager (+tables)`,
     signers: [{ kp: SENDER00 }], data: deployData, chainId,
   });
@@ -183,7 +190,7 @@ async function main(): Promise<void> {
       signers: [{ kp: alice }],
       data: {
         alice_ks: ks(alice),
-        royalty_spec: { creator: alice.account, 'creator-guard': ks(alice), bps: { int: '1000' } },
+        royalty_spec: { beneficiaries: [{ account: alice.account, guard: ks(alice), bps: { int: '1000' }, label: 'creator' }], primary: [] },
       },
       chainId: CH0,
     });
@@ -205,7 +212,7 @@ async function main(): Promise<void> {
       fungible: COIN_REF, price: { decimal: '100.0' },
       'seller-account': alice.account, 'seller-guard': ks(alice),
       'fee-account': gallery.account, 'fee-guard': ks(gallery),
-      'fee-bps': { int: '250' }, 'sale-contract': '' } },
+      'fee-bps': { int: '250' }, 'venue-id': '', 'buyer-share-bps': { int: '0' }, 'sale-contract': '' } },
     chainId: CH0,
   });
   const saleId1 = (sale1 as any).reqKey ?? (sale1 as any).metaData?.requestKey ?? recordSteps().at(-1)!.requestKey;
@@ -278,7 +285,7 @@ async function main(): Promise<void> {
       fungible: COIN_REF, price: { decimal: '0.0' },
       'seller-account': bob.account, 'seller-guard': ks(bob),
       'fee-account': bazaar.account, 'fee-guard': ks(bazaar),
-      'fee-bps': { int: '500' }, 'sale-contract': 'free.conventional-auction' } },
+      'fee-bps': { int: '500' }, 'venue-id': '', 'buyer-share-bps': { int: '0' }, 'sale-contract': 'free.conventional-auction' } },
     chainId: CH1,
   });
   const saleId2 = recordSteps().at(-1)!.requestKey;

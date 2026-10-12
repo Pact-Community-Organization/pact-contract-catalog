@@ -49,8 +49,11 @@ enforced by the framework on every sale, including yours.
    its **live guard** from the fungible's `details` — never hand-build one.
 2. **Listing (fixed price)**: your frontend builds the seller's offer — the
    ledger's `sale` defpact — with a quote naming the price, the seller's payout
-   principal, and *your* `fee-account` / `fee-guard` / `fee-bps` (≤ 1000 bps —
-   the framework's cap; charge less as policy). Economics bind in state at
+   principal, and *your* venue: either a registered `venue-id` (your listing rate,
+   account and guard are copied from the venue registry at offer) or raw
+   `fee-account` / `fee-guard` / `fee-bps`. There is no cap on your rate; the one
+   rule is that protocol + the token's creation venue + its payout plan + your fee
+   must fit in 100%, or the offer is refused. Economics bind in state at
    offer, signed by the seller. Nothing in the later buy transaction can change
    them. **Wire encoding**: in the raw transaction JSON, `fee-bps` — and every
    other `:integer`, including the `timeout` argument of the seller-signed
