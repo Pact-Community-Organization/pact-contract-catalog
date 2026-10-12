@@ -67,10 +67,10 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://frac", 'precision: 1, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://frac", 'precision: 1, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "a fractional-precision 1/1 is rejected" "requires precision 0"
-    (nft.ledger.create-token id 1 "ipfs://frac" [nft.non-fungible-policy] (read-keyset 'alice))))
+    (nft.ledger.create-token id 1 "ipfs://frac" [nft.non-fungible-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
 (begin-tx "create the 1/1 token")
@@ -78,9 +78,9 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://one-of-one" [nft.non-fungible-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://one-of-one" [nft.non-fungible-policy] "" (read-keyset 'alice))
   (expect "not minted yet" false (nft.non-fungible-policy.is-minted id)))
 (commit-tx)
 
@@ -88,7 +88,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "a 1/1 NFT mints exactly 1.0" "mints exactly 1.0"
     (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
@@ -99,7 +99,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
@@ -113,7 +113,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "a 1/1 NFT cannot be minted twice" "already minted"
     (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
@@ -126,7 +126,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.non-fungible-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
+        , 'policies: [nft.non-fungible-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
   (expect-failure "enforce-init is not directly callable" "not granted"
     (nft.non-fungible-policy.enforce-init fake))
   (expect-failure "enforce-mint is not directly callable" "not granted"
@@ -148,7 +148,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -164,7 +164,7 @@
   , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id
@@ -193,7 +193,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "a 1/1 NFT burns whole" "burns whole"
     (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 2.0)))
@@ -204,7 +204,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
   (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0)
   (expect "supply back to 0" 0.0 (nft.ledger.total-supply id)))
@@ -218,7 +218,7 @@
 ;; and this assertion would pass for the wrong reason)
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy] }
+            { 'uri: "ipfs://one-of-one", 'precision: 0, 'policies: [nft.non-fungible-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "a burned 1/1 cannot be re-minted" "already"
     (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"

@@ -25,14 +25,22 @@
          \w:...:!= and never k:ana. BOUNDARY — authorship is IDENTITY, not \
          \AUTHORITY: these two fields gate nothing. Who may issue supply is \
          \decided separately (see mint-decision); who may own, transfer, burn \
-         \or sell is the account guard's business, unchanged."
+         \or sell is the account guard's business, unchanged. \
+         \PROVENANCE (ADR-NFT-001): `origin-chain` is the chain the token was \
+         \CREATED on — the chain-id hashed into its id — stored so a policy or \
+         \a wallet can read where it was born after any number of relocations \
+         \(issuance-policy mints ONLY there). `serial` is the creator-chosen \
+         \distinguisher hashed into the id so two tokens identical in every \
+         \other respect are still two ids; \"\" when the creator wants none."
     id:string
     supply:decimal
     precision:integer
     uri:string
     policies:[module{token-policy}]
     author:string
-    author-guard:guard)
+    author-guard:guard
+    origin-chain:string
+    serial:string)
 
   (defschema payout
     @doc "A cut a policy DECLARES from a sale price. The policy computes the \

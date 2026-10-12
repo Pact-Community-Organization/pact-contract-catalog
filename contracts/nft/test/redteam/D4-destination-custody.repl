@@ -242,8 +242,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d4a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
-  (nft.ledger.create-token id 0 "ipfs://d4a" [nft.royalty-policy] (read-keyset 'sg))
+            { 'uri: "ipfs://d4a", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d4a" [nft.royalty-policy] "" (read-keyset 'sg))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -267,7 +267,7 @@
   , "buyer-guard": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:7777777777777777777777777777777777777777777777777777777777777777" })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d4a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+            { 'uri: "ipfs://d4a", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
   (env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
               , "caps": [ (nft.ledger.BUY id
                             "k:1111111111111111111111111111111111111111111111111111111111111111"
@@ -326,8 +326,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d4b", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
-  (nft.ledger.create-token id 0 "ipfs://d4b" [nft.royalty-policy] (read-keyset 'sg))
+            { 'uri: "ipfs://d4b", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d4b" [nft.royalty-policy] "" (read-keyset 'sg))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -348,7 +348,7 @@
   , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d4b", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+            { 'uri: "ipfs://d4b", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id
                             "k:1111111111111111111111111111111111111111111111111111111111111111"

@@ -72,8 +72,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://A", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://A" [nft.royalty-policy] (read-keyset 'alice))
+            { 'uri: "ipfs://A", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://A" [nft.royalty-policy] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -135,8 +135,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://B", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://B" [nft.royalty-policy] (read-keyset 'alice))
+            { 'uri: "ipfs://B", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://B" [nft.royalty-policy] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -166,7 +166,7 @@
     , "quoted_price": 5.0 }))
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://B", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+            { 'uri: "ipfs://B", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id
                             "k:1111111111111111111111111111111111111111111111111111111111111111"

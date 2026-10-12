@@ -95,9 +95,9 @@
           , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
 (let ((cid (format "{}:{}" ["collection" (hash ["Gallery Drop" (read-keyset 'carol)])]))
       (id  (nft.ledger.create-token-id
-             { 'uri: "ipfs://l5", 'precision: 0, 'policies: [nft.collection-policy] } (read-keyset 'alice))))
+             { 'uri: "ipfs://l5", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" } (read-keyset 'alice))))
   (expect "L5-D the payload collection id is the derived one" cid (read-msg "collection_id"))
-  (nft.ledger.create-token id 0 "ipfs://l5" [nft.collection-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://l5" [nft.collection-policy] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (expect "L5-D2 the token is in carol's collection" cid
@@ -111,7 +111,7 @@
   , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l5", 'precision: 0, 'policies: [nft.collection-policy] } (read-keyset 'alice))))
+            { 'uri: "ipfs://l5", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" } (read-keyset 'alice))))
   (expect-failure "L5-E only the collection operator issues supply" "Keyset failure"
     (nft.ledger.mint id "k:3333333333333333333333333333333333333333333333333333333333333333"
       (read-keyset 'mallory) 1.0))

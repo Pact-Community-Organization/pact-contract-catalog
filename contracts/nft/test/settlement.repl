@@ -103,9 +103,9 @@
                , "bps": 1000 } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://art" [nft.fixture-royalty] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://art" [nft.fixture-royalty] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (expect "alice owns her NFT" 1.0
@@ -133,7 +133,7 @@
     , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
     , "fee-bps": 250, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -161,7 +161,7 @@
 ;; bob signs BOTH the BUY managed cap (sale-id = the offer tx hash, deterministic
 ;; via env-hash) AND the coin payment into the (computable) escrow principal.
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id
@@ -191,7 +191,7 @@
 (begin-tx "bob owns it")
 (env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
   (expect "bob holds the NFT" 1.0
     (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
@@ -215,7 +215,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] } ])
@@ -228,7 +228,7 @@
 (env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 ;; bob signs WITHDRAW (sale-id = the nft-sale-2 offer tx hash, deterministic)
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            { 'uri: "ipfs://art", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.WITHDRAW id
@@ -267,9 +267,9 @@
     , "fee-bps": 250, "sale-contract": "", "ATTACKER-EXTRA": "pwn" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://pin-extra", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            { 'uri: "ipfs://pin-extra", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://pin-extra" [nft.fixture-royalty] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://pin-extra" [nft.fixture-royalty] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
@@ -302,9 +302,9 @@
     , "fee-bps": 250.0, "sale-contract": "" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://pin-decimal", 'precision: 0, 'policies: [nft.fixture-royalty] }
+            { 'uri: "ipfs://pin-decimal", 'precision: 0, 'policies: [nft.fixture-royalty], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://pin-decimal" [nft.fixture-royalty] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://pin-decimal" [nft.fixture-royalty] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"

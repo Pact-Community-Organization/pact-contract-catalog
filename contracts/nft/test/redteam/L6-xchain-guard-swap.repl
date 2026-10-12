@@ -27,8 +27,8 @@
                     , "bps": 500, "sale-only": true } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://l6" [nft.royalty-policy] (read-keyset 'alice))
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://l6" [nft.royalty-policy] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0))
 (commit-tx)
@@ -42,7 +42,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))))
   (expect-failure "L6-A a mint cannot create a squattable holding account"
     "account name must be the principal of its own guard"
     (nft.ledger.mint id "alice-vault" (read-keyset 'alice) 1.0))
@@ -61,7 +61,7 @@
   { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice))))
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.XTRANSFER id "alice-vault" "alice-vault" "1" 1.0) ] } ])
   ;; sale-only sees sender == receiver and waves it through; the ledger must not
@@ -79,7 +79,7 @@
   { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice)))
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice)))
       (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
   ;; a principal name pins its guard, so the same trick has never worked here —
   ;; this assertion locks that in
@@ -101,7 +101,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'alice)))
+            { 'uri: "ipfs://l6", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice)))
       (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.XTRANSFER id acct acct "1" 1.0) ] } ])

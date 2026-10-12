@@ -76,9 +76,9 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile-payout] }
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile-payout], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://hostile" [nft.hostile-payout] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://hostile" [nft.hostile-payout] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0))
 (commit-tx)
@@ -95,7 +95,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile-payout] }
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile-payout], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -110,7 +110,7 @@
   , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile-payout] }
+            { 'uri: "ipfs://hostile", 'precision: 0, 'policies: [nft.hostile-payout], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id

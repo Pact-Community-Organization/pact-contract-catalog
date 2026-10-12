@@ -91,9 +91,9 @@
 (env-sigs [ { "key": "a11ce00000000000000000000000000000000000000000000000000000000000", "caps": [] } ])
 (env-events true)
 (env-events true)  ;; drain
-(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe] })
+(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe], 'serial: "" })
        (id      (nft.ledger.create-token-id details (read-keyset 'ana)))
-       (_       (nft.ledger.create-token id 0 "ipfs://the-painting" [nft.author-probe] (read-keyset 'ana)))
+       (_       (nft.ledger.create-token id 0 "ipfs://the-painting" [nft.author-probe] "" (read-keyset 'ana)))
        (evs     (env-events true)))
 
   ;; AUTH-1 — the NFT identifies WHO THE AUTHOR IS, from a plain state read.
@@ -133,13 +133,13 @@
   { "ana":     { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
   , "mallory": { "keys": ["dead100000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
 (env-sigs [ { "key": "dead100000000000000000000000000000000000000000000000000000000000", "caps": [] } ])
-(let* ((details  { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe] })
+(let* ((details  { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe], 'serial: "" })
        (ana-id   (nft.ledger.create-token-id details (read-keyset 'ana)))
        (mal-id   (nft.ledger.create-token-id details (read-keyset 'mallory))))
 
   ;; AUTH-4 — NO GATEKEEPER ON CREATION. Same artwork, different author: allowed.
   (expect "AUTH-4 anyone may create their own version of the same artwork" true
-    (nft.ledger.create-token mal-id 0 "ipfs://the-painting" [nft.author-probe] (read-keyset 'mallory)))
+    (nft.ledger.create-token mal-id 0 "ipfs://the-painting" [nft.author-probe] "" (read-keyset 'mallory)))
 
   ;; AUTH-3 — and anyone can TELL THEM APART, by id and by author.
   (expect "AUTH-3 a different author gets a different token id" false (= ana-id mal-id))
@@ -162,11 +162,11 @@
   { "ana":       { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
   , "lookalike": { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "!=" } })
 (env-sigs [])
-(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] })
+(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [], 'serial: "" })
        (fake-id (nft.ledger.create-token-id details (read-keyset 'lookalike))))
   ;; the attack itself works — anyone can create under a look-alike guard...
   (expect "AUTH-5a a look-alike guard needs no signature at all" true
-    (nft.ledger.create-token fake-id 0 "ipfs://the-painting" [] (read-keyset 'lookalike)))
+    (nft.ledger.create-token fake-id 0 "ipfs://the-painting" [] "" (read-keyset 'lookalike)))
   ;; ...but the author it reports is NOT ana.
   (expect "AUTH-5 a look-alike author never renders as ana" false
     (= "k:a11ce00000000000000000000000000000000000000000000000000000000000"
@@ -191,7 +191,7 @@
   { "ana":     { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
   , "mallory": { "keys": ["dead100000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
 (env-sigs [ { "key": "dead100000000000000000000000000000000000000000000000000000000000", "caps": [] } ])
-(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe] })
+(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe], 'serial: "" })
        (ana-id  (nft.ledger.create-token-id details (read-keyset 'ana))))
   (expect-failure "AUTH-9 a stranger can NO LONGER issue supply under the author's id"
     "Keyset failure"
@@ -205,7 +205,7 @@
 (env-data
   { "ana":     { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" }
   , "mallory": { "keys": ["dead100000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
-(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe] })
+(let* ((details { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [nft.author-probe], 'serial: "" })
        (ana-id  (nft.ledger.create-token-id details (read-keyset 'ana)))
        (ana-acct "k:a11ce00000000000000000000000000000000000000000000000000000000000")
        (mal-acct "k:dead100000000000000000000000000000000000000000000000000000000000"))
@@ -236,9 +236,9 @@
 (env-data
   { "ana": { "keys": ["a11ce00000000000000000000000000000000000000000000000000000000000"], "pred": "keys-all" } })
 (env-sigs [ { "key": "a11ce00000000000000000000000000000000000000000000000000000000000", "caps": [] } ])
-(let* ((details { 'uri: "ipfs://the-voyager", 'precision: 0, 'policies: [] })
+(let* ((details { 'uri: "ipfs://the-voyager", 'precision: 0, 'policies: [], 'serial: "" })
        (id      (nft.ledger.create-token-id details (read-keyset 'ana))))
-  (nft.ledger.create-token id 0 "ipfs://the-voyager" [] (read-keyset 'ana))
+  (nft.ledger.create-token id 0 "ipfs://the-voyager" [] "" (read-keyset 'ana))
   (nft.ledger.mint id "k:a11ce00000000000000000000000000000000000000000000000000000000000" (read-keyset 'ana) 1.0)
   (env-sigs [ { "key": "a11ce00000000000000000000000000000000000000000000000000000000000"
               , "caps": [ (nft.ledger.XTRANSFER id
@@ -260,7 +260,7 @@
 (env-chain-data { "chain-id": "0" })
 (let* ((evs (env-events true))
        (id  (nft.ledger.create-token-id
-              { 'uri: "ipfs://the-voyager", 'precision: 0, 'policies: [] } (read-keyset 'ana))))
+              { 'uri: "ipfs://the-voyager", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'ana))))
   (env-chain-data { "chain-id": "1" })
   ;; WHAT THIS ENTAILS: the resume step BINDS 'author-guard out of the yield.
   ;; If the yield did not carry it, continue-pact aborts with

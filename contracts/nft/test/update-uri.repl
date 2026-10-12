@@ -62,10 +62,10 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy] }
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "create-token without a uri guard is rejected" "read-msg failure"
-    (nft.ledger.create-token id 0 "ipfs://a-1" [nft.guarded-uri-policy] (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://a-1" [nft.guarded-uri-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
 (begin-tx "create token A (uri guard = the curator key)")
@@ -74,9 +74,9 @@
   , "uri_guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy] }
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://a-1" [nft.guarded-uri-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://a-1" [nft.guarded-uri-policy] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (expect "the initial uri" "ipfs://a-1" (nft.ledger.get-uri id)))
@@ -86,7 +86,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy] }
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
   ;; the OWNER's key is not the uri guard — owner cannot update
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
@@ -114,9 +114,9 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
           , { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://b-1", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://b-1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://b-1" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://b-1" [nft.royalty-policy] "" (read-keyset 'alice))
   (expect-failure "no updatable-uri policy -> the uri is immutable"
     "the token uri is immutable"
     (nft.ledger.update-uri id "ipfs://b-2")))
@@ -133,10 +133,10 @@
           , { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://c-1", 'precision: 0
-            , 'policies: [nft.guarded-uri-policy nft.non-updatable-uri-policy] }
+            , 'policies: [nft.guarded-uri-policy nft.non-updatable-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
   (nft.ledger.create-token id 0 "ipfs://c-1"
-    [nft.guarded-uri-policy nft.non-updatable-uri-policy] (read-keyset 'alice))
+    [nft.guarded-uri-policy nft.non-updatable-uri-policy] "" (read-keyset 'alice))
   ;; THE AUDIT-HARDENED CASE: a permitting policy (guarded-uri) is stacked with
   ;; the veto, and the uri-guard holder (cccc…) signs — under the old registry
   ;; design an unregistered veto would have been silently skipped and this
@@ -157,9 +157,9 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d-1", 'precision: 0, 'policies: [nft.non-updatable-uri-policy] }
+            { 'uri: "ipfs://d-1", 'precision: 0, 'policies: [nft.non-updatable-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://d-1" [nft.non-updatable-uri-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://d-1" [nft.non-updatable-uri-policy] "" (read-keyset 'alice))
   (expect-failure "the marker vetoes the update" "the token uri is immutable"
     (nft.ledger.update-uri id "ipfs://d-2")))
 (commit-tx)
@@ -171,7 +171,7 @@
 (env-sigs [ { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 1.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.guarded-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
+        , 'policies: [nft.guarded-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
   (expect-failure "the manager's routing is not directly callable" "not granted"
     (nft.policy-manager.enforce-update-uri fake "ipfs://evil"))
   (expect-failure "the guarded policy's hook is not directly callable" "not granted"
@@ -184,7 +184,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy] }
+            { 'uri: "ipfs://a-1", 'precision: 0, 'policies: [nft.guarded-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.TRANSFER id

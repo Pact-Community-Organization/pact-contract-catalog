@@ -22,8 +22,8 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((vid (nft.ledger.create-token-id
-             { 'uri: "ipfs://victim", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
-  (nft.ledger.create-token vid 0 "ipfs://victim" [] (read-keyset 'alice))
+             { 'uri: "ipfs://victim", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice))))
+  (nft.ledger.create-token vid 0 "ipfs://victim" [] "" (read-keyset 'alice))
   (nft.ledger.mint vid "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (expect "L1-0 the victim starts at supply 1.0" 1.0 (nft.ledger.total-supply vid)))
@@ -74,8 +74,8 @@
 (env-chain-data { "chain-id": "0" })
 (env-data { "mal": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
-(let ((aid (nft.ledger.create-token-id { 'uri: "ipfs://bait", 'precision: 0, 'policies: [evil.evilpol] } (read-keyset 'mal))))
-  (nft.ledger.create-token aid 0 "ipfs://bait" [evil.evilpol] (read-keyset 'mal))
+(let ((aid (nft.ledger.create-token-id { 'uri: "ipfs://bait", 'precision: 0, 'policies: [evil.evilpol], 'serial: "" } (read-keyset 'mal))))
+  (nft.ledger.create-token aid 0 "ipfs://bait" [evil.evilpol] "" (read-keyset 'mal))
   (nft.ledger.mint aid "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'mal) 5.0))
 (commit-tx)
 
@@ -88,8 +88,8 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "mal":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
-(let ((vid (nft.ledger.create-token-id { 'uri: "ipfs://victim", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
-      (aid (nft.ledger.create-token-id { 'uri: "ipfs://bait", 'precision: 0, 'policies: [evil.evilpol] } (read-keyset 'mal))))
+(let ((vid (nft.ledger.create-token-id { 'uri: "ipfs://victim", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice)))
+      (aid (nft.ledger.create-token-id { 'uri: "ipfs://bait", 'precision: 0, 'policies: [evil.evilpol], 'serial: "" } (read-keyset 'mal))))
   (evil.evilpol.arm "supply" vid 999999.0)
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.XTRANSFER aid
@@ -115,8 +115,8 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "mal":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
-(let ((vid (nft.ledger.create-token-id { 'uri: "ipfs://victim", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
-      (aid (nft.ledger.create-token-id { 'uri: "ipfs://bait", 'precision: 0, 'policies: [evil.evilpol] } (read-keyset 'mal))))
+(let ((vid (nft.ledger.create-token-id { 'uri: "ipfs://victim", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice)))
+      (aid (nft.ledger.create-token-id { 'uri: "ipfs://bait", 'precision: 0, 'policies: [evil.evilpol], 'serial: "" } (read-keyset 'mal))))
   (evil.evilpol.arm "debit" vid 0.0)
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.XTRANSFER aid

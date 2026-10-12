@@ -80,9 +80,9 @@
                     , "bps": 1000, "sale-only": false } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://auction-art" [nft.royalty-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://auction-art" [nft.royalty-policy] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0))
 (commit-tx)
@@ -102,7 +102,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "nft.rogue-sale" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -122,7 +122,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -144,7 +144,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -170,7 +170,7 @@
     , "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
     , "fee-bps": 250, "sale-contract": "nft.conventional-auction" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -186,7 +186,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "a stranger cannot create the seller's auction" "Keyset failure"
     (nft.conventional-auction.create-auction (hash "ca-1") id 1767225700 1767226600 10.0 5.0 500)))
@@ -198,7 +198,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "a past start date is rejected" "start must be in the future"
     (nft.conventional-auction.create-auction (hash "ca-1") id 1767225000 1767226600 10.0 5.0 500))
@@ -279,7 +279,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.WITHDRAW id
@@ -311,7 +311,7 @@
   , "buyer_fungible_account": "k:3333333333333333333333333333333333333333333333333333333333333333"
   , "quoted_price": 15.0 })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
               , "caps": [ (nft.ledger.BUY id
@@ -334,7 +334,7 @@
   , "buyer_fungible_account": "k:5555555555555555555555555555555555555555555555555555555555555555"
   , "quoted_price": 12.0 })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
               , "caps": [ (nft.ledger.BUY id
@@ -357,7 +357,7 @@
   , "buyer_fungible_account": "k:5555555555555555555555555555555555555555555555555555555555555555"
   , "quoted_price": 15.0 })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
               , "caps": [ (nft.ledger.BUY id
@@ -383,7 +383,7 @@
     ;; bogus economics in the buy tx are still ignored
     , "quote": { "fee-bps": 0, "price": 1.0 } }))
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   ;; the settler is key 3333 — NOT the winner, NOT the seller: installs the
   ;; managed caps; the escrow debit authorizes via FUNDING-CALL, not a key.
@@ -429,7 +429,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
               , "caps": [ (nft.ledger.OFFER id "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0 0) ] } ])
@@ -443,7 +443,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
               , "caps": [ (nft.ledger.WITHDRAW id
@@ -471,7 +471,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
               , "caps": [ (nft.ledger.OFFER id "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0 0) ] } ])
@@ -499,7 +499,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
               , "caps": [ (nft.ledger.WITHDRAW id
@@ -514,7 +514,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
               , "caps": [ (nft.ledger.WITHDRAW id
@@ -549,7 +549,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "nft.conventional-auction" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
               , "caps": [ (nft.ledger.OFFER id "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0 0) ] } ])
@@ -643,7 +643,7 @@
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
   , "quoted_price": 10.0 })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id
@@ -660,7 +660,7 @@
 (env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 2600) })
 (env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://auction-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555"
               , "caps": [ (nft.ledger.WITHDRAW id

@@ -49,11 +49,15 @@ settled by the shared ledger's policy-manager. The quickstart walks both.
 
 ## Identity: why a shared ledger
 
-A token id is `n:{hash([token-details, chain-id, creation-guard])}` — derived from the creator's
-guard. `create-token` re-derives the id, enforces the creation guard, and inserts exactly one row:
+A token id is `n:{hash([{uri, precision, policies, serial}, chain-id, creation-guard])}` — derived
+from the creator's guard. `create-token` re-derives the id, enforces the creation guard, and inserts
+exactly one row:
 
 - **Forgery is impossible** — you cannot create a token whose id claims someone else's guard;
 - **Double-mint is impossible** — one id, one row, forever;
+- **Every asset is distinct and says where it was born** — the creating chain is in the hash and
+  stored as `origin-chain` (readable after any relocation); a creator-chosen `serial` lets one
+  creator issue tokens identical in every other respect and still tell them apart (`""` = none);
 - **The id is order-independent** — the ledger canonicalizes the policy list (name-sorted,
   duplicates rejected), so the same policy *set* always derives the same id.
 

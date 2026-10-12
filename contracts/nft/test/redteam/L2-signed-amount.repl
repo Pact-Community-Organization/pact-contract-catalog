@@ -23,8 +23,8 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l2", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://l2" [] (read-keyset 'alice))
+            { 'uri: "ipfs://l2", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://l2" [] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0))
 (commit-tx)
@@ -35,7 +35,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l2", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+            { 'uri: "ipfs://l2", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice)))
       (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
 
   ;; --- debit: a negative amount must not create balance out of nothing ------

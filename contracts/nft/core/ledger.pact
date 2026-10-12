@@ -2,14 +2,22 @@
 ;; identity, ownership balances, and supply, for the PCO `nft` framework.
 ;;
 ;; IDENTITY (the part of the Marmalade architecture that is correct, kept
-;; verbatim in behavior): a token id is `n:{hash([token-details, chain-id,
-;; creation-guard])}` — DERIVED from the creator's creation-guard. `create-token`
-;; re-derives the id and enforces equality (enforce-token-reserved), and inserts
-;; the token row (insert fails on a duplicate id). Therefore:
+;; verbatim in behavior, extended by ADR-NFT-001): a token id is
+;; `n:{hash([{uri, precision, policies, serial}, chain-id, creation-guard])}` —
+;; DERIVED from the creator's creation-guard. `create-token` re-derives the id
+;; and enforces equality (enforce-token-reserved), and inserts the token row
+;; (insert fails on a duplicate id). Therefore:
 ;;   * FORGERY is impossible — you cannot create a token with a given id unless
 ;;     you control the creation-guard that hashes to it (CREATE-TOKEN enforces
 ;;     that guard), and a fabricated id fails the protocol re-derivation.
 ;;   * DOUBLE-MINT is impossible — one id, one row, forever.
+;;   * EVERY ASSET IS DISTINCT, BY DESIGN (founder, 2026-10-12): the chain the
+;;     token is created on is part of the id and is STORED as `origin-chain`,
+;;     so the same details on two chains are two tokens and each one says
+;;     where it was born for the rest of its life, wherever it relocates; and
+;;     the creator-chosen `serial` lets one creator issue tokens identical in
+;;     every other respect and still tell them apart ("" = no serial, in which
+;;     case a second identical creation collides, as before).
 ;; This is the anchor a self-sovereign per-NFT module could never provide.
 ;;
 ;; Lifecycle mutations route through nft.policy-manager.enforce-* (the extension
@@ -86,23 +94,29 @@
     precision:integer
     supply:decimal
     policies:[module{token-policy}]
-    author-guard:guard)
+    author-guard:guard
+    origin-chain:string
+    serial:string)
   (deftable tokens:{token-schema})
 
   (defschema token-details
+    @doc "What the creator fixes at creation and what the id is derived from \
+         \(together with the creating chain and the creation-guard)."
     uri:string
     precision:integer
-    policies:[module{token-policy}])
+    policies:[module{token-policy}]
+    serial:string)
 
   ;; --- events -----------------------------------------------------------------
-  (defcap TOKEN:bool (id:string precision:integer policies:[module{token-policy}] uri:string author:string creation-guard:guard)
+  (defcap TOKEN:bool (id:string precision:integer policies:[module{token-policy}] uri:string author:string creation-guard:guard origin-chain:string serial:string)
     @doc "Emitted when a token id first becomes resident on THIS chain: at \
          \create-token, and again on the FIRST arrival of a relocated token \
          \(a token relocated to chain B was never created there, so without \
          \this an event-only indexer would never learn its author on B). \
          \`author` is the principal of `creation-guard` — index THAT; the raw \
          \guard is included only so a consumer can re-derive the id and check \
-         \it, and a guard's key list is NOT an author."
+         \it, and a guard's key list is NOT an author. `origin-chain` and \
+         \`serial` are the provenance fields of ADR-NFT-001."
     @event true)
   (defcap URI-UPDATED:bool (id:string uri:string)
     @doc "Emitted when a token's uri changes (policy-authorized)."
@@ -323,9 +337,21 @@
 
   (defun get-token-info:object{token-info} (id:string)
     (with-read tokens id { 'id := i, 'supply := s, 'precision := p, 'uri := u
-                         , 'policies := pol, 'author-guard := ag }
+                         , 'policies := pol, 'author-guard := ag
+                         , 'origin-chain := oc, 'serial := sn }
       { 'id: i, 'supply: s, 'precision: p, 'uri: u, 'policies: pol
-      , 'author: (create-principal ag), 'author-guard: ag }))
+      , 'author: (create-principal ag), 'author-guard: ag
+      , 'origin-chain: oc, 'serial: sn }))
+
+  (defun get-origin-chain:string (id:string)
+    @doc "WHERE THIS WAS BORN: the chain-id hashed into the token id at \
+         \creation. Stored once by create-token from (chain-data), carried in \
+         \the relocation yield, never read from a payload."
+    (at 'origin-chain (read tokens id)))
+
+  (defun get-serial:string (id:string)
+    @doc "The creator-chosen distinguisher hashed into the id (\"\" = none)."
+    (at 'serial (read tokens id)))
 
   (defun get-author:string (id:string)
     @doc "WHO MADE THIS: the author's address — the principal of the \
@@ -348,12 +374,15 @@
              policies))))
 
   (defun create-token-id:string (details:object{token-details} creation-guard:guard)
-    @doc "The token id is a hash of the token details + chain + CREATION-GUARD, \
-         \so the id is derived from the creator's key — forgery-proof. The \
-         \policy list is canonicalized before hashing (order-independent id)."
+    @doc "The token id is a hash of the token details (uri, precision, \
+         \canonical policies, serial) + THIS chain + CREATION-GUARD, so the id \
+         \is derived from the creator's key — forgery-proof — and from the \
+         \creating chain — every chain's creation is its own asset. The policy \
+         \list is canonicalized before hashing (order-independent id)."
     (let ((canon:object{token-details}
             { 'uri: (at 'uri details), 'precision: (at 'precision details)
-            , 'policies: (canonical-policies (at 'policies details)) }))
+            , 'policies: (canonical-policies (at 'policies details))
+            , 'serial: (at 'serial details) }))
       (format "{}:{}" [TOKEN-ID-PREFIX
         (hash [(format "{}" [canon]) (at 'chain-id (chain-data)) creation-guard])])))
 
@@ -376,26 +405,31 @@
   ;; --- create-token (anti-forgery / anti-double-mint entry) -------------------
   (defun create-token:bool
     ( id:string precision:integer uri:string
-      policies:[module{token-policy}] creation-guard:guard )
-    @doc "Create a token id. The id MUST re-derive from the details + \
-         \CREATION-GUARD, the caller MUST satisfy that guard, and `insert` \
-         \fails on a duplicate — one id, one token, exactly once. The policy \
-         \list is canonicalized (name-sorted, duplicates rejected): storage, \
-         \the TOKEN event and every hook dispatch use the canonical order."
+      policies:[module{token-policy}] serial:string creation-guard:guard )
+    @doc "Create a token id. The id MUST re-derive from the details (uri, \
+         \precision, canonical policies, SERIAL) + this chain + CREATION-GUARD, \
+         \the caller MUST satisfy that guard, and `insert` fails on a duplicate \
+         \— one id, one token, exactly once. The policy list is canonicalized \
+         \(name-sorted, duplicates rejected): storage, the TOKEN event and \
+         \every hook dispatch use the canonical order. The creating chain is \
+         \stored as `origin-chain` (ADR-NFT-001)."
     (enforce-uri-reserved uri)
-    (let ((canon:[module{token-policy}] (canonical-policies policies)))
+    (let ((canon:[module{token-policy}] (canonical-policies policies))
+          (origin:string (at 'chain-id (chain-data))))
       (let ((names (map (lambda (p:module{token-policy}) (format "{}" [p])) canon)))
         (enforce (= (length names) (length (distinct names))) "duplicate policy"))
-      (let ((details:object{token-details} { 'uri: uri, 'precision: precision, 'policies: canon }))
+      (let ((details:object{token-details} { 'uri: uri, 'precision: precision, 'policies: canon, 'serial: serial }))
         (enforce-token-reserved id details creation-guard))
       (with-capability (INIT-CALL id precision uri)
         (policy-manager.enforce-init
           { 'id: id, 'supply: 0.0, 'precision: precision, 'uri: uri, 'policies: canon
-          , 'author: (create-principal creation-guard), 'author-guard: creation-guard }))
+          , 'author: (create-principal creation-guard), 'author-guard: creation-guard
+          , 'origin-chain: origin, 'serial: serial }))
       (with-capability (CREATE-TOKEN id creation-guard)
         (insert tokens id { 'id: id, 'uri: uri, 'precision: precision, 'supply: 0.0
-                          , 'policies: canon, 'author-guard: creation-guard })
-        (emit-event (TOKEN id precision canon uri (create-principal creation-guard) creation-guard))
+                          , 'policies: canon, 'author-guard: creation-guard
+                          , 'origin-chain: origin, 'serial: serial })
+        (emit-event (TOKEN id precision canon uri (create-principal creation-guard) creation-guard origin serial))
         true)))
 
   ;; --- update-uri (fail closed: policy-mediated, immutable by default) --------
@@ -524,28 +558,38 @@
             (yield { 'id: id, 'receiver: receiver, 'receiver-guard: receiver-guard, 'amount: amount
                    , 'uri: (at 'uri token-info), 'precision: (at 'precision token-info)
                    , 'policies: (at 'policies token-info), 'passports: passports
-                   , 'author-guard: (get-author-guard id) }
+                   , 'author-guard: (get-author-guard id)
+                   , 'origin-chain: (at 'origin-chain token-info), 'serial: (at 'serial token-info) }
               target-chain))
           true)))
     (step
       (resume { 'id := rid, 'receiver := rcv, 'receiver-guard := rg:guard, 'amount := amt
               , 'uri := ruri, 'precision := rprec:integer
               , 'policies := rpols:[module{token-policy}], 'passports := rpass:[object]
-              , 'author-guard := rag:guard }
+              , 'author-guard := rag:guard, 'origin-chain := roc:string, 'serial := rsn:string }
+        ;; a token's origin is the chain that DERIVED its id; a yield claiming
+        ;; it was born on THIS chain cannot be genuine (it would have been
+        ;; created here, not relocated here) — refuse before touching state
+        (enforce (!= roc (at 'chain-id (chain-data))) "relocated token cannot claim this chain as origin")
         ;; materialize the token on first arrival; on a RETURN verify the
-        ;; immutable identity (precision + policy set); the local uri stands
+        ;; immutable identity (precision + policy set + author + provenance);
+        ;; the local uri stands
         (with-default-read tokens rid { 'id: "" } { 'id := existing }
           (if (= "" existing)
             (let ((_ (insert tokens rid { 'id: rid, 'uri: ruri, 'precision: rprec, 'supply: 0.0
-                                        , 'policies: rpols, 'author-guard: rag })))
+                                        , 'policies: rpols, 'author-guard: rag
+                                        , 'origin-chain: roc, 'serial: rsn })))
               ;; the token was never CREATED on this chain, so no TOKEN event
               ;; ever fired here: emit it now, or an event-only indexer on this
               ;; chain never learns who made it.
-              (emit-event (TOKEN rid rprec rpols ruri (create-principal rag) rag)))
-            (with-read tokens rid { 'precision := lprec, 'policies := lpols, 'author-guard := lag }
+              (emit-event (TOKEN rid rprec rpols ruri (create-principal rag) rag roc rsn)))
+            (with-read tokens rid { 'precision := lprec, 'policies := lpols, 'author-guard := lag
+                                  , 'origin-chain := loc, 'serial := lsn }
               (enforce (= lprec rprec) "token precision mismatch on receive")
               (enforce (= lpols rpols) "token policy set mismatch on receive")
-              (enforce (= lag rag) "token author mismatch on receive"))))
+              (enforce (= lag rag) "token author mismatch on receive")
+              (enforce (= loc roc) "token origin-chain mismatch on receive")
+              (enforce (= lsn rsn) "token serial mismatch on receive"))))
         (with-capability (XCHAIN-RECEIVE-CALL rid rcv amt)
           (policy-manager.enforce-xchain-receive (get-token-info rid) rcv rg amt rpass))
         (with-capability (XRECEIVE rid rcv amt)

@@ -93,10 +93,10 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://the-painting", 'precision: 0
-            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (nft.ledger.create-token id 0 "ipfs://the-painting"
-    [nft.non-fungible-policy nft.royalty-policy] (read-keyset 'alice))
+    [nft.non-fungible-policy nft.royalty-policy] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (expect "alice holds her painting on chain 0" 1.0
@@ -120,7 +120,7 @@
     , "fee-bps": 250, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://the-painting", 'precision: 0
-            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -136,7 +136,7 @@
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://the-painting", 'precision: 0
-            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id
@@ -170,7 +170,7 @@
   , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://the-painting", 'precision: 0
-            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.XTRANSFER id
@@ -191,7 +191,7 @@
 (env-chain-data { "chain-id": "0" })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://the-painting", 'precision: 0
-            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-chain-data { "chain-id": "1" })
   (expect "bob holds the painting on chain 1" 1.0
@@ -220,7 +220,7 @@
 (env-chain-data { "chain-id": "0" })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://the-painting", 'precision: 0
-            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-chain-data { "chain-id": "1", "block-time": (time "2026-01-01T00:00:00Z") })
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
@@ -257,7 +257,7 @@
 (env-chain-data { "chain-id": "0" })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://the-painting", 'precision: 0
-            , 'policies: [nft.non-fungible-policy nft.royalty-policy] }
+            , 'policies: [nft.non-fungible-policy nft.royalty-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-chain-data { "chain-id": "1", "block-time": (add-time (time "2026-01-01T00:00:00Z") 400) })
   ;; a third party (the bazaar's crank) executes the settlement

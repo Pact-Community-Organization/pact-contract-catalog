@@ -33,8 +33,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://f1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
-  (nft.ledger.create-token id 0 "ipfs://f1" [nft.royalty-policy] (read-keyset 'sg))
+            { 'uri: "ipfs://f1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://f1" [nft.royalty-policy] "" (read-keyset 'sg))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -55,7 +55,7 @@
 (env-data { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://f1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+            { 'uri: "ipfs://f1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
   (expect "token row survived the ledger upgrade" "ipfs://f1"
     (at 'uri (nft.ledger.get-token-info id)))
   (expect "the NFT is still escrowed (in-flight sale intact)" 0.0
@@ -79,7 +79,7 @@
   , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://f1", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+            { 'uri: "ipfs://f1", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id
                             "k:1111111111111111111111111111111111111111111111111111111111111111"

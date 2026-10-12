@@ -115,10 +115,10 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
+            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "create-token without a collection_id is rejected" "read-msg failure"
-    (nft.ledger.create-token id 0 "ipfs://c1" [nft.collection-policy] (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://c1" [nft.collection-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
 (begin-tx "an unknown collection aborts")
@@ -127,10 +127,10 @@
   , "collection_id": "no-such-collection" })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
+            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "an unknown collection id is rejected" "No value found"
-    (nft.ledger.create-token id 0 "ipfs://c1" [nft.collection-policy] (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://c1" [nft.collection-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
 (begin-tx "only the operator may add a token")
@@ -143,10 +143,10 @@
 ;; alice signs alone — carol (the operator) did not
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
+            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "a stranger cannot add a token to carol's collection" "Keyset failure"
-    (nft.ledger.create-token id 0 "ipfs://c1" [nft.collection-policy] (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://c1" [nft.collection-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
 (begin-tx "two tokens join with the operator's signature; the third overflows")
@@ -159,22 +159,22 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
           , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
 (let ((id1 (nft.ledger.create-token-id
-             { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
+             { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
              (read-keyset 'alice)))
       (id2 (nft.ledger.create-token-id
-             { 'uri: "ipfs://c2", 'precision: 0, 'policies: [nft.collection-policy] }
+             { 'uri: "ipfs://c2", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
              (read-keyset 'alice)))
       (id3 (nft.ledger.create-token-id
-             { 'uri: "ipfs://c3", 'precision: 0, 'policies: [nft.collection-policy] }
+             { 'uri: "ipfs://c3", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
              (read-keyset 'alice))))
-  (nft.ledger.create-token id1 0 "ipfs://c1" [nft.collection-policy] (read-keyset 'alice))
-  (nft.ledger.create-token id2 0 "ipfs://c2" [nft.collection-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id1 0 "ipfs://c1" [nft.collection-policy] "" (read-keyset 'alice))
+  (nft.ledger.create-token id2 0 "ipfs://c2" [nft.collection-policy] "" (read-keyset 'alice))
   (expect "the collection tracks both tokens" 2
     (at 'size (nft.collection-policy.get-collection (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)))))
   (expect "token-collection binding recorded" (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol))
     (nft.collection-policy.get-token-collection id1))
   (expect-failure "the size cap holds" "collection is full"
-    (nft.ledger.create-token id3 0 "ipfs://c3" [nft.collection-policy] (read-keyset 'alice))))
+    (nft.ledger.create-token id3 0 "ipfs://c3" [nft.collection-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
 ;; the overflow test above rolled back (REPL expect-failure does not undo the
@@ -189,13 +189,13 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
           , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
 (let ((id1 (nft.ledger.create-token-id
-             { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
+             { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
              (read-keyset 'alice)))
       (id2 (nft.ledger.create-token-id
-             { 'uri: "ipfs://c2", 'precision: 0, 'policies: [nft.collection-policy] }
+             { 'uri: "ipfs://c2", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
              (read-keyset 'alice))))
-  (nft.ledger.create-token id1 0 "ipfs://c1" [nft.collection-policy] (read-keyset 'alice))
-  (nft.ledger.create-token id2 0 "ipfs://c2" [nft.collection-policy] (read-keyset 'alice)))
+  (nft.ledger.create-token id1 0 "ipfs://c1" [nft.collection-policy] "" (read-keyset 'alice))
+  (nft.ledger.create-token id2 0 "ipfs://c2" [nft.collection-policy] "" (read-keyset 'alice)))
 (commit-tx)
 
 (begin-tx "the unbounded collection accepts a token")
@@ -208,9 +208,9 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
           , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://open-1", 'precision: 0, 'policies: [nft.collection-policy] }
+            { 'uri: "ipfs://open-1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://open-1" [nft.collection-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://open-1" [nft.collection-policy] "" (read-keyset 'alice))
   (expect "unbounded collection grew" 1
     (at 'size (nft.collection-policy.get-collection (nft.collection-policy.create-collection-id "Open Editions" (read-keyset 'carol))))))
 (commit-tx)
@@ -225,7 +225,7 @@
   , "collection_id": (nft.collection-policy.create-collection-id "Gallery Drop" (read-keyset 'carol)) })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.collection-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
+        , 'policies: [nft.collection-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
   (expect-failure "enforce-init is not directly callable" "not granted"
     (nft.collection-policy.enforce-init fake))
   (expect-failure "enforce-mint is not directly callable" "not granted"
@@ -240,7 +240,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
+            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "minting a collection token needs the operator" "Keyset failure"
     (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
@@ -252,7 +252,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
+            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
             (read-keyset 'alice))))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
@@ -275,7 +275,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
+            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -289,7 +289,7 @@
   , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy] }
+            { 'uri: "ipfs://c1", 'precision: 0, 'policies: [nft.collection-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id

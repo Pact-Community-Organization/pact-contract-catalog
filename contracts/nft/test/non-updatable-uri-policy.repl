@@ -64,7 +64,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((tok:object{nft.token-policy.token-info}
         { 'id: "n:any", 'supply: 1.0, 'precision: 0, 'uri: "ipfs://frozen"
-        , 'policies: [nft.non-updatable-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
+        , 'policies: [nft.non-updatable-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
   (expect-failure "the uri veto is unconditional" "the token uri is immutable"
     (nft.non-updatable-uri-policy.enforce-update-uri tok "ipfs://replaced")))
 (rollback-tx)
@@ -75,7 +75,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.non-updatable-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
+        , 'policies: [nft.non-updatable-uri-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
   (expect-failure "enforce-init is not directly callable" "not granted"
     (nft.non-updatable-uri-policy.enforce-init fake))
   (expect-failure "enforce-transfer is not directly callable" "not granted"
@@ -90,9 +90,9 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://frozen", 'precision: 0, 'policies: [nft.non-updatable-uri-policy] }
+            { 'uri: "ipfs://frozen", 'precision: 0, 'policies: [nft.non-updatable-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://frozen" [nft.non-updatable-uri-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://frozen" [nft.non-updatable-uri-policy] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (expect "alice holds the token" 1.0
@@ -111,7 +111,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://frozen", 'precision: 0, 'policies: [nft.non-updatable-uri-policy] }
+            { 'uri: "ipfs://frozen", 'precision: 0, 'policies: [nft.non-updatable-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -125,7 +125,7 @@
   , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://frozen", 'precision: 0, 'policies: [nft.non-updatable-uri-policy] }
+            { 'uri: "ipfs://frozen", 'precision: 0, 'policies: [nft.non-updatable-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id
@@ -150,7 +150,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://frozen", 'precision: 0, 'policies: [nft.non-updatable-uri-policy] }
+            { 'uri: "ipfs://frozen", 'precision: 0, 'policies: [nft.non-updatable-uri-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.TRANSFER id

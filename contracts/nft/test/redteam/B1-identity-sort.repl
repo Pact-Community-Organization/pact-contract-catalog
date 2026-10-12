@@ -21,10 +21,10 @@
 (begin-tx "order-independence of token id")
 (namespace "nft")
 (let ((id-ab (nft.ledger.create-token-id
-               { 'uri: "ipfs://x", 'precision: 0, 'policies: [nft.royalty-policy nft.guard-policy] }
+               { 'uri: "ipfs://x", 'precision: 0, 'policies: [nft.royalty-policy nft.guard-policy], 'serial: "" }
                (read-keyset 'g)))
       (id-ba (nft.ledger.create-token-id
-               { 'uri: "ipfs://x", 'precision: 0, 'policies: [nft.guard-policy nft.royalty-policy] }
+               { 'uri: "ipfs://x", 'precision: 0, 'policies: [nft.guard-policy nft.royalty-policy], 'serial: "" }
                (read-keyset 'g))))
   (expect "policy-list order must NOT change the token id" id-ab id-ba))
 (commit-tx)
@@ -39,10 +39,10 @@
 (env-keys ["7777777777777777777777777777777777777777777777777777777777777777"])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://dup", 'precision: 0, 'policies: [nft.royalty-policy nft.royalty-policy] }
+            { 'uri: "ipfs://dup", 'precision: 0, 'policies: [nft.royalty-policy nft.royalty-policy], 'serial: "" }
             (read-keyset 'g7))))
   (expect-failure "duplicate policy"
-    (nft.ledger.create-token id 0 "ipfs://dup" [nft.royalty-policy nft.royalty-policy] (read-keyset 'g7))))
+    (nft.ledger.create-token id 0 "ipfs://dup" [nft.royalty-policy nft.royalty-policy] "" (read-keyset 'g7))))
 (commit-tx)
 
 ;; ---- INVARIANT 4: anti-forgery — id must re-derive from MY guard -----------
@@ -57,15 +57,15 @@
 (env-keys ["2222222222222222222222222222222222222222222222222222222222222222"])
 (namespace "nft")
 (let ((victim-id (nft.ledger.create-token-id
-                   { 'uri: "ipfs://victim", 'precision: 0, 'policies: [nft.royalty-policy] }
+                   { 'uri: "ipfs://victim", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
                    (read-keyset 'victim))))
   ;; attacker supplies the victim's id but their OWN creation-guard -> re-derivation mismatch
   (expect-failure "token protocol violation"
-    (nft.ledger.create-token victim-id 0 "ipfs://victim" [nft.royalty-policy] (read-keyset 'attacker)))
+    (nft.ledger.create-token victim-id 0 "ipfs://victim" [nft.royalty-policy] "" (read-keyset 'attacker)))
   ;; attacker supplies the victim's id AND the victim's guard, but cannot SIGN it
   (env-sigs [])
   (expect-failure "cannot satisfy the victim's creation guard"
-    (nft.ledger.create-token victim-id 0 "ipfs://victim" [nft.royalty-policy] (read-keyset 'victim))))
+    (nft.ledger.create-token victim-id 0 "ipfs://victim" [nft.royalty-policy] "" (read-keyset 'victim))))
 (commit-tx)
 
 ;; ---- INVARIANT 3: no double-mint of an id ----------------------------------
@@ -78,11 +78,11 @@
 (env-keys ["7777777777777777777777777777777777777777777777777777777777777777"])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://once", 'precision: 0, 'policies: [nft.royalty-policy] }
+            { 'uri: "ipfs://once", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
             (read-keyset 'g7))))
-  (nft.ledger.create-token id 0 "ipfs://once" [nft.royalty-policy] (read-keyset 'g7))
+  (nft.ledger.create-token id 0 "ipfs://once" [nft.royalty-policy] "" (read-keyset 'g7))
   (expect-failure "second create of the same id must fail (insert)"
-    (nft.ledger.create-token id 0 "ipfs://once" [nft.royalty-policy] (read-keyset 'g7))))
+    (nft.ledger.create-token id 0 "ipfs://once" [nft.royalty-policy] "" (read-keyset 'g7))))
 (commit-tx)
 
 (print "B1 COMPLETE")

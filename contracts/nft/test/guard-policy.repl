@@ -69,10 +69,10 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://no-guards", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://no-guards", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "create-token without operation guards is rejected" "read-msg failure"
-    (nft.ledger.create-token id 0 "ipfs://no-guards" [nft.guard-policy] (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://no-guards" [nft.guard-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
 (begin-tx "a MISSING guard field -> creation aborts (the POL-1 fix)")
@@ -84,11 +84,11 @@
     , "sale-guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" } } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://partial-guards", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://partial-guards", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "a missing transfer-guard aborts creation — it does NOT default to open"
     "Runtime typecheck failure"
-    (nft.ledger.create-token id 0 "ipfs://partial-guards" [nft.guard-policy] (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://partial-guards" [nft.guard-policy] "" (read-keyset 'alice))))
 (rollback-tx)
 
 ;; ===========================================================================
@@ -104,9 +104,9 @@
     , "transfer-guard": { "keys": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"], "pred": "keys-all" } } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://guarded" [nft.guard-policy] (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://guarded" [nft.guard-policy] "" (read-keyset 'alice))
   (expect "the guards are bound on-chain" true
     (contains 'mint-guard (nft.guard-policy.get-guards id))))
 (commit-tx)
@@ -117,7 +117,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "minting is closed to non-holders of the mint-guard" "Keyset failure"
     (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
@@ -129,7 +129,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
@@ -148,7 +148,7 @@
     , "transfer-guard": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" } } })
 (let ((fake:object{nft.token-policy.token-info}
         { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "ipfs://fake"
-        , 'policies: [nft.guard-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
+        , 'policies: [nft.guard-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
   (expect-failure "enforce-init is not directly callable" "not granted"
     (nft.guard-policy.enforce-init fake))
   (expect-failure "enforce-mint is not directly callable" "not granted"
@@ -163,7 +163,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.TRANSFER id
@@ -183,7 +183,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "dave": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.TRANSFER id
@@ -213,7 +213,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
               , "caps": [ (nft.ledger.OFFER id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0) ] } ])
@@ -233,7 +233,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
               , "caps": [ (nft.ledger.OFFER id "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 0) ] }
@@ -250,7 +250,7 @@
   , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.BUY id
@@ -287,7 +287,7 @@
     , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
     , "fee-bps": 0, "sale-contract": "" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] }
@@ -299,7 +299,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.WITHDRAW id
@@ -318,7 +318,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (expect-failure "burning is closed to non-holders of the burn-guard" "Keyset failure"
     (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0)))
@@ -330,7 +330,7 @@
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] }
           , { "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy] }
+            { 'uri: "ipfs://guarded", 'precision: 0, 'policies: [nft.guard-policy], 'serial: "" }
             (read-keyset 'alice))))
   (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0)
   (expect "token-g burned (supply 0)" 0.0 (nft.ledger.total-supply id)))

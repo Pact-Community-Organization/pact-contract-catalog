@@ -350,7 +350,7 @@ it.
 A framework token id is not chosen — it is **derived**:
 
 ```
-id = "n:" + hash([ {uri, precision, canonical-policies}, chain-id, creation-guard ])
+id = "n:" + hash([ {uri, precision, canonical-policies, serial}, chain-id, creation-guard ])
 ```
 
 The implementation ([core/ledger.pact](core/ledger.pact)):
@@ -359,10 +359,18 @@ The implementation ([core/ledger.pact](core/ledger.pact)):
 (defun create-token-id:string (details:object{token-details} creation-guard:guard)
   (let ((canon:object{token-details}
           { 'uri: (at 'uri details), 'precision: (at 'precision details)
-          , 'policies: (canonical-policies (at 'policies details)) }))
+          , 'policies: (canonical-policies (at 'policies details))
+          , 'serial: (at 'serial details) }))
     (format "{}:{}" [TOKEN-ID-PREFIX
       (hash [(format "{}" [canon]) (at 'chain-id (chain-data)) creation-guard])])))
 ```
+
+Two provenance facts ride along (ADR-NFT-001): the creating chain is hashed in **and stored** on
+the token row as `origin-chain`, carried in the relocation yield and verified on every return, so a
+token says where it was born for life (`get-origin-chain`); and `serial` is a creator-chosen string
+hashed into the id so that tokens identical in every other respect are still distinct ids
+(`""` = no serial, in which case a second identical creation collides as before). Both are
+fields of the `token-info` every policy receives and the last two params of the `TOKEN` event.
 
 `create-token` then enforces three things, in order:
 
@@ -424,15 +432,15 @@ sequenceDiagram
     participant L as nft.ledger
     participant M as nft.policy-manager
     participant P as each attached policy
-    C->>L: create-token(id, precision, uri, policies, creation-guard)
+    C->>L: create-token(id, precision, uri, policies, serial, creation-guard)
     L->>L: enforce-uri-reserved · canonicalize + reject duplicate policies
-    L->>L: enforce-token-reserved: id must re-derive from<br/>(details, chain-id, creation-guard)
+    L->>L: enforce-token-reserved: id must re-derive from<br/>({uri, precision, policies, serial}, chain-id, creation-guard)
     L->>M: enforce-init(token-info)  [inside INIT-CALL scope]
     M->>M: require-capability(ledger::INIT-CALL …) via stored modref
     M->>P: enforce-init(token-info)  — each policy binds its state<br/>(royalty spec, operation guards, …) fail-closed
     L->>L: with-capability(CREATE-TOKEN): enforce-guard(creation-guard)
     L->>L: insert tokens id  (aborts if id exists)
-    L-->>C: TOKEN event (id, precision, canonical policies, uri, creation-guard)
+    L-->>C: TOKEN event (id, precision, canonical policies, uri, author, creation-guard, origin-chain, serial)
 ```
 
 ---

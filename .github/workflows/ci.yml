@@ -81,6 +81,22 @@ jobs:
         [ "$fail" -eq 0 ] || exit 1
         echo "All library test suites passed."
 
+    - name: Run nft framework suites (BLOCKING)
+      # contracts/nft ships 15 suites + the red-team attack suites, each
+      # self-contained (loads the framework from source). Every one must exit 0;
+      # the exit code is the score, never a grep for FAILURE lines.
+      run: |
+        fail=0
+        for f in contracts/nft/test/*.repl contracts/nft/test/redteam/*.repl; do
+          echo "=== pact $f"
+          if ! (cd "$(dirname "$f")" && pact "$(basename "$f")"); then
+            echo "::error::nft suite failed: $f"
+            fail=1
+          fi
+        done
+        [ "$fail" -eq 0 ] || exit 1
+        echo "All nft framework suites passed."
+
     - name: Lint library Pact contracts
       # Only lint library/ — registry/ entries are verbatim artifacts from the
       # chain or upstream; they have external dependencies that require a full

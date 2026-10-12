@@ -155,8 +155,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d3a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
-  (nft.ledger.create-token id 0 "ipfs://d3a" [nft.royalty-policy] (read-keyset 'sg))
+            { 'uri: "ipfs://d3a", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d3a" [nft.royalty-policy] "" (read-keyset 'sg))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -169,7 +169,7 @@
 (env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 10) })
 (env-data { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d3a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+            { 'uri: "ipfs://d3a", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.WITHDRAW id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0 (hash "d3-dead")) ] } ])
   (continue-pact 0 true (hash "d3-dead"))
@@ -186,7 +186,7 @@
 (env-data { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d3a", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+            { 'uri: "ipfs://d3a", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
   (expect-failure "INV-2: create-auction on a terminated sale defpact must abort"
     "the sale is no longer live"
     (nft.conventional-auction.create-auction (hash "d3-dead") id 1767225700 1767226600 10.0 5.0 100)))
@@ -215,8 +215,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d3b", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
-  (nft.ledger.create-token id 0 "ipfs://d3b" [nft.royalty-policy] (read-keyset 'sg))
+            { 'uri: "ipfs://d3b", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d3b" [nft.royalty-policy] "" (read-keyset 'sg))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -230,7 +230,7 @@
 (env-chain-data { "block-time": (add-time (time "2026-01-01T00:00:00Z") 900) })
 (env-data { "sg": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d3b", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+            { 'uri: "ipfs://d3b", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.WITHDRAW id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0 (hash "d3-stale")) ] } ])
   (continue-pact 0 true (hash "d3-stale")))
@@ -274,8 +274,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d3c", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
-  (nft.ledger.create-token id 0 "ipfs://d3c" [nft.royalty-policy] (read-keyset 'sg))
+            { 'uri: "ipfs://d3c", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d3c" [nft.royalty-policy] "" (read-keyset 'sg))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -339,8 +339,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d3d", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
-  (nft.ledger.create-token id 0 "ipfs://d3d" [nft.royalty-policy] (read-keyset 'sg))
+            { 'uri: "ipfs://d3d", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
+  (nft.ledger.create-token id 0 "ipfs://d3d" [nft.royalty-policy] "" (read-keyset 'sg))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'sg) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
@@ -361,7 +361,7 @@
   , "buyer-guard": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
   , "buyer_fungible_account": "k:7777777777777777777777777777777777777777777777777777777777777777" })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://d3d", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'sg))))
+            { 'uri: "ipfs://d3d", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'sg))))
   (env-sigs [ { "key": "7777777777777777777777777777777777777777777777777777777777777777"
               , "caps": [ (nft.ledger.BUY id
                             "k:1111111111111111111111111111111111111111111111111111111111111111"

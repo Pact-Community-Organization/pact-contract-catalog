@@ -26,8 +26,8 @@
   , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://l4" [] (read-keyset 'alice))
+            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://l4" [] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0))
 (commit-tx)
@@ -42,7 +42,7 @@
   , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [] } (read-keyset 'alice))))
+            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice))))
   (expect-failure "L4-A a stranger cannot claim a name that certifies no guard"
     "account name must be the principal of its own guard"
     (nft.ledger.create-account id "alice-vault" (read-keyset 'mallory)))
@@ -74,7 +74,7 @@
   { "alice":   { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice)))
       (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.XTRANSFER id acct "alice-vault" "1" 1.0) ] } ])
@@ -95,7 +95,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [] } (read-keyset 'alice)))
+            { 'uri: "ipfs://l4", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice)))
       (acct "k:1111111111111111111111111111111111111111111111111111111111111111")
       (bacct "k:2222222222222222222222222222222222222222222222222222222222222222"))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"

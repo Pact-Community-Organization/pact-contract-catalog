@@ -173,10 +173,10 @@ async function main(): Promise<void> {
     const r = await send({
       code: `(let ((id (free.ledger.create-token-id
                 { 'uri: "ipfs://the-painting", 'precision: 0
-                , 'policies: [free.non-fungible-policy free.royalty-policy] }
+                , 'policies: [free.non-fungible-policy free.royalty-policy], 'serial: "" }
                 (read-keyset 'alice_ks))))
         (free.ledger.create-token id 0 "ipfs://the-painting"
-          [free.non-fungible-policy free.royalty-policy] (read-keyset 'alice_ks))
+          [free.non-fungible-policy free.royalty-policy] "" (read-keyset 'alice_ks))
         (free.ledger.mint id "${alice.account}" (read-keyset 'alice_ks) 1.0)
         id)`,
       label: 'create + mint on chain 0',

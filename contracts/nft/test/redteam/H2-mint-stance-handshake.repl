@@ -20,8 +20,8 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (namespace "nft")
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://h2", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'ana))))
-  (nft.ledger.create-token id 0 "ipfs://h2" [nft.royalty-policy] (read-keyset 'ana)))
+            { 'uri: "ipfs://h2", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'ana))))
+  (nft.ledger.create-token id 0 "ipfs://h2" [nft.royalty-policy] "" (read-keyset 'ana)))
 (commit-tx)
 
 (begin-tx "ATTACK: read the mint stance outside the ledger's mint path")
@@ -29,7 +29,7 @@
   { "ana": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://h2", 'precision: 0, 'policies: [nft.royalty-policy] } (read-keyset 'ana))))
+            { 'uri: "ipfs://h2", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'ana))))
   ;; the genuine token-info
   (expect-failure
     "mint-delegated is unreachable without the ledger's MINT-CALL handshake"
@@ -41,7 +41,7 @@
     "a fabricated token-info cannot drive any policy's mint-decision"
     "not granted"
     (nft.policy-manager.mint-delegated
-      { 'id: id, 'supply: 0.0, 'precision: 0, 'uri: "ipfs://h2", 'policies: [nft.royalty-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }
+      { 'id: id, 'supply: 0.0, 'precision: 0, 'uri: "ipfs://h2", 'policies: [nft.royalty-policy], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }
       "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0)))
 (commit-tx)
 

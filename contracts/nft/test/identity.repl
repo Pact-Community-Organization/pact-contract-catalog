@@ -70,11 +70,11 @@
   , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [], 'serial: "" }
             (read-keyset 'alice))))
   (expect "id carries our reserved protocol prefix" "n:" (take 2 id))
   (expect "create-token succeeds for the guard-holder" true
-    (nft.ledger.create-token id 0 "ipfs://the-painting" [] (read-keyset 'alice)))
+    (nft.ledger.create-token id 0 "ipfs://the-painting" [] "" (read-keyset 'alice)))
   (expect "token exists with supply 0" 0.0 (nft.ledger.total-supply id)))
 (commit-tx)
 
@@ -89,7 +89,7 @@
 (expect-failure "an id that does not re-derive from the details+guard is rejected"
   "token protocol violation"
   (nft.ledger.create-token "n:FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
-    0 "ipfs://forged" [] (read-keyset 'mallory)))
+    0 "ipfs://forged" [] "" (read-keyset 'mallory)))
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
@@ -106,9 +106,9 @@
 (expect-failure "mallory cannot create a token derived from ALICE's guard"
   "Keyset failure"
   (let ((id (nft.ledger.create-token-id
-              { 'uri: "ipfs://impersonation", 'precision: 0, 'policies: [] }
+              { 'uri: "ipfs://impersonation", 'precision: 0, 'policies: [], 'serial: "" }
               (read-keyset 'alice))))
-    (nft.ledger.create-token id 0 "ipfs://impersonation" [] (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://impersonation" [] "" (read-keyset 'alice))))
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
@@ -120,9 +120,9 @@
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (expect-failure "creating the SAME token id twice is rejected" "already"
   (let ((id (nft.ledger.create-token-id
-              { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+              { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [], 'serial: "" }
               (read-keyset 'alice))))
-    (nft.ledger.create-token id 0 "ipfs://the-painting" [] (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "ipfs://the-painting" [] "" (read-keyset 'alice))))
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
@@ -133,12 +133,12 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (expect-failure "a non-n: prefix is rejected" "unrecognized reserved protocol"
-  (nft.ledger.create-token "t:someforeignid" 0 "ipfs://x" [] (read-keyset 'alice)))
+  (nft.ledger.create-token "t:someforeignid" 0 "ipfs://x" [] "" (read-keyset 'alice)))
 (expect-failure "the reserved uri prefix cannot be self-assigned" "reserved uri protocol"
   (let ((id (nft.ledger.create-token-id
-              { 'uri: "nft:sneaky", 'precision: 0, 'policies: [] }
+              { 'uri: "nft:sneaky", 'precision: 0, 'policies: [], 'serial: "" }
               (read-keyset 'alice))))
-    (nft.ledger.create-token id 0 "nft:sneaky" [] (read-keyset 'alice))))
+    (nft.ledger.create-token id 0 "nft:sneaky" [] "" (read-keyset 'alice))))
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
@@ -192,26 +192,26 @@
 
 (expect "the id is order-independent (canonical policy order)"
   (nft.ledger.create-token-id
-    { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-b] }
+    { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-b], 'serial: "" }
     (read-keyset 'alice))
   (nft.ledger.create-token-id
-    { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-b nft.fixture-pol-a] }
+    { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-b nft.fixture-pol-a], 'serial: "" }
     (read-keyset 'alice)))
 
 ;; create with one order, id derived from the OTHER order — canonical end-to-end
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-b] }
+            { 'uri: "ipfs://ordered", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-b], 'serial: "" }
             (read-keyset 'alice))))
   (expect "create-token accepts the id whichever order the list is passed in" true
     (nft.ledger.create-token id 0 "ipfs://ordered"
-      [nft.fixture-pol-b nft.fixture-pol-a] (read-keyset 'alice))))
+      [nft.fixture-pol-b nft.fixture-pol-a] "" (read-keyset 'alice))))
 
 (expect-failure "a duplicate policy in the list is rejected" "duplicate policy"
   (let ((id (nft.ledger.create-token-id
-              { 'uri: "ipfs://dup", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-a] }
+              { 'uri: "ipfs://dup", 'precision: 0, 'policies: [nft.fixture-pol-a nft.fixture-pol-a], 'serial: "" }
               (read-keyset 'alice))))
     (nft.ledger.create-token id 0 "ipfs://dup"
-      [nft.fixture-pol-a nft.fixture-pol-a] (read-keyset 'alice))))
+      [nft.fixture-pol-a nft.fixture-pol-a] "" (read-keyset 'alice))))
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
@@ -223,15 +223,15 @@
 (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
 (expect-failure "enforce-mint cannot be called outside the ledger's mint path" "not granted"
   (nft.policy-manager.enforce-mint
-    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }
     "k:3333333333333333333333333333333333333333333333333333333333333333"
     (read-keyset 'mallory) 1.0))
 (expect-failure "enforce-init cannot be called outside create-token" "not granted"
   (nft.policy-manager.enforce-init
-    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }))
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }))
 (expect-failure "enforce-transfer cannot be called outside the transfer path" "not granted"
   (nft.policy-manager.enforce-transfer
-    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin") }
+    { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [], 'author: "r:nft.admin", 'author-guard: (keyset-ref-guard "nft.admin"), 'origin-chain: "0", 'serial: "" }
     "a" (read-keyset 'mallory) "b" 1.0))
 (rollback-tx)
 
@@ -249,7 +249,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [], 'serial: "" }
             (read-keyset 'alice))))
   (expect "mint 1 to alice's k: account" true
     (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
@@ -270,7 +270,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [], 'serial: "" }
             (read-keyset 'alice))))
   ;; a k: account whose guard is NOT its key is a squat — rejected
   (expect-failure "k: account with a mismatched guard is rejected"
@@ -286,7 +286,7 @@
 ;; sign SCOPED to TRANSFER (as a real transfer tx does): this installs the
 ;; managed cap AND authorizes the composed DEBIT (alice's account guard).
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.TRANSFER id
@@ -309,7 +309,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [], 'serial: "" }
             (read-keyset 'alice))))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.TRANSFER id
@@ -327,7 +327,7 @@
   , "bob":   { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
 (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [], 'serial: "" }
             (read-keyset 'alice))))
   (expect "bob burns his token" true
     (nft.ledger.burn id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0))
@@ -338,7 +338,7 @@
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [] }
+            { 'uri: "ipfs://the-painting", 'precision: 0, 'policies: [], 'serial: "" }
             (read-keyset 'alice))))
   ;; re-mint one to alice: issuance under her id is HERS, and she scopes her
   ;; signature to exactly this mint — so it authorizes nothing else in the tx.
@@ -352,6 +352,56 @@
     (read-keyset 'alice) 1.0)
   (expect-failure "a stranger cannot burn someone's token" "Keyset failure"
     (nft.ledger.burn id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; PROVENANCE (ADR-NFT-001): every asset is distinct and says where it was born
+;;   * the creating chain is hashed into the id AND stored as origin-chain;
+;;   * a creator-chosen serial makes otherwise-identical tokens two ids;
+;;   * the same serial twice collides (one id, one row), "" behaves as before.
+;; Each expect here goes RED if the mechanism it names is removed.
+;; ---------------------------------------------------------------------------
+(begin-tx "provenance: origin-chain is stored and readable")
+(env-chain-data { "chain-id": "7" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(env-events true) ;; drain
+(let* ((details { 'uri: "ipfs://born-on-seven", 'precision: 0, 'policies: [], 'serial: "" })
+       (id (nft.ledger.create-token-id details (read-keyset 'alice))))
+  (nft.ledger.create-token id 0 "ipfs://born-on-seven" [] "" (read-keyset 'alice))
+  (expect "origin-chain is the creating chain" "7" (nft.ledger.get-origin-chain id))
+  (expect "token-info carries origin-chain" "7" (at 'origin-chain (nft.ledger.get-token-info id)))
+  (expect "serial \"\" is stored" "" (nft.ledger.get-serial id))
+  (let ((ev (at 0 (filter (lambda (e) (= "nft.ledger.TOKEN" (at 'name e))) (env-events true)))))
+    (expect "TOKEN event carries origin-chain and serial as its last two params"
+      ["7" ""] (drop 6 (at 'params ev))))
+  ;; the SAME details on a different chain derive a DIFFERENT id (chain in the hash)
+  (env-chain-data { "chain-id": "8" })
+  (expect "same details on chain 8 derive a different id" false
+    (= id (nft.ledger.create-token-id details (read-keyset 'alice)))))
+(rollback-tx)
+
+(begin-tx "provenance: serial distinguishes otherwise-identical tokens")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let* ((d1 { 'uri: "ipfs://twins", 'precision: 0, 'policies: [], 'serial: "A" })
+       (d2 { 'uri: "ipfs://twins", 'precision: 0, 'policies: [], 'serial: "B" })
+       (id1 (nft.ledger.create-token-id d1 (read-keyset 'alice)))
+       (id2 (nft.ledger.create-token-id d2 (read-keyset 'alice))))
+  (expect "identical details with different serials are two ids" false (= id1 id2))
+  (expect "twin A is created" true (nft.ledger.create-token id1 0 "ipfs://twins" [] "A" (read-keyset 'alice)))
+  (expect "twin B is created" true (nft.ledger.create-token id2 0 "ipfs://twins" [] "B" (read-keyset 'alice)))
+  (expect "twin A remembers its serial" "A" (nft.ledger.get-serial id1))
+  (expect "twin B remembers its serial" "B" (nft.ledger.get-serial id2))
+  ;; the serial is part of the id: the id for serial A does not accept serial B
+  (expect-failure "an id derived with serial A is refused with serial B" "token protocol violation"
+    (nft.ledger.create-token id1 0 "ipfs://twins" [] "B" (read-keyset 'alice)))
+  ;; the same serial twice is the same id: one row, ever
+  (expect-failure "the same serial twice collides" "already found"
+    (nft.ledger.create-token id1 0 "ipfs://twins" [] "A" (read-keyset 'alice))))
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
