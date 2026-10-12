@@ -293,6 +293,8 @@ flowchart TB
 | `core/ledger` | identity, balances, supply; the sale defpact; `transfer-crosschain` | `tokens`, `ledger-table` |
 | `core/policy-manager` | `-CALL` verification, quote store, **the** settlement, sale-contract registry, protocol leg, creation-venue snapshots, the 100% rule | `quotes`, `ledgers`, `sale-contracts`, `params`, `creation-venues` |
 | `core/venue-registry` | permissionless venues (workshops, stores, galleries) with primary / resale / listing rates, snapshotted at use | `venues` |
+| `core/pack-engine` | series of packs: sealed vault, beacon-drawn openings in queued rounds | `verifiers`, `series-table`, `pool`, `requests`, `queues` |
+| `core/drand-verifier` | pinned snapshot of the sealed BN254 drand verifier (`beacon-verifier`) | — |
 | `core/util` | `enforce-reserved` and friends | — |
 | `policies/royalty-policy` | enforceable creator royalties | `royalties` |
 | `policies/transfer-mode-policy` | free / sale-only / bound, fixed at creation | `modes` |
@@ -1159,6 +1161,29 @@ ever escrowed, so nothing can strand. Proof:
 [test/dutch-auction.repl](test/dutch-auction.repl) (24 assertions).
 
 ---
+## 8.4 Packs — the pack engine (ADR-NFT-012)
+
+A **series** is configured by an artist from cards they authored on this chain: packs-total,
+cards-per-pack, slots (each with its picks and its tiers; a tier belongs to one slot), and the
+pool (card, tier, count). `lock-series` requires every slot's counts to equal exactly
+`picks × packs-total`, so the vault partitions into whole packs. `mint-pool` (artist-signed, in
+batches) mints every configured copy into the series' **vault**, a `c:` account guarded by the
+engine's `VAULT` capability that only `reveal` ever acquires; the issuance policy bounds every
+mint. `seal-series` verifies the vault, mints the sealed packs (an ordinary token whose print run
+must equal packs-total) to the artist and seals: the artist has no power left.
+
+Opening is two transactions. `request-open` burns one sealed pack held by the opener (the
+ledger's `DEBIT` proves ownership) and pins the first beacon round at least `MIN-MARGIN` (120 s)
+away whose queue has room (`MAX-QUEUE` = 5 requests per round). `reveal` is permissionless: the
+registered `beacon-verifier` proves the round's signature (the verifier is a pinned snapshot of
+the sealed drand module that runs under the live games), the queue is drawn in request order from
+a seed bound to series, round and request, picks are weighted by the remaining counts (without
+replacement), and each card moves from the vault to its opener. No house input, no block hash,
+no re-roll, no admin path. Measured on the REPL table gas model: a reveal of one request with
+three cards costs about 4,200 gas including verification. Proof:
+[test/pack-engine.repl](test/pack-engine.repl), driven by a genuine drand beacon (round
+20801767, used unmodified).
+
 ## 9 · Cross-chain relocation
 
 Kadena is a braid of parallel chains; an NFT that can only ever live on its

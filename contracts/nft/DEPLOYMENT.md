@@ -72,6 +72,9 @@ flowchart TD
 4. **`core/policy-manager`** + its tables (`ledgers`, `quotes`, `sale-contracts`, `params`,
    `creation-venues`); then governance sets the protocol leg once with
    `set-protocol-fee` (50 bps to the PCO account at launch, founder 2026-10-12)
+4b. **`interfaces/beacon-verifier`**, **`core/drand-verifier`** (sealed, no tables), then
+   **`core/pack-engine`** + its tables (`verifiers`, `series-table`, `pool`, `requests`,
+   `queues`) and the one-time `set-verifier`
 5. **`core/ledger`** + its tables (`ledger-table`, `tokens`)
 6. **Policies** (each + its tables; `guarded-uri-policy` has two: `uri-guards`, `uri-history`; `attributes-policy` three: `specs`, `attributes`, `attr-history`): `royalty-policy`, `non-fungible-policy`, `issuance-policy`, `transfer-mode-policy`, `attributes-policy`,
    and whichever of `collection-policy` / `guard-policy` / `guarded-uri-policy`

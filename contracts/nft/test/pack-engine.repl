@@ -1,0 +1,244 @@
+;; nft framework — pack-engine suite (ADR-NFT-012).
+;;
+;; Proves the pack process end to end on a REAL drand beacon (fetched from
+;; api.drand.sh for chain 04f1e9…c8c3, round 20801767, used unmodified):
+;;   * series configuration is artist-signed and validated; the pack token must be
+;;     an exact print run; a tier belongs to one slot; counts must partition;
+;;   * sealing pre-mints the vault exactly (quota-bound) and mints the packs;
+;;   * after sealing the artist's configuration powers are gone;
+;;   * request-open burns the holder's pack and pins a future round (>= 120 s);
+;;   * reveal needs the genuine beacon; a wrong signature fails; draws are
+;;     without replacement; the opener receives exactly cards-per-pack cards;
+;;     vault + delivered = configured; a round reveals once;
+;;   * the vault cannot be debited outside reveal; reveal gas is measured.
+;; Each expect goes RED if the mechanism it names is removed.
+;;
+;; Run: pact contracts/nft/test/pack-engine.repl
+
+(begin-tx "deploy nft framework + pack engine")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../interfaces/beacon-verifier.pact")
+(load "../core/util.pact")
+(load "../core/venue-registry.pact")
+(create-table nft.venue-registry.venues)
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.params)
+(create-table nft.policy-manager.creation-venues)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../policies/issuance-policy.pact")
+(create-table nft.issuance-policy.issuance)
+(load "../policies/transfer-mode-policy.pact")
+(create-table nft.transfer-mode-policy.modes)
+(load "../core/drand-verifier.pact")
+(load "../core/pack-engine.pact")
+(create-table nft.pack-engine.verifiers)
+(create-table nft.pack-engine.series-table)
+(create-table nft.pack-engine.pool)
+(create-table nft.pack-engine.requests)
+(create-table nft.pack-engine.queues)
+(nft.pack-engine.set-verifier nft.drand-verifier)
+(expect-failure "the verifier registers once" "already found" (nft.pack-engine.set-verifier nft.drand-verifier))
+(commit-tx)
+
+;; personas: alice k:1111 (artist), bob k:2222 (opener), mallory k:3333
+;; the series: 2 packs x 3 cards; slot "common" picks 2 from tier C; slot "rare" picks 1 from tier R
+;; pool: A (C, 2 copies), B (C, 2 copies), X (R, 2 copies) -> common 4 = 2x2, rare 2 = 1x2
+(begin-tx "alice creates the cards and the pack token")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 2.0, "min-mint": 1.0 }
+  , "transfer_mode": "free" })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((pols [nft.issuance-policy nft.transfer-mode-policy]))
+  (map (lambda (u:string)
+         (let ((id (nft.ledger.create-token-id { 'uri: u, 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice))))
+           (nft.ledger.create-token id 0 u pols "" (read-keyset 'alice))))
+       ["ipfs://card-A" "ipfs://card-B" "ipfs://card-X" "ipfs://pack"]))
+(commit-tx)
+
+(begin-tx "series: validation")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "mallory": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (pack (nft.ledger.create-token-id { 'uri: "ipfs://pack", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
+       (card-a (nft.ledger.create-token-id { 'uri: "ipfs://card-A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
+       (slots [ { 'name: "common", 'picks: 2, 'tiers: ["C"] }, { 'name: "rare", 'picks: 1, 'tiers: ["R"] } ]))
+  (expect-failure "slot picks must sum to cards-per-pack" "slot picks must sum"
+    (nft.pack-engine.create-series "Set 1" (read-keyset 'alice) pack 4 2 slots))
+  (expect-failure "a tier may belong to one slot only" "one slot only"
+    (nft.pack-engine.create-series "Set 1" (read-keyset 'alice) pack 3 2
+      [ { 'name: "common", 'picks: 2, 'tiers: ["C"] }, { 'name: "rare", 'picks: 1, 'tiers: ["C"] } ]))
+  (expect-failure "the pack token's print run must equal packs-total" "print run must equal"
+    (nft.pack-engine.create-series "Set 1" (read-keyset 'alice) pack 3 5 slots))
+  (expect-failure "the pack token must be authored by the artist" "authored by the artist"
+    (nft.pack-engine.create-series "Set M" (read-keyset 'mallory) pack 3 2 slots))
+  (expect-failure "a card cannot be the pack token of a series it is not sized for" "print run must equal"
+    (nft.pack-engine.create-series "Set 1" (read-keyset 'alice) card-a 3 3 slots)))
+(rollback-tx)
+
+(begin-tx "series: create, add cards, refuse bad cards")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(env-events true)
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (mk (lambda (u:string) (nft.ledger.create-token-id { 'uri: u, 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice))))
+       (pack (mk "ipfs://pack")) (a (mk "ipfs://card-A")) (b (mk "ipfs://card-B")) (x (mk "ipfs://card-X"))
+       (slots [ { 'name: "common", 'picks: 2, 'tiers: ["C"] }, { 'name: "rare", 'picks: 1, 'tiers: ["R"] } ])
+       (sid (nft.pack-engine.create-series "Set 1" (read-keyset 'alice) pack 3 2 slots)))
+  (expect "series id is derived" (nft.pack-engine.create-series-id "Set 1" (read-keyset 'alice)) sid)
+  (expect-failure "an unknown tier is refused" "unknown tier" (nft.pack-engine.add-pool-card sid a "L" 2))
+  (expect-failure "a count beyond the card's print run is refused" "exceeds the card's remaining print run"
+    (nft.pack-engine.add-pool-card sid a "C" 3))
+  (nft.pack-engine.add-pool-card sid a "C" 2)
+  (nft.pack-engine.add-pool-card sid b "C" 2)
+  (expect-failure "lock refuses a slot that does not partition" "needs exactly"
+    (nft.pack-engine.lock-series sid))
+  (nft.pack-engine.add-pool-card sid x "R" 2)
+  (expect "the odds are readable: three cards, counts 2/2/2" [2 2 2]
+    (map (at 'count) (nft.pack-engine.get-odds sid)))
+  (expect "SERIES-CREATED + 3 POOL-CARD-ADDED events" 4
+    (length (filter (lambda (e) (contains (at 'name e) ["nft.pack-engine.SERIES-CREATED" "nft.pack-engine.POOL-CARD-ADDED"])) (env-events true)))))
+(commit-tx)
+
+(begin-tx "a stranger cannot configure the series")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let ((sid (nft.pack-engine.create-series-id "Set 1" (read-keyset 'alice))))
+  (expect-failure "mallory cannot lock" "Keyset failure" (nft.pack-engine.lock-series sid)))
+(rollback-tx)
+
+(begin-tx "lock, mint the vault, seal")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (mk (lambda (u:string) (nft.ledger.create-token-id { 'uri: u, 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice))))
+       (pack (mk "ipfs://pack")) (a (mk "ipfs://card-A")) (b (mk "ipfs://card-B")) (x (mk "ipfs://card-X"))
+       (sid (nft.pack-engine.create-series-id "Set 1" (read-keyset 'alice)))
+       (vault (nft.pack-engine.vault-account sid)))
+  (expect-failure "mint-pool before lock is refused" "lock the series first" (nft.pack-engine.mint-pool sid [a]))
+  (expect "lock" true (nft.pack-engine.lock-series sid))
+  (expect-failure "no more cards after lock" "the series is locked" (nft.pack-engine.add-pool-card sid a "C" 1))
+  (expect-failure "seal before the vault is full is refused" "wrong number"
+    (nft.pack-engine.seal-series sid))
+  (expect "mint the vault in two batches" true (nft.pack-engine.mint-pool sid [a b]))
+  (nft.pack-engine.mint-pool sid [x])
+  (expect "the vault holds 2 of A" 2.0 (nft.ledger.get-balance a vault))
+  (expect "seal" true (nft.pack-engine.seal-series sid))
+  (expect "alice holds the 2 sealed packs" 2.0
+    (nft.ledger.get-balance pack "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect-failure "mint-pool after seal is refused" "the series is sealed" (nft.pack-engine.mint-pool sid [a]))
+  (expect-failure "the pack token's run is exhausted: no extra packs ever" "print run exhausted"
+    (nft.ledger.mint pack "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0))
+  (expect-failure "the artist cannot mint more of a pool card: its run is exhausted" "print run exhausted"
+    (nft.ledger.mint a "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0)))
+(commit-tx)
+
+(begin-tx "the vault cannot be debited outside reveal")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://card-A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
+       (sid (nft.pack-engine.create-series-id "Set 1" (read-keyset 'alice)))
+       (vault (nft.pack-engine.vault-account sid)))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER a vault "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0) ] } ])
+  (expect-failure "the artist cannot pull a card out of the vault" "Capability"
+    (nft.ledger.transfer-create a vault "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1.0)))
+(rollback-tx)
+
+(begin-tx "alice gives bob a sealed pack; bob requests an opening")
+;; block-time chosen so the first round >= 120 s away is 20801767, whose real beacon we hold
+(env-chain-data { "chain-id": "0", "block-time": (add-time (nft.drand-verifier.time-of-round 20801766) -120.0) })
+(env-hash (hash "pack-open-1"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (pack (nft.ledger.create-token-id { 'uri: "ipfs://pack", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
+       (sid (nft.pack-engine.create-series-id "Set 1" (read-keyset 'alice)))
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER pack alice bob 1.0) ] } ])
+  (nft.ledger.transfer-create pack alice bob (read-keyset 'bob) 1.0)
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+  (expect-failure "mallory cannot open bob's pack" "No value found"
+    (nft.pack-engine.request-open sid "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (let ((rid (nft.pack-engine.request-open sid bob)))
+    (expect "the pack was burned" 0.0 (nft.ledger.get-balance pack bob))
+    (expect "the request is pinned to round 20801767 (>= 120 s away)" 20801767 (at 'round (nft.pack-engine.get-request rid)))
+    (expect "the request is queued" [rid] (nft.pack-engine.get-queue sid 20801767))))
+(commit-tx)
+
+(begin-tx "reveal: a wrong beacon fails, the real one delivers 3 cards")
+(env-chain-data { "chain-id": "0", "block-time": (nft.drand-verifier.time-of-round 20801767) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [])
+(env-gasmodel "table")
+(env-gaslimit 150000)
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (mk (lambda (u:string) (nft.ledger.create-token-id { 'uri: u, 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice))))
+       (a (mk "ipfs://card-A")) (b (mk "ipfs://card-B")) (x (mk "ipfs://card-X"))
+       (sid (nft.pack-engine.create-series-id "Set 1" (read-keyset 'alice)))
+       (vault (nft.pack-engine.vault-account sid))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (bal (lambda (t:string acct:string) (try 0.0 (nft.ledger.get-balance t acct)))))
+  ;; the beacon for ANOTHER round (20801768) does not verify for 20801767
+  (expect-failure "a beacon for another round is refused" "does not verify"
+    (nft.pack-engine.reveal sid 20801767 "3046d0014da5e70c6a4c99fc5fafde0cc68ae79d82ece3177dc7d6147945cfb502d3ce355c42c98368f003bf089aebb110ee7119f62d6402a2187d58f44f297a"))
+  (expect-failure "nothing is queued for a round nobody requested" "nothing queued"
+    (nft.pack-engine.reveal sid 20801768 "3046d0014da5e70c6a4c99fc5fafde0cc68ae79d82ece3177dc7d6147945cfb502d3ce355c42c98368f003bf089aebb110ee7119f62d6402a2187d58f44f297a"))
+  (env-gas 0)
+  (expect "the genuine beacon for 20801767 reveals the queue" true
+    (nft.pack-engine.reveal sid 20801767 "0d745db068db9e16379a49f65d76353d721d79fb459d20b33a50e750e5cdb10400af36e03d4a8414b3a86770d1d1e90e85462dce40b3cf5c27f9fdb477b6f6e0"))
+  (print (format "GAS reveal (1 request, 3 cards): {}" [(env-gas)]))
+  (expect "bob received exactly 3 cards" 3.0 (fold (+) 0.0 (map (lambda (t:string) (bal t bob)) [a b x])))
+  (expect "bob received exactly 1 rare" 1.0 (bal x bob))
+  (expect "the vault kept exactly 3 cards" 3.0 (fold (+) 0.0 (map (lambda (t:string) (bal t vault)) [a b x])))
+  (expect "the odds moved without replacement: 3 left in total" 3
+    (fold (+) 0 (map (at 'left) (nft.pack-engine.get-odds sid))))
+  ;; the request id is deterministic: hash([series, opener, tx-hash of the request tx, round])
+  (expect "the request is marked revealed" true
+    (at 'revealed (nft.pack-engine.get-request (hash [sid bob (hash "pack-open-1") 20801767]))))
+  (expect-failure "a round reveals once" "nothing queued"
+    (nft.pack-engine.reveal sid 20801767 "0d745db068db9e16379a49f65d76353d721d79fb459d20b33a50e750e5cdb10400af36e03d4a8414b3a86770d1d1e90e85462dce40b3cf5c27f9fdb477b6f6e0")))
+(commit-tx)
+
+(print "")
+(print "=== PACK ENGINE: ALL GREEN ===")
+(print "  artist-signed configuration, exact partition, quota-bound vault, sealed packs;")
+(print "  request burns the pack and pins a future round; the real beacon reveals,")
+(print "  a wrong one does not; draws without replacement; one reveal per round.")
