@@ -71,7 +71,7 @@ flowchart TD
 3. **`core/util`**
 4. **`core/policy-manager`** + its tables (`ledgers`, `quotes`, `sale-contracts`)
 5. **`core/ledger`** + its tables (`ledger-table`, `tokens`)
-6. **Policies** (each + its tables): `royalty-policy`, `non-fungible-policy`,
+6. **Policies** (each + its tables): `royalty-policy`, `non-fungible-policy`, `issuance-policy`,
    and whichever of `collection-policy` / `guard-policy` / `guarded-uri-policy`
    / `non-updatable-uri-policy` the deployment needs. Policies are independent;
    deploy only what will be used — more can be added later.

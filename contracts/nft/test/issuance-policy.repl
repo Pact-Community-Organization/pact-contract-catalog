@@ -1,0 +1,280 @@
+;; nft framework — issuance-policy suite (ADR-NFT-002).
+;;
+;; Proves the fixed print run:
+;;   * the spec is REQUIRED at creation and validated (fail closed);
+;;   * mint below min-mint and beyond max-issued are refused;
+;;   * `issued` is CUMULATIVE: a burn frees no quota, a relocation frees no quota;
+;;   * mint is refused on every chain but the origin chain, including on a row
+;;     that a relocation materialised there;
+;;   * the passport carries the print run; the origin chain stays authoritative;
+;;   * the 1/1 combination (max 1 + non-fungible-policy) works;
+;;   * no hook is reachable outside the ledger's lifecycle path (-CALL gate).
+;; Each expect goes RED if the mechanism it names is removed.
+;;
+;; Run: pact contracts/nft/test/issuance-policy.repl
+
+(begin-tx "deploy nft framework")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../policies/issuance-policy.pact")
+(create-table nft.issuance-policy.issuance)
+(load "../policies/non-fungible-policy.pact")
+(create-table nft.non-fungible-policy.minted-table)
+(commit-tx)
+
+;; personas: alice = creator (k:1111…), bob = collector (k:2222…)
+;; ---------------------------------------------------------------------------
+;; creation: the spec is required and validated
+;; ---------------------------------------------------------------------------
+(begin-tx "creation fails closed without a spec")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://run-of-3", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect-failure "no issuance_spec in the payload aborts creation" "read-msg failure"
+    (nft.ledger.create-token id 0 "ipfs://run-of-3" [nft.issuance-policy] "" (read-keyset 'alice))))
+(rollback-tx)
+
+(begin-tx "creation validates the spec")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 0.0, "min-mint": 1.0 } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://run-of-3", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect-failure "max-issued 0 is refused" "max-issued must be positive"
+    (nft.ledger.create-token id 0 "ipfs://run-of-3" [nft.issuance-policy] "" (read-keyset 'alice)))
+  (env-data
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "issuance_spec": { "max-issued": 3.0, "min-mint": 4.0 } })
+  (expect-failure "min-mint above max-issued is refused" "min-mint cannot exceed max-issued"
+    (nft.ledger.create-token id 0 "ipfs://run-of-3" [nft.issuance-policy] "" (read-keyset 'alice)))
+  (env-data
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "issuance_spec": { "max-issued": 2.5, "min-mint": 1.0 } })
+  (expect-failure "a max-issued that violates precision 0 is refused" "max-issued violates the token precision"
+    (nft.ledger.create-token id 0 "ipfs://run-of-3" [nft.issuance-policy] "" (read-keyset 'alice)))
+  (env-data
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "issuance_spec": { "max-issued": 3.0, "min-mint": 0.0 } })
+  (expect-failure "min-mint 0 is refused" "min-mint must be positive"
+    (nft.ledger.create-token id 0 "ipfs://run-of-3" [nft.issuance-policy] "" (read-keyset 'alice))))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; the print run: 3 copies, min mint 1, on chain 0
+;; ---------------------------------------------------------------------------
+(begin-tx "create the run of 3 on chain 0")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 3.0, "min-mint": 1.0 } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(env-events true) ;; drain
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://run-of-3", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect "creation binds the print run" true
+    (nft.ledger.create-token id 0 "ipfs://run-of-3" [nft.issuance-policy] "" (read-keyset 'alice)))
+  (expect "the run is stored with issued 0"
+    { 'max-issued: 3.0, 'min-mint: 1.0, 'issued: 0.0 } (nft.issuance-policy.get-issuance id))
+  (expect "remaining is the whole run" 3.0 (nft.issuance-policy.remaining id))
+  (expect "ISSUANCE event fired" 1
+    (length (filter (lambda (e) (= "nft.issuance-policy.ISSUANCE" (at 'name e))) (env-events true)))))
+(commit-tx)
+
+(begin-tx "mint within the run; below min and beyond max refused")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://run-of-3", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect "mint 2 of 3" true (nft.ledger.mint id alice (read-keyset 'alice) 2.0))
+  (expect "issued counts 2" 2.0 (at 'issued (nft.issuance-policy.get-issuance id)))
+  (expect-failure "a third mint of 2 would exceed the run" "print run exhausted"
+    (nft.ledger.mint id alice (read-keyset 'alice) 2.0))
+  (expect "mint the last copy" true (nft.ledger.mint id alice (read-keyset 'alice) 1.0))
+  (expect "remaining is 0" 0.0 (nft.issuance-policy.remaining id))
+  (expect-failure "the run is exhausted" "print run exhausted"
+    (nft.ledger.mint id alice (read-keyset 'alice) 1.0)))
+(commit-tx)
+
+(begin-tx "a burn frees no quota (issued is cumulative)")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://run-of-3", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (expect "burn 1" true (nft.ledger.burn id alice 1.0))
+  (expect "supply fell to 2" 2.0 (nft.ledger.total-supply id))
+  (expect "issued still 3" 3.0 (at 'issued (nft.issuance-policy.get-issuance id)))
+  (expect-failure "a burn does not re-open the run" "print run exhausted"
+    (nft.ledger.mint id alice (read-keyset 'alice) 1.0)))
+(rollback-tx)
+
+(begin-tx "min-mint is enforced")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 100.0, "min-mint": 10.0 } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://bulk", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (nft.ledger.create-token id 0 "ipfs://bulk" [nft.issuance-policy] "" (read-keyset 'alice))
+  (expect-failure "a mint of 9 is below the minimum of 10" "mint below the minimum mint amount"
+    (nft.ledger.mint id alice (read-keyset 'alice) 9.0))
+  (expect "a mint of 10 passes" true (nft.ledger.mint id alice (read-keyset 'alice) 10.0)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; relocation: the run travels; mint is refused off the origin chain; a
+;; relocation frees no quota on the origin chain
+;; ---------------------------------------------------------------------------
+(begin-tx "a second run of 2 on chain 0, 1 minted")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 2.0, "min-mint": 1.0 } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://traveller", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (nft.ledger.create-token id 0 "ipfs://traveller" [nft.issuance-policy] "" (read-keyset 'alice))
+  (expect "mint 1 of 2" true (nft.ledger.mint id alice (read-keyset 'alice) 1.0)))
+(commit-tx)
+
+(begin-tx "step 0: relocate the copy to chain 1")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "iss-xc-1"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://traveller", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id alice alice "1" 1.0) ] } ])
+  (nft.ledger.transfer-crosschain id alice alice (read-keyset 'alice) "1" 1.0)
+  (expect "the copy left chain 0" 0.0 (nft.ledger.total-supply id))
+  (expect "issued on the origin is still 1" 1.0 (at 'issued (nft.issuance-policy.get-issuance id))))
+(commit-tx)
+
+(begin-tx "step 1 on chain 1: the run arrives; mint there is refused")
+(env-chain-data { "chain-id": "1" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(continue-pact 1 false (hash "iss-xc-1"))
+;; the id was derived on chain 0 — recompute it under that chain-id
+(env-chain-data { "chain-id": "0" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://traveller", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-chain-data { "chain-id": "1" })
+  (expect "the copy arrived on chain 1" 1.0 (nft.ledger.get-balance id alice))
+  (expect "the print run travelled in the passport"
+    { 'max-issued: 2.0, 'min-mint: 1.0, 'issued: 1.0 } (nft.issuance-policy.get-issuance id))
+  (expect "origin-chain on chain 1 reads 0" "0" (nft.ledger.get-origin-chain id))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (expect-failure "the author cannot mint on chain 1: not the origin chain" "mint only on the token's origin chain"
+    (nft.ledger.mint id alice (read-keyset 'alice) 1.0)))
+(commit-tx)
+
+(begin-tx "back on chain 0: the relocation freed no quota")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://traveller", 'precision: 0, 'policies: [nft.issuance-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  ;; (REPL tier: both "chains" share one database, so the ledger supply here
+  ;; already shows the arrival; on real chains the origin supply is 0. The
+  ;; property under test is the COUNTER, which is what the next two lines pin.)
+  (expect "issued on the origin is still 1 after the relocation" 1.0 (at 'issued (nft.issuance-policy.get-issuance id)))
+  (expect "the second and last copy mints on the origin" true (nft.ledger.mint id alice (read-keyset 'alice) 1.0))
+  (expect-failure "a third copy never exists, on any chain" "print run exhausted"
+    (nft.ledger.mint id alice (read-keyset 'alice) 1.0)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; the 1/1 combination: max 1 + non-fungible-policy
+;; ---------------------------------------------------------------------------
+(begin-tx "a unique: issuance max 1 with the 1/1 marker")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 1.0, "min-mint": 1.0 } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://unique", 'precision: 0
+            , 'policies: [nft.issuance-policy nft.non-fungible-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (nft.ledger.create-token id 0 "ipfs://unique" [nft.issuance-policy nft.non-fungible-policy] "" (read-keyset 'alice))
+  (expect "the unique mints once" true (nft.ledger.mint id alice (read-keyset 'alice) 1.0))
+  (expect-failure "a second mint is refused by the print run" "print run exhausted"
+    (nft.ledger.mint id alice (read-keyset 'alice) 1.0)))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; the -CALL gate: no hook is reachable directly
+;; ---------------------------------------------------------------------------
+(begin-tx "direct calls are rejected")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 3.0, "min-mint": 1.0 } })
+(let ((fake { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [nft.issuance-policy]
+            , 'author: "k:1111111111111111111111111111111111111111111111111111111111111111"
+            , 'author-guard: (read-keyset 'alice), 'origin-chain: "0", 'serial: "" }))
+  (expect-failure "enforce-init is not callable directly" "not granted"
+    (nft.issuance-policy.enforce-init fake))
+  (expect-failure "enforce-mint is not callable directly" "not granted"
+    (nft.issuance-policy.enforce-mint fake "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0))
+  (expect-failure "enforce-xchain-receive is not callable directly" "not granted"
+    (nft.issuance-policy.enforce-xchain-receive fake "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0
+      { 'max-issued: 3.0, 'min-mint: 1.0, 'issued: 0.0 })))
+(rollback-tx)
+
+(print "")
+(print "=== ISSUANCE POLICY: ALL GREEN ===")
+(print "  spec required + validated; min/max enforced; issued cumulative across burn")
+(print "  and relocation; mint refused off the origin chain; passport travels;")
+(print "  1/1 combination works; hooks -CALL-gated.")

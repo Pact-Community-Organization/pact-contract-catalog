@@ -624,6 +624,24 @@ therefore always exactly 0 or 1. Proof:
 [test/non-fungible-policy.repl](test/non-fungible-policy.repl) (18 assertions,
 including burn-then-remint).
 
+**`issuance-policy`** — a fixed print run, minted only where the token was born (ADR-NFT-002).
+*Init (fail closed):* the create-token transaction **must** carry
+`issuance_spec = {max-issued, min-mint}`, both positive, `min-mint ≤ max-issued`, both valid at
+the token's precision; the row is inserted with `issued = 0` and `ISSUANCE` is emitted. There is
+no update path: a new print run is a new token (new serial, new id).
+*Mint:* refused unless `(chain-data)` chain-id equals the token's `origin-chain` (the row a
+relocation materialises on another chain can never grow there); refused below `min-mint`;
+refused when `issued + amount > max-issued`. `issued` is **cumulative**: a burn or a relocation
+lowers the supply but never the counter, so the run cannot re-open. `ISSUED` is emitted per mint.
+*Passport:* `{max-issued, min-mint, issued}` travels; a first arrival binds it, a return checks
+`max-issued`/`min-mint` equality and, on the origin chain, that the local `issued` is not below
+the arriving one (the origin is authoritative); a non-origin chain refreshes its informational
+copy upward. *Stances:* mint `"abstain"` (bounds how many, never who), uri `"abstain"`. A unique
+is `max-issued 1`, precision 0, optionally with `non-fungible-policy` for the minted-once marker.
+Proof: [test/issuance-policy.repl](test/issuance-policy.repl) (spec required and validated;
+min/max; cumulative across burn and relocation; origin-only mint; passport; 1/1 combination;
+-CALL gate).
+
 **`collection-policy`** — operator-curated, size-capped collections.
 Collections are self-serve (`create-collection` proves the operator guard). A
 token joins at create-token via the **required** `collection_id` payload —
