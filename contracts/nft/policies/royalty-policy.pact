@@ -1,8 +1,8 @@
 ;; nft.royalty-policy — genuinely enforced on-chain creator royalties.
 ;;
-;; The royalty terms (creator, creator-guard, bps, sale-only) are REQUIRED in
-;; the create-token transaction and bound into this policy's OWN state at init
-;; — fail closed: a missing or partial spec aborts token creation (the POL-1
+;; The royalty terms (creator, creator-guard, bps) are REQUIRED in the
+;; create-token transaction and bound into this policy's OWN state at init —
+;; fail closed: a missing or partial spec aborts token creation (the POL-1
 ;; fix), and nothing about the royalty is ever read from a buy transaction
 ;; (the ARCH-2 fix).
 ;;
@@ -11,12 +11,12 @@
 ;; the policy-manager's single conservation-asserted settlement pays it (the
 ;; ARCH-1 / POL-3 fix).
 ;;
-;; Sale-only is an explicit opt-in flag in the spec, enforced by rejecting
-;; free transfers — a sale through the ledger's sale pact ALWAYS works and
-;; always pays the royalty, so the royalty cannot be composed away by another
-;; policy and never becomes a blanket transfer ban (the POL-2 fix). The
-;; dust-price guard at offer rejects a price whose floored royalty would be
-;; zero, closing the round-to-zero evasion path.
+;; HOW the token may change hands is NOT this policy's business any more
+;; (ADR-NFT-007): a creator who wants every change of hands to go through a
+;; sale attaches transfer-mode-policy with mode "sale-only"; a sale through the
+;; ledger's sale pact ALWAYS works and always pays the royalty. The dust-price
+;; guard at offer rejects a price whose floored royalty would be zero, closing
+;; the round-to-zero evasion path.
 ;;
 ;; CURRENCY: the royalty is denominated in the QUOTE's fungible — the seller
 ;; picks the sale currency per listing (multi-currency by design, matching the
@@ -33,7 +33,7 @@
 
 (module royalty-policy GOVERNANCE
   @doc "Hardened creator-royalty policy for the nft framework: spec bound at \
-       \create, cut declared from state at settlement, explicit sale-only."
+       \create, cut declared from state at settlement."
 
   (implements token-policy)
   (use token-policy [token-info payout])
@@ -56,11 +56,10 @@
     @doc "The royalty terms, bound once at token creation, immutable after."
     creator:string
     creator-guard:guard
-    bps:integer
-    sale-only:bool)
+    bps:integer)
   (deftable royalties:{royalty-spec})
 
-  (defcap ROYALTY:bool (token-id:string creator:string bps:integer sale-only:bool)
+  (defcap ROYALTY:bool (token-id:string creator:string bps:integer)
     @doc "Emitted once, when the royalty terms bind at token creation."
     @event true)
 
@@ -95,7 +94,7 @@
         (enforce (validate-principal creator-guard creator)
           "creator must be the principal account of creator-guard")
         (insert royalties (at 'id token) spec)
-        (emit-event (ROYALTY (at 'id token) creator bps (at 'sale-only spec)))))
+        (emit-event (ROYALTY (at 'id token) creator bps))))
     true)
 
   (defun enforce-mint:bool (token:object{token-info} account:string guard:guard amount:decimal)
@@ -148,44 +147,26 @@
   (defun enforce-transfer:bool (token:object{token-info} sender:string guard:guard receiver:string amount:decimal)
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::TRANSFER-CALL (at 'id token) sender receiver amount)))
-    (with-read royalties (at 'id token) { 'sale-only := sale-only }
-      (enforce (not sale-only)
-        "sale-only token: free transfer is disabled — sell via the sale pact"))
+    ;; whether a free transfer is allowed is transfer-mode-policy's decision
+    ;; (ADR-NFT-007); a royalty is an economic term, not a transfer rule
     true)
   ;; --- cross-chain passport (policy state travels with the token) ---------------
+  ;; (The owner-to-owner relocation rule for sale-only tokens lives in
+  ;; transfer-mode-policy; see redteam L6/L7 for why reading the account NAME
+  ;; as the OWNER is sound only under ledger.enforce-account-principal.)
   (defun enforce-xchain-send:object (token:object{token-info} sender:string receiver:string receiver-guard:guard target-chain:string amount:decimal)
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
     (with-read royalties (at 'id token)
-      { 'creator := creator, 'creator-guard := creator-guard, 'bps := bps, 'sale-only := sale-only }
-      ;; a sale-only token may only RELOCATE (owner to themselves): an x-chain
-      ;; ownership change would be a free transfer in two hops.
-      ;; This reads the account NAME and means the OWNER. That inference is
-      ;; sound ONLY because of what the ledger refuses, and it needs BOTH
-      ;; halves of ledger.enforce-account-principal (applied to the receiver at
-      ;; the head of the cross-chain send, before anything is debited):
-      ;;   * the name must be the PRINCIPAL of its guard — otherwise the name
-      ;;     certifies nobody at all; and
-      ;;   * the name must use a BINDING protocol (k:/w:/c:) — a principal is
-      ;;     NOT automatically an authority. "r:vault" is the valid principal of
-      ;;     (keyset-ref-guard "vault") both before and after that keyset is
-      ;;     rotated, and on a chain that never defined it a stranger defines it
-      ;;     outright. Were r: accepted here, a holder would relocate "r:vault"
-      ;;     to "r:vault", satisfy (= sender receiver) exactly, and hand the NFT
-      ;;     to a different key on arrival — a free sale, zero royalty, straight
-      ;;     past this line. Guard EQUALITY would not have caught it either:
-      ;;     the two guard objects are identical; only their meaning differs.
-      (if sale-only
-        (enforce (= sender receiver) "sale-only token: cross-chain relocation only to the same owner")
-        true)
-      { 'creator: creator, 'creator-guard: creator-guard, 'bps: bps, 'sale-only: sale-only }))
+      { 'creator := creator, 'creator-guard := creator-guard, 'bps := bps }
+      { 'creator: creator, 'creator-guard: creator-guard, 'bps: bps }))
 
   (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal state:object)
     (let ((l:module{ledger-iface} (policy-manager.retrieve-ledger)))
       (require-capability (l::XCHAIN-RECEIVE-CALL (at 'id token) receiver amount)))
     (let ((spec:object{royalty-spec}
             { 'creator: (at 'creator state), 'creator-guard: (at 'creator-guard state)
-            , 'bps: (at 'bps state), 'sale-only: (at 'sale-only state) }))
+            , 'bps: (at 'bps state) }))
       (enforce (and (>= (at 'bps spec) 0) (<= (at 'bps spec) MAX-ROYALTY-BPS))
         (format "royalty bps must be in [0, {}]" [MAX-ROYALTY-BPS]))
       (enforce (validate-principal (at 'creator-guard spec) (at 'creator spec))

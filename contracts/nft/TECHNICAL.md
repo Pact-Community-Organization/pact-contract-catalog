@@ -293,7 +293,9 @@ flowchart TB
 | `core/ledger` | identity, balances, supply; the sale defpact; `transfer-crosschain` | `tokens`, `ledger-table` |
 | `core/policy-manager` | `-CALL` verification, quote store, **the** settlement, sale-contract registry | `quotes`, `ledgers`, `sale-contracts` |
 | `core/util` | `enforce-reserved` and friends | — |
-| `policies/royalty-policy` | enforceable creator royalties + explicit sale-only | `royalties` |
+| `policies/royalty-policy` | enforceable creator royalties | `royalties` |
+| `policies/transfer-mode-policy` | free / sale-only / bound, fixed at creation | `modes` |
+| `policies/issuance-policy` | fixed print run, minted only on the origin chain | `issuance` |
 | `policies/guard-policy` | four required per-operation guards | `op-guards` |
 | `policies/non-fungible-policy` | strict 1/1: precision 0, minted once ever, burned whole | `minted-table` |
 | `policies/collection-policy` | operator-curated, size-capped collections | `collections`, `collection-tokens` |
@@ -461,7 +463,7 @@ the matching lifecycle event, and every attached policy must pass**.
 | `enforce-offer` | sale defpact step 0 | gate listing (sale guard) and reject dust prices |
 | `enforce-withdraw` | sale defpact rollback | (deliberately permissive — see §5.3, guard-policy) |
 | `enforce-buy` | sale defpact step 1 | authorize the sale and **return the payouts it declares** (`[object{payout}]`) |
-| `enforce-transfer` | free transfer | reject if sale-only; enforce the transfer guard |
+| `enforce-transfer` | free transfer | reject if sale-only or bound (transfer-mode-policy); enforce the transfer guard |
 | `uri-decision` / `enforce-update-uri` | `update-uri` | vote `"veto"` / `"permit"` / `"abstain"`, then authorize the specific update |
 | `enforce-xchain-send` / `enforce-xchain-receive` | cross-chain defpact | validate the move and serialize/re-bind its **passport** (§9) |
 
@@ -558,7 +560,7 @@ sequenceDiagram
 
 **`royalty-policy`** — enforceable creator royalties.
 *Init (fail closed):* the create-token transaction **must** carry a
-`royalty_spec` payload object `{creator, creator-guard, bps, sale-only}`; the
+`royalty_spec` payload object `{creator, creator-guard, bps}`; the
 typed `read-msg` aborts on a missing or partial spec (the POL-1 fix). The same
 abort fires when `bps` arrives as a bare JSON number — on the wire it must be
 boxed as `"bps": {"int": 1000}`, because a bare number decodes to a *decimal*
@@ -585,11 +587,19 @@ single payout to the stored creator:
 is rejected — otherwise a near-zero price would be a royalty-free ownership
 change through `buy`. A quoted sale's price is 0 at offer (discovered later), so
 the same check re-fires in `enforce-buy` against the finalized price.
-*Sale-only (the POL-2 fix):* an explicit opt-in flag. `enforce-transfer` rejects
-free transfers of a sale-only token; a sale through the sale defpact always
-works and always pays — the property can't be composed away by stacking another
+*Sale-only (the POL-2 fix) now lives in `transfer-mode-policy`* (ADR-NFT-007): a creator who
+wants every change of hands to settle attaches it with mode `sale-only`; a sale through the sale
+defpact always works and always pays — the property can't be composed away by stacking another
 policy (every policy must pass) and is never a blanket transfer ban.
-Cross-chain, a sale-only token may relocate only owner-to-owner (§9).
+
+**`transfer-mode-policy`** — how a token may change hands, fixed at creation (ADR-NFT-007).
+*Init (fail closed):* the create-token transaction **must** carry `transfer_mode`, one of `free`,
+`sale-only`, `bound`; anything else aborts. *Rules:* `free` allows transfer, sale and relocation
+to anyone; `sale-only` rejects free transfers for every owner (a sale always works) and allows
+relocation only owner-to-owner; `bound` (the trophy shape) rejects free transfers and sale offers,
+allows relocation only owner-to-owner, and still lets the **owner** burn. The mode travels in the
+passport and is immutable. *Stances:* mint and uri `"abstain"`. Proof:
+[test/transfer-mode-policy.repl](test/transfer-mode-policy.repl).
 *Honest limits, stated in the source:* the royalty is denominated in the quote's
 fungible (the seller picks the currency per listing), and no on-chain rule can
 stop economically-equivalent evasion such as an under-priced quote settled
@@ -1416,8 +1426,8 @@ Each property, the mechanism that enforces it, and the executable proof:
 | Money conserved every sale | single settlement; strictly-positive declared legs; merged payouts; `final = funded − price` assert at full precision | `settlement.repl` · `negative-payout.repl` · `redteam/A1-conservation.repl` |
 | No policy can skim the escrow | policies declare payouts, never move money; `ESCROW sale-id` acquired after all hooks ran (§6.3) | `redteam/C2-hostile-policy.repl` · `redteam/C2b-partial-settle-probe.repl` |
 | Royalty unbypassable — dust prices | offer-time (fixed) + settlement-time (quoted) floored-royalty-zero rejection | `royalty-policy.repl` |
-| Royalty unbypassable — free transfer | explicit sale-only flag rejects `transfer`; never a blanket ban | `royalty-policy.repl` |
-| Royalty unbypassable — cross-chain | sale-only relocates owner-to-owner only; transfer-guard gates owner-changing relocations; passports carry the spec | `xchain.repl` · devnet campaign |
+| Royalty unbypassable — free transfer | `transfer-mode-policy` mode `sale-only` rejects `transfer`; never a blanket ban | `transfer-mode-policy.repl` · `royalty-policy.repl` |
+| Royalty unbypassable — cross-chain | sale-only / bound relocate owner-to-owner only; transfer-guard gates owner-changing relocations; passports carry the spec | `xchain.repl` · `transfer-mode-policy.repl` · devnet campaign |
 | Royalty unbypassable — auctions | fee+royalty carved from the state-validated winning bid / curve price | `conventional-auction.repl` · `dutch-auction.repl` |
 | Auction price/winner can't be injected | `enforce-quote-update` binds price to recorded bid or curve; winner and paying account matched to auction state | `conventional-auction.repl` · `redteam/D1-auction-integrity.repl` |
 | No stranded funds | outbid → full refund; grace-window withdrawal refunds winner; dutch escrows nothing; withdraw consult survives the kill-switch; per-sale-id bid-escrow isolation | `conventional-auction.repl` · `redteam/D2-cross-auction-escrow.repl` · `redteam/G1-griefing.repl` |

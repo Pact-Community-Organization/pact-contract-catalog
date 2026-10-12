@@ -66,7 +66,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
                     , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 1000, "sale-only": false } })
+                    , "bps": 1000 } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://dutch-art", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }

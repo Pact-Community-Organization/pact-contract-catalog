@@ -96,7 +96,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
                     , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 1000, "sale-only": false } })
+                    , "bps": 1000 } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://stack", 'precision: 0
@@ -112,7 +112,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
                     , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 1000, "sale-only": false }
+                    , "bps": 1000 }
   , "operation_guards":
     { "mint-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
     , "burn-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
@@ -133,7 +133,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
                     , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 1000, "sale-only": false }
+                    , "bps": 1000 }
   , "operation_guards":
     { "mint-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
     , "burn-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
@@ -320,7 +320,7 @@
   , "quote": { "fee-bps": 0, "price": 1.0 }
   , "royalty_spec": { "creator": "k:2222222222222222222222222222222222222222222222222222222222222222"
                     , "creator-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
-                    , "bps": 0, "sale-only": false } })
+                    , "bps": 0 } })
 (let ((id (nft.ledger.create-token-id
             { 'uri: "ipfs://stack", 'precision: 0
             , 'policies: [nft.royalty-policy nft.guard-policy nft.non-fungible-policy], 'serial: "" }

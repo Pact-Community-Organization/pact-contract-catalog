@@ -68,15 +68,16 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "royalty_spec": { "creator": "k:5555555555555555555555555555555555555555555555555555555555555555"
     , "creator-guard": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
-    , "bps": 500, "sale-only": true } })
+    , "bps": 500 }
+  , "transfer_mode": "sale-only" })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((plain (nft.ledger.create-token-id
                { 'uri: "ipfs://l7-plain", 'precision: 0, 'policies: [], 'serial: "" } (read-keyset 'alice)))
       (so (nft.ledger.create-token-id
-            { 'uri: "ipfs://l7-saleonly", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
+            { 'uri: "ipfs://l7-saleonly", 'precision: 0, 'policies: [nft.royalty-policy nft.transfer-mode-policy], 'serial: "" }
             (read-keyset 'alice))))
   (nft.ledger.create-token plain 0 "ipfs://l7-plain" [] "" (read-keyset 'alice))
-  (nft.ledger.create-token so 0 "ipfs://l7-saleonly" [nft.royalty-policy] "" (read-keyset 'alice))
+  (nft.ledger.create-token so 0 "ipfs://l7-saleonly" [nft.royalty-policy nft.transfer-mode-policy] "" (read-keyset 'alice))
   (nft.ledger.mint plain "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (nft.ledger.mint so "k:1111111111111111111111111111111111111111111111111111111111111111"
@@ -160,7 +161,7 @@
 (env-hash (hash "L7-D4"))
 (env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (let ((so (nft.ledger.create-token-id
-            { 'uri: "ipfs://l7-saleonly", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
+            { 'uri: "ipfs://l7-saleonly", 'precision: 0, 'policies: [nft.royalty-policy nft.transfer-mode-policy], 'serial: "" }
             (read-keyset 'alice)))
       (acct "k:1111111111111111111111111111111111111111111111111111111111111111"))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"

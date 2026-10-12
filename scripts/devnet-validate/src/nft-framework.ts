@@ -183,7 +183,7 @@ async function main(): Promise<void> {
       signers: [{ kp: alice }],
       data: {
         alice_ks: ks(alice),
-        royalty_spec: { creator: alice.account, 'creator-guard': ks(alice), bps: { int: '1000' }, 'sale-only': false },
+        royalty_spec: { creator: alice.account, 'creator-guard': ks(alice), bps: { int: '1000' } },
       },
       chainId: CH0,
     });

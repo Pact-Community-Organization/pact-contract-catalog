@@ -89,9 +89,9 @@ proving-ground record.
 |---|---|
 | `interfaces/` | `token-policy` (the hook surface + payout schema + uri stance + the cross-chain passport hooks), `poly-fungible` (the multi-token accounting standard), `ledger-iface` (the `-CALL` handshake), `sale` (price-discovery sale contracts), `account-protocols` |
 | `core/` | `ledger` (identity + balances + the offer/withdraw/buy sale defpact + policy-mediated `update-uri` + the `transfer-crosschain` defpact), `policy-manager` (dispatch, the single conservation-asserted settlement, the governance-registered sale-contract whitelist, the attachment-authoritative uri-update routing) |
-| `policies/` | `royalty-policy`, `guard-policy`, `non-fungible-policy` (strict 1/1, minted once ever), `issuance-policy` (a fixed print run: max-issued + min-mint bound at creation, a cumulative counter that burns and relocations never lower, minting only on the origin chain), `collection-policy`, `guarded-uri-policy` (guard-bound uri updates), `non-updatable-uri-policy` (unconditional uri veto) |
+| `policies/` | `royalty-policy`, `guard-policy`, `non-fungible-policy` (strict 1/1, minted once ever), `issuance-policy` (a fixed print run: max-issued + min-mint bound at creation, a cumulative counter that burns and relocations never lower, minting only on the origin chain), `transfer-mode-policy` (how a token may change hands, fixed at creation: `free`, `sale-only` or `bound`), `collection-policy`, `guarded-uri-policy` (guard-bound uri updates), `non-updatable-uri-policy` (unconditional uri veto) |
 | `sale/` | `conventional-auction` (escrowed ascending bids, increment-enforced outbidding with full refunds, winner-only settlement, grace-windowed withdrawal), `dutch-auction` (interval-stepped declining curve) |
-| `test/` | **16 suites**: `identity` (incl. provenance: origin-chain and serial), `authorship`, `settlement`, `negative-payout` (non-positive policy legs rejected), an adversarial suite per policy (`royalty-policy`, `guard-policy`, `non-fungible-policy`, `issuance-policy`, `collection-policy`, `non-updatable-uri-policy`; `guarded-uri-policy` is exercised in `update-uri` and `xchain`), one per sale contract (`conventional-auction`, `dutch-auction`), `composition`, `update-uri` (incl. the veto composition case), `xchain` (the passport mechanics) and `marketplace-sim` (create on chain 0 -> sell on marketplace A -> relocate to chain 1 -> auction on marketplace B, all legs reconciled) |
+| `test/` | **17 suites**: `identity` (incl. provenance: origin-chain and serial), `authorship`, `settlement`, `negative-payout` (non-positive policy legs rejected), an adversarial suite per policy (`royalty-policy`, `guard-policy`, `non-fungible-policy`, `issuance-policy`, `transfer-mode-policy`, `collection-policy`, `non-updatable-uri-policy`; `guarded-uri-policy` is exercised in `update-uri` and `xchain`), one per sale contract (`conventional-auction`, `dutch-auction`), `composition`, `update-uri` (incl. the veto composition case), `xchain` (the passport mechanics) and `marketplace-sim` (create on chain 0 -> sell on marketplace A -> relocate to chain 1 -> auction on marketplace B, all legs reconciled) |
 
 ## Price-discovery sales (auctions)
 
@@ -112,7 +112,8 @@ per-token state (the royalty spec, the operation guards, the 1/1 marker, collect
 uri guard) — which yields to the target chain with the token's metadata. On the target chain (an
 SPV-continued step, the only way to reach it) the token row is materialized on first arrival and
 every policy re-binds its passport, so **the token's rules travel with it**: the creator's royalty
-is enforced on every chain the token ever sells on. A sale-only token relocates owner-to-owner only
+is enforced on every chain the token ever sells on. A `sale-only` or `bound` token
+(`transfer-mode-policy`) relocates owner-to-owner only
 (a cross-chain ownership change would be a free transfer in two hops), and for a transfer-guarded
 token (`guard-policy`) a relocation that changes the owner must satisfy the **transfer-guard** —
 same-chain parity — while an owner relocating to themselves stays ungated. The id needs no re-derivation

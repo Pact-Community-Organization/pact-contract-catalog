@@ -110,7 +110,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
                     , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 0, "sale-only": false } })
+                    , "bps": 0 } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
           , { "key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id

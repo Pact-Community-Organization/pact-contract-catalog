@@ -1,0 +1,297 @@
+;; nft framework — transfer-mode-policy suite (ADR-NFT-007).
+;;
+;; Proves the three creation-time trading modes:
+;;   * the mode is REQUIRED and must be one of free / sale-only / bound;
+;;   * free: transfer, sale offer and relocation to another owner all work;
+;;   * sale-only: free transfer refused (for every owner), a sale works,
+;;     relocation only owner -> same owner;
+;;   * bound: transfer and offer refused, owner burn works, self-relocation
+;;     works, owner-changing relocation refused;
+;;   * the mode travels in the passport and is immutable;
+;;   * no hook is reachable outside the ledger's lifecycle path (-CALL gate).
+;; Each expect goes RED if the mechanism it names is removed.
+;;
+;; Run: pact contracts/nft/test/transfer-mode-policy.repl
+
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+(begin-tx "deploy nft framework")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../core/util.pact")
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../policies/transfer-mode-policy.pact")
+(create-table nft.transfer-mode-policy.modes)
+(commit-tx)
+
+(begin-tx "fund bob")
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(commit-tx)
+
+;; personas: alice k:1111… (creator/owner), bob k:2222… (buyer/receiver)
+;; ---------------------------------------------------------------------------
+;; creation: the mode is required and validated
+;; ---------------------------------------------------------------------------
+(begin-tx "creation fails closed without a mode, and refuses an unknown one")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://mode", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (expect-failure "no transfer_mode in the payload aborts creation" "read-string failure"
+    (nft.ledger.create-token id 0 "ipfs://mode" [nft.transfer-mode-policy] "" (read-keyset 'alice)))
+  (env-data
+    { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "transfer_mode": "sometimes" })
+  (expect-failure "an unknown mode is refused" "transfer_mode must be one of"
+    (nft.ledger.create-token id 0 "ipfs://mode" [nft.transfer-mode-policy] "" (read-keyset 'alice))))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; FREE
+;; ---------------------------------------------------------------------------
+(begin-tx "free: create, mint, gift, relocate to another owner")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "tm-free-xc"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "transfer_mode": "free" })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://free", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+      (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (nft.ledger.create-token id 0 "ipfs://free" [nft.transfer-mode-policy] "" (read-keyset 'alice))
+  (expect "mode stored" "free" (nft.transfer-mode-policy.get-mode id))
+  (nft.ledger.mint id alice (read-keyset 'alice) 2.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id alice bob 1.0)
+                        , (nft.ledger.XTRANSFER id alice bob "1" 1.0) ] } ])
+  (expect "a free token can be gifted" true
+    (nft.ledger.transfer-create id alice bob (read-keyset 'bob) 1.0))
+  (expect "a free token can relocate to another owner" true
+    (nft.ledger.transfer-crosschain id alice bob (read-keyset 'bob) "1" 1.0)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; SALE-ONLY
+;; ---------------------------------------------------------------------------
+(begin-tx "sale-only: create + mint")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "transfer_mode": "sale-only" })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://so", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (nft.ledger.create-token id 0 "ipfs://so" [nft.transfer-mode-policy] "" (read-keyset 'alice))
+  (nft.ledger.mint id alice (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "sale-only: free transfer and owner-changing relocation refused; self-relocation ok")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "tm-so-xc"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://so", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+      (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id alice bob 1.0)
+                        , (nft.ledger.XTRANSFER id alice bob "1" 1.0) ] } ])
+  (expect-failure "sale-only blocks the free transfer" "sale-only token: free transfer is disabled"
+    (nft.ledger.transfer-create id alice bob (read-keyset 'bob) 1.0))
+  (expect-failure "sale-only blocks an owner-changing relocation"
+    "sale-only token: cross-chain relocation only to the same owner"
+    (nft.ledger.transfer-crosschain id alice bob (read-keyset 'bob) "1" 1.0)))
+(rollback-tx)
+
+(begin-tx "sale-only: the sale pact works (offer)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-hash (hash "tm-sale-1"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 10.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://so", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id alice 1.0 0) ] } ])
+  (expect "a sale-only token can be offered" (hash "tm-sale-1") (nft.ledger.sale id alice 1.0 0)))
+(commit-tx)
+
+(begin-tx "sale-only: bob buys; the mode persists for the new owner")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://so", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+      (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY id alice bob 1.0 (hash "tm-sale-1"))
+                        , (coin.TRANSFER bob (nft.policy-manager.escrow-account (hash "tm-sale-1")) 10.0) ] } ])
+  (continue-pact 1 false (hash "tm-sale-1"))
+  (expect "bob holds the sale-only token" 1.0 (nft.ledger.get-balance id bob))
+  (expect "alice was paid" 10.0 (coin.get-balance alice))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.TRANSFER id bob alice 1.0) ] } ])
+  (expect-failure "the new owner cannot free-transfer it either" "sale-only token: free transfer is disabled"
+    (nft.ledger.transfer-create id bob alice (read-keyset 'alice) 1.0)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; BOUND (the trophy shape)
+;; ---------------------------------------------------------------------------
+(begin-tx "bound: create + mint")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "transfer_mode": "bound" })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://trophy", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (nft.ledger.create-token id 0 "ipfs://trophy" [nft.transfer-mode-policy] "" (read-keyset 'alice))
+  (nft.ledger.mint id alice (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "bound: no transfer, no offer, no owner-changing relocation")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-hash (hash "tm-bound-1"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 10.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "sale-contract": "" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://trophy", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+      (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id alice bob 1.0)
+                        , (nft.ledger.OFFER id alice 1.0 0)
+                        , (nft.ledger.XTRANSFER id alice bob "1" 1.0) ] } ])
+  (expect-failure "bound blocks the free transfer" "bound token: free transfer is disabled"
+    (nft.ledger.transfer-create id alice bob (read-keyset 'bob) 1.0))
+  (expect-failure "bound blocks the sale offer" "bound token: cannot be offered for sale"
+    (nft.ledger.sale id alice 1.0 0))
+  (expect-failure "bound blocks an owner-changing relocation"
+    "bound token: cross-chain relocation only to the same owner"
+    (nft.ledger.transfer-crosschain id alice bob (read-keyset 'bob) "1" 1.0)))
+(rollback-tx)
+
+(begin-tx "bound: self-relocation works and the mode travels")
+(env-chain-data { "chain-id": "0" })
+(env-hash (hash "tm-bound-xc"))
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://trophy", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.XTRANSFER id alice alice "1" 1.0) ] } ])
+  (expect "the owner relocates a bound token to themselves" true
+    (nft.ledger.transfer-crosschain id alice alice (read-keyset 'alice) "1" 1.0)))
+(commit-tx)
+
+(begin-tx "bound: step 1 on chain 1 — the mode arrived and still binds")
+(env-chain-data { "chain-id": "1" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(continue-pact 1 false (hash "tm-bound-xc"))
+(env-chain-data { "chain-id": "0" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://trophy", 'precision: 0, 'policies: [nft.transfer-mode-policy], 'serial: "" }
+            (read-keyset 'alice)))
+      (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+      (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-chain-data { "chain-id": "1" })
+  (expect "the bound token arrived" 1.0 (nft.ledger.get-balance id alice))
+  (expect "the mode travelled" "bound" (nft.transfer-mode-policy.get-mode id))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER id alice bob 1.0)
+                        , (nft.ledger.BURN id alice 1.0) ] } ])
+  (expect-failure "still bound on chain 1" "bound token: free transfer is disabled"
+    (nft.ledger.transfer-create id alice bob (read-keyset 'bob) 1.0))
+  ;; the owner may always destroy what they own
+  (expect "the owner burns the bound token" true (nft.ledger.burn id alice 1.0)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; the -CALL gate
+;; ---------------------------------------------------------------------------
+(begin-tx "direct calls are rejected")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "transfer_mode": "free" })
+(let ((fake { 'id: "n:fake", 'supply: 0.0, 'precision: 0, 'uri: "u", 'policies: [nft.transfer-mode-policy]
+            , 'author: "k:1111111111111111111111111111111111111111111111111111111111111111"
+            , 'author-guard: (read-keyset 'alice), 'origin-chain: "0", 'serial: "" }))
+  (expect-failure "enforce-init is not callable directly" "not granted"
+    (nft.transfer-mode-policy.enforce-init fake))
+  (expect-failure "enforce-transfer is not callable directly" "not granted"
+    (nft.transfer-mode-policy.enforce-transfer fake "k:1" (read-keyset 'alice) "k:2" 1.0))
+  (expect-failure "enforce-xchain-receive is not callable directly" "not granted"
+    (nft.transfer-mode-policy.enforce-xchain-receive fake "k:1" (read-keyset 'alice) 1.0 { 'mode: "free" })))
+(rollback-tx)
+
+(print "")
+(print "=== TRANSFER MODE POLICY: ALL GREEN ===")
+(print "  mode required + validated; free/sale-only/bound enforced on transfer, offer")
+(print "  and relocation; owner burn kept; mode travels; hooks -CALL-gated.")

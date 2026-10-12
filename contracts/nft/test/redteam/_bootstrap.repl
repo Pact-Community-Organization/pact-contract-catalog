@@ -40,4 +40,6 @@
 (namespace "nft")
 (load "../../policies/royalty-policy.pact")
 (create-table nft.royalty-policy.royalties)
+(load "../../policies/transfer-mode-policy.pact")
+(create-table nft.transfer-mode-policy.modes)
 (commit-tx)

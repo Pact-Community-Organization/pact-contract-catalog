@@ -56,6 +56,8 @@
 (nft.policy-manager.init nft.ledger)
 (load "../policies/royalty-policy.pact")
 (create-table nft.royalty-policy.royalties)
+(load "../policies/transfer-mode-policy.pact")
+(create-table nft.transfer-mode-policy.modes)
 (load "../policies/non-fungible-policy.pact")
 (create-table nft.non-fungible-policy.minted-table)
 (load "../policies/guarded-uri-policy.pact")
@@ -71,7 +73,7 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
                     , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 1000, "sale-only": false }
+                    , "bps": 1000 }
   , "uri_guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" } })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
@@ -218,12 +220,13 @@
   , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "royalty_spec": { "creator": "k:1111111111111111111111111111111111111111111111111111111111111111"
                     , "creator-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-                    , "bps": 500, "sale-only": true } })
+                    , "bps": 500 }
+  , "transfer_mode": "sale-only" })
 (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let ((id (nft.ledger.create-token-id
-            { 'uri: "ipfs://locked", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
+            { 'uri: "ipfs://locked", 'precision: 0, 'policies: [nft.royalty-policy nft.transfer-mode-policy], 'serial: "" }
             (read-keyset 'alice))))
-  (nft.ledger.create-token id 0 "ipfs://locked" [nft.royalty-policy] "" (read-keyset 'alice))
+  (nft.ledger.create-token id 0 "ipfs://locked" [nft.royalty-policy nft.transfer-mode-policy] "" (read-keyset 'alice))
   (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111"
     (read-keyset 'alice) 1.0)
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
