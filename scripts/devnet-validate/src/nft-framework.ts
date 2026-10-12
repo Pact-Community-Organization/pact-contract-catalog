@@ -169,8 +169,15 @@ async function main(): Promise<void> {
     data: { g: ks(bob), h: ks(carol) }, chainId: CH1,
   });
 
-  await deployStack(CH0, gov);
-  await deployStack(CH1, gov);
+  // SKIP_DEPLOY=1 reuses a framework already deployed under `free` on this devnet
+  // (module names are fixed, so a devnet takes exactly one deployment; the acts
+  // below work against any deployed instance with fresh personas + fresh ids).
+  if (process.env.SKIP_DEPLOY === '1') {
+    console.log('\n== SKIP_DEPLOY: reusing the framework already on this devnet ==');
+  } else {
+    await deployStack(CH0, gov);
+    await deployStack(CH1, gov);
+  }
 
   // =========================================================================
   // ACT 1 — chain 0: create + mint (10% royalty, strict 1/1)
@@ -266,7 +273,7 @@ async function main(): Promise<void> {
   assertNear('bob holds the painting on chain 1',
     await localCall(`(free.ledger.get-balance "${tokenId}" "${bob.account}")`, CH1), 1.0);
   assertNear('the royalty passport re-bound on chain 1 (bps)',
-    await localCall(`(at 'bps (free.royalty-policy.get-royalty "${tokenId}"))`, CH1), 1000);
+    await localCall(`(at 'bps (at 0 (at 'beneficiaries (free.royalty-policy.get-royalty "${tokenId}"))))`, CH1), 1000);
   const marker = await localCall(`(free.non-fungible-policy.is-minted "${tokenId}")`, CH1);
   if (marker !== true) throw new Error('1/1 marker did not travel');
   console.log('  ✓ the 1/1 once-ever marker traveled');
