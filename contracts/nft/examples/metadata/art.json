@@ -1,0 +1,11 @@
+{
+  "$schema": "https://pact-community.org/nft/meta-schema-v1.json",
+  "name": "Dawn",
+  "description": "1/1. The look may evolve (guarded uri, on-chain history); the holder may freeze it.",
+  "image": "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/dawn-v1.png",
+  "properties": {
+    "external_url": "https://nft.smartpacts.io/art/dawn",
+    "authors": [ { "name": "Alice", "account": "k:1111111111111111111111111111111111111111111111111111111111111111" } ],
+    "edition": { "size": 1 }
+  }
+}

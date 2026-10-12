@@ -1,0 +1,35 @@
+{
+  "$schema": "https://pact-community.org/nft/meta-schema-v1.json",
+  "name": "Charmander #001",
+  "description": "Set 1 creature card. The game-readable stats live ON CHAIN in nft.attributes-policy (see the 'onchain' block); this file carries the display copy only.",
+  "image": "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/charmander.png",
+  "animation_url": "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/charmander.mp4",
+  "attributes": [
+    { "trait_type": "Element", "value": "fire" },
+    { "trait_type": "Rarity", "value": "common" },
+    { "trait_type": "Artist", "value": "Pixel Studio" }
+  ],
+  "properties": {
+    "external_url": "https://nft.smartpacts.io/cards/set1/001",
+    "authors": [ { "name": "Pixel Studio" } ],
+    "collection": { "name": "Set 1", "family": "Smart Pacts Cards" },
+    "onchain": {
+      "policy": "nft.attributes-policy",
+      "read": "(nft.attributes-policy.get-attributes token-id)  ;; or get-attribute-or token-id key default",
+      "keys": {
+        "name":      { "writer": "studio", "type": "string" },
+        "element":   { "writer": "studio", "type": "string" },
+        "mana":      { "writer": "studio", "type": "integer" },
+        "hp":        { "writer": "studio", "type": "integer" },
+        "atk":       { "writer": "studio", "type": "integer" },
+        "def":       { "writer": "studio", "type": "integer" },
+        "abilities": { "writer": "studio", "type": "csv<string>" },
+        "level":     { "writer": "game (capability guard games.arena.WRITER)", "type": "integer" },
+        "wins":      { "writer": "game (capability guard games.arena.WRITER)", "type": "integer" }
+      },
+      "max-value-bytes": 64,
+      "history": "events",
+      "holder-freeze": false
+    }
+  }
+}

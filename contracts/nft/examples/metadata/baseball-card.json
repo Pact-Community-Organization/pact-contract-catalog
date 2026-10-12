@@ -1,0 +1,19 @@
+{
+  "$schema": "https://pact-community.org/nft/meta-schema-v1.json",
+  "name": "Ace Rivera — 2026 Season",
+  "description": "Edition of 10. Smart Pacts Baseball, 2026 season card #07.",
+  "image": "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/ace-rivera.png",
+  "attributes": [
+    { "trait_type": "Team", "value": "Monterrey Sultanes" },
+    { "trait_type": "Position", "value": "Shortstop" },
+    { "trait_type": "Season", "value": 2026, "display_type": "number" },
+    { "trait_type": "Batting average", "value": 0.312, "display_type": "number" },
+    { "trait_type": "Card number", "value": "07/120" }
+  ],
+  "properties": {
+    "external_url": "https://nft.smartpacts.io/baseball/2026/ace-rivera",
+    "authors": [ { "name": "Pixel Studio" } ],
+    "collection": { "name": "2026 Season", "family": "Smart Pacts Baseball" },
+    "edition": { "size": 10, "serial": "2026" }
+  }
+}

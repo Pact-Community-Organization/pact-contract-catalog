@@ -1,0 +1,548 @@
+;; nft framework — EMULATION: real collectible families on the framework.
+;;
+;; Each family is built ONLY from the shipped policies, with the payload a
+;; studio/artist would really sign. What each one proves:
+;;   * BASEBALL CARDS — a season collection (operator = the studio), each player
+;;     an edition of 10 identical copies, frozen uri, 3% creator royalty, free
+;;     trading; the 11th copy can never exist; the season has a size cap.
+;;   * POKÉMON-STYLE CARDS — a unique card per copy (serial = card number) with
+;;     GAME METADATA ON CHAIN through attributes-policy: the studio writes the
+;;     base stats (name, element, mana, hp, atk, def, abilities), a GAME
+;;     CONTRACT writes level/wins through a capability-guard writer. The
+;;     external `games.arena` module below reads the stats with one call,
+;;     verifies ownership WITHOUT custody (ADR-NFT-003), resolves a battle,
+;;     levels the winner's card and mints a BOUND trophy (serial = match id).
+;;   * ART 1/1 — 10% royalty, evolving uri with on-chain history, holder freeze.
+;;   * MUSIC EDITION — 100 copies, three royalty beneficiaries + a label-only
+;;     primary list.
+;;   * GAME ITEM (potions) — a stackable run of 1000 the game can burn.
+;;   * MEMBERSHIP BADGE — bound (soulbound): no transfer, no sale.
+;;   * EVENT TICKET — sale-only: resale through the sale pact only, redeemed by burn.
+;; Each expect goes RED if the mechanism it names is removed.
+;;
+;; Run: pact contracts/nft/test/emulation-collectibles.repl
+
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+(begin-tx "deploy nft framework")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-01T00:00:00Z") })
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../core/util.pact")
+(load "../core/venue-registry.pact")
+(create-table nft.venue-registry.venues)
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.params)
+(create-table nft.policy-manager.creation-venues)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(load "../policies/issuance-policy.pact")
+(create-table nft.issuance-policy.issuance)
+(load "../policies/transfer-mode-policy.pact")
+(create-table nft.transfer-mode-policy.modes)
+(load "../policies/collection-policy.pact")
+(create-table nft.collection-policy.collections)
+(create-table nft.collection-policy.collection-tokens)
+(load "../policies/non-updatable-uri-policy.pact")
+(load "../policies/guarded-uri-policy.pact")
+(create-table nft.guarded-uri-policy.uri-guards)
+(create-table nft.guarded-uri-policy.uri-history)
+(load "../policies/attributes-policy.pact")
+(create-table nft.attributes-policy.specs)
+(create-table nft.attributes-policy.attributes)
+(create-table nft.attributes-policy.attr-history)
+(commit-tx)
+
+;; personas
+;;   studio  k:aaaa (Pixel Studio: baseball + card game)   alice k:1111 (artist)
+;;   bob     k:2222   carol k:3333   dan k:4444 (collectors)
+;;   musician k:bbbb  label k:cccc  producer k:dddd
+;;   club    k:eeee (badges + tickets)
+
+;; ===========================================================================
+;; THE EXTERNAL GAME: games.arena — reads stats, verifies ownership, no custody
+;; ===========================================================================
+(begin-tx "deploy the arena game (an external contract, its own namespace)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-01T00:00:00Z") })
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-keys ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+(define-namespace "games" (read-keyset 'studio) (read-keyset 'studio))
+(namespace "games")
+(define-keyset "games.arena-admin" (read-keyset 'studio))
+
+(module arena GOVERNANCE
+  @doc "A card battle game that USES the nft framework without owning anything: \
+       \it reads a card's on-chain attributes, requires the player's own \
+       \signature on the card account (no custody, ADR-NFT-003), writes the \
+       \game-owned keys through its capability-guard writer, and mints one \
+       \bound trophy per match through its capability-guard author."
+
+  (defcap GOVERNANCE () (enforce-keyset "games.arena-admin"))
+
+  ;; the game's two on-chain identities: attribute WRITER and trophy MINTER.
+  ;; Weak-bodied by design: acquired ONLY inside `battle`, after both players'
+  ;; guards passed; a test fixture, never deployed (static-gate WARN reviewed).
+  (defcap WRITER:bool () true)
+  (defcap MINTER:bool () true)
+  (defun writer-guard:guard () (create-capability-guard (WRITER)))
+  (defun minter-guard:guard () (create-capability-guard (MINTER)))
+
+  (defcap BATTLE:bool (match-id:string card-a:string card-b:string winner-card:string winner:string trophy:string)
+    @event true)
+
+  (defconst TROPHY-URI:string "ipfs://arena/trophy")
+
+  (defschema match-row
+    card-a:string card-b:string winner-card:string winner:string power-a:integer power-b:integer trophy:string)
+  (deftable matches:{match-row})
+
+  ;; --- reading the card the useful way: one call per stat, typed ----------------
+  (defun stat:integer (card:string key:string)
+    @doc "An integer attribute; 0 when the key was never written."
+    (str-to-int (nft.attributes-policy.get-attribute-or card key "0")))
+
+  (defun power:integer (card:string)
+    (+ (+ (* 2 (stat card "atk")) (+ (stat card "def") (stat card "hp"))) (* 5 (stat card "level"))))
+
+  (defun enforce-player-holds:bool (card:string player:string)
+    @doc "Ownership without custody: the card is in PLAYER's wallet and PLAYER \
+         \signed this transaction with the card account's own guard."
+    (enforce (> (try 0.0 (nft.ledger.get-balance card player)) 0.0) "player does not hold the card")
+    (enforce-guard (nft.ledger.account-guard card player)))
+
+  (defun trophy-policies:[module{nft.token-policy}] ()
+    [nft.transfer-mode-policy nft.issuance-policy])
+
+  (defun trophy-id:string (match-id:string)
+    (nft.ledger.create-token-id
+      { 'uri: TROPHY-URI, 'precision: 0, 'policies: (trophy-policies), 'serial: match-id }
+      (minter-guard)))
+
+  (defun battle:string (match-id:string card-a:string player-a:string card-b:string player-b:string)
+    @doc "Both players sign. The higher power wins; the winner's card gains a \
+         \level and a win; the winner receives a bound trophy unique to this match."
+    (enforce (!= card-a card-b) "a card cannot battle itself")
+    (enforce-player-holds card-a player-a)
+    (enforce-player-holds card-b player-b)
+    (let* ((pa (power card-a)) (pb (power card-b))
+           (wcard (if (>= pa pb) card-a card-b))
+           (winner (if (>= pa pb) player-a player-b))
+           (tid (trophy-id match-id)))
+      (insert matches match-id
+        { 'card-a: card-a, 'card-b: card-b, 'winner-card: wcard, 'winner: winner
+        , 'power-a: pa, 'power-b: pb, 'trophy: tid })
+      (with-capability (WRITER)
+        (nft.attributes-policy.set-attribute wcard "level" (int-to-str 10 (+ 1 (stat wcard "level"))))
+        (nft.attributes-policy.set-attribute wcard "wins" (int-to-str 10 (+ 1 (stat wcard "wins")))))
+      (with-capability (MINTER)
+        (nft.ledger.create-token tid 0 TROPHY-URI (trophy-policies) match-id (minter-guard))
+        (nft.ledger.mint tid winner (nft.ledger.account-guard wcard winner) 1.0))
+      (emit-event (BATTLE match-id card-a card-b wcard winner tid))
+      winner))
+
+  (defun get-match:object{match-row} (match-id:string) (read matches match-id))
+)
+(create-table games.arena.matches)
+(commit-tx)
+
+;; ===========================================================================
+;; BASEBALL CARDS — season collection, editions of 10, frozen uri, 3% royalty
+;; ===========================================================================
+(begin-tx "the studio opens the 2026 season collection (cap 3 players)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-01T00:00:00Z") })
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(expect "the season collection exists under a derived id" true
+  (nft.collection-policy.create-collection
+    (nft.collection-policy.create-collection-id "2026 Season" (read-keyset 'studio)) "2026 Season" 3 (read-keyset 'studio)))
+(commit-tx)
+
+(begin-tx "three player cards, each an edition of 10; a fourth player does not fit the season")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-01T00:00:00Z") })
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "collection_id": (nft.collection-policy.create-collection-id "2026 Season" (read-keyset 'studio))
+  , "issuance_spec": { "max-issued": 10.0, "min-mint": 1.0 }
+  , "transfer_mode": "free"
+  , "royalty_spec":
+    { "beneficiaries": [ { "account": "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                         , "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+                         , "bps": 300, "label": "studio" } ]
+    , "primary": [] } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(env-events true)
+(let* ((pols [nft.collection-policy nft.issuance-policy nft.royalty-policy nft.non-updatable-uri-policy nft.transfer-mode-policy])
+       (mk (lambda (u:string) (nft.ledger.create-token-id { 'uri: u, 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio))))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+       (uris ["ipfs://baseball/2026/ace-rivera" "ipfs://baseball/2026/mia-sato" "ipfs://baseball/2026/leo-brandt"]))
+  (map (lambda (u:string)
+         (expect (format "card {} created" [u]) true
+           (nft.ledger.create-token (mk u) 0 u pols "2026" (read-keyset 'studio))))
+       uris)
+  (expect "the season holds the three players" 3
+    (at 'size (nft.collection-policy.get-collection (nft.collection-policy.create-collection-id "2026 Season" (read-keyset 'studio)))))
+  (expect "the id is order-independent: the same policy SET derives the same id"
+    (mk "ipfs://baseball/2026/ace-rivera")
+    (nft.ledger.create-token-id
+      { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'serial: "2026"
+      , 'policies: [nft.transfer-mode-policy nft.royalty-policy nft.collection-policy nft.non-updatable-uri-policy nft.issuance-policy] }
+      (read-keyset 'studio)))
+  (expect "the origin chain and the serial are on the token" { 'origin-chain: "0", 'serial: "2026" }
+    (let ((t (nft.ledger.get-token-info (mk "ipfs://baseball/2026/ace-rivera")))) { 'origin-chain: (at 'origin-chain t), 'serial: (at 'serial t) }))
+  (expect-failure "a fourth player does not fit the season cap" "collection is full"
+    (nft.ledger.create-token (mk "ipfs://baseball/2026/extra") 0 "ipfs://baseball/2026/extra" pols "2026" (read-keyset 'studio)))
+  ;; the whole edition is minted to the studio (operator = author here)
+  (map (lambda (u:string) (nft.ledger.mint (mk u) studio (read-keyset 'studio) 10.0)) uris)
+  (expect "10 copies of Ace Rivera exist" 10.0 (nft.ledger.total-supply (mk "ipfs://baseball/2026/ace-rivera")))
+  (expect-failure "the 11th copy can never exist" "print run exhausted"
+    (nft.ledger.mint (mk "ipfs://baseball/2026/ace-rivera") studio (read-keyset 'studio) 1.0))
+  (expect "the edition's remaining run is 0" 0.0 (nft.issuance-policy.remaining (mk "ipfs://baseball/2026/ace-rivera")))
+  (expect "the card art is frozen: the uri cannot change" "veto"
+    (nft.non-updatable-uri-policy.uri-decision (nft.ledger.get-token-info (mk "ipfs://baseball/2026/ace-rivera")))))
+(commit-tx)
+
+(begin-tx "the studio gifts Ace Rivera copies; the frozen uri rejects an update")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-02T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let* ((pols [nft.collection-policy nft.issuance-policy nft.royalty-policy nft.non-updatable-uri-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              , "caps": [ (nft.ledger.TRANSFER ace studio bob 2.0), (nft.ledger.TRANSFER ace studio carol 1.0) ] } ])
+  (nft.ledger.transfer-create ace studio bob (read-keyset 'bob) 2.0)
+  (nft.ledger.transfer-create ace studio carol (read-keyset 'carol) 1.0)
+  (expect "bob holds 2, carol 1, the studio 7" [2.0 1.0 7.0]
+    (map (lambda (a:string) (nft.ledger.get-balance ace a)) [bob carol studio]))
+  (expect "the supply is unchanged by trading" 10.0 (nft.ledger.total-supply ace))
+  (expect-failure "nobody can change the frozen card art" "immutable"
+    (nft.ledger.update-uri ace "ipfs://baseball/2026/ace-rivera-v2")))
+(commit-tx)
+
+;; ===========================================================================
+;; POKÉMON-STYLE CARDS — unique copies with game metadata ON CHAIN
+;; ===========================================================================
+(begin-tx "two unique cards: the studio writes the base stats, the arena owns level + wins")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-03T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 1.0, "min-mint": 1.0 }
+  , "transfer_mode": "free"
+  , "royalty_spec":
+    { "beneficiaries": [ { "account": "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                         , "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+                         , "bps": 500, "label": "studio" } ]
+    , "primary": [] }
+  , "attributes_spec":
+    { "writers":
+      [ { "key": "name",      "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+      , { "key": "element",   "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+      , { "key": "mana",      "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+      , { "key": "hp",        "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+      , { "key": "atk",       "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+      , { "key": "def",       "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+      , { "key": "abilities", "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+      , { "key": "level",     "guard": (games.arena.writer-guard) }
+      , { "key": "wins",      "guard": (games.arena.writer-guard) } ]
+    , "max-value-bytes": 64, "history": "events", "holder-freeze": false } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (mk (lambda (serial:string) (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: serial } (read-keyset 'studio))))
+       (c001 (mk "001")) (c002 (mk "002"))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (write-all (lambda (id:string kvs:[[string]])
+                    (map (lambda (kv:[string]) (nft.attributes-policy.set-attribute id (at 0 kv) (at 1 kv))) kvs))))
+  (expect "the same art + the same metadata, two DIFFERENT ids: the serial makes each copy unique" true (!= c001 c002))
+  (nft.ledger.create-token c001 0 "ipfs://cards/set1" pols "001" (read-keyset 'studio))
+  (nft.ledger.create-token c002 0 "ipfs://cards/set1" pols "002" (read-keyset 'studio))
+  (expect "nine game-readable keys exist from creation" 9 (length (nft.attributes-policy.get-keys c001)))
+  (write-all c001 [["name" "Charmander"] ["element" "fire"] ["mana" "3"] ["hp" "39"] ["atk" "52"] ["def" "43"] ["abilities" "ember,scratch"]])
+  (write-all c002 [["name" "Squirtle"] ["element" "water"] ["mana" "3"] ["hp" "44"] ["atk" "48"] ["def" "65"] ["abilities" "bubble,withdraw"]])
+  (expect "a game reads one stat with one call" "52" (nft.attributes-policy.get-attribute-or c001 "atk" "0"))
+  (expect "a game reads the whole sheet in one call (unwritten keys at version 0)" ["Charmander" "fire" "3" "39" "52" "43" "ember,scratch" "" ""]
+    (map (at 'value) (nft.attributes-policy.get-attributes c001)))
+  (expect-failure "the studio cannot write the GAME's key (a capability guard only the arena can satisfy)" "Capability not acquired"
+    (nft.attributes-policy.set-attribute c001 "level" "99"))
+  ;; the cards go to their players
+  (nft.ledger.mint c001 bob (read-keyset 'bob) 1.0)
+  (nft.ledger.mint c002 carol (read-keyset 'carol) 1.0)
+  (expect "each card is a 1/1 in its player's wallet" [1.0 1.0] [(nft.ledger.get-balance c001 bob) (nft.ledger.get-balance c002 carol)]))
+(commit-tx)
+
+(begin-tx "a battle: ownership proven by signature, the arena writes level/wins, mints a bound trophy")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-04T00:00:00Z") })
+(env-hash (hash "match-1"))
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  ;; the trophy's creation payload rides the battle tx (the arena creates a bound 1/1)
+  , "transfer_mode": "bound"
+  , "issuance_spec": { "max-issued": 1.0, "min-mint": 1.0 }
+  ;; a quote so the later offer attempt reaches the policy's refusal
+  , "quote": { "fungible": coin, "price": 10.0
+             , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
+             , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+             , "fee-account": "", "fee-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+             , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
+(env-events true)
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (mk (lambda (serial:string) (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: serial } (read-keyset 'studio))))
+       (c001 (mk "001")) (c002 (mk "002"))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (mallory "k:5555555555555555555555555555555555555555555555555555555555555555"))
+  ;; level is the GAME's key and starts unwritten (0): 2*52+43+39 = 186, 2*48+65+44 = 205
+  (expect "power is computed from the on-chain sheet (2*atk + def + hp + 5*level)" [186 205]
+    [(games.arena.power c001) (games.arena.power c002)])
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (expect-failure "a battle without the other player's signature is refused" "Keyset failure"
+    (games.arena.battle "m1" c001 bob c002 carol))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] }
+            , { "key": "5555555555555555555555555555555555555555555555555555555555555555", "caps": [] } ])
+  (expect-failure "a player cannot enter a card they do not hold" "player does not hold the card"
+    (games.arena.battle "m1" c001 bob c002 mallory))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] }
+            , { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+  (expect "Squirtle (205) beats Charmander (186): carol wins" carol
+    (games.arena.battle "m1" c001 bob c002 carol))
+  (expect "the winner's card levelled up and recorded the win (written by the GAME, not the studio)" { 'level: "1", 'wins: "1" }
+    { 'level: (nft.attributes-policy.get-attribute-or c002 "level" "0"), 'wins: (nft.attributes-policy.get-attribute-or c002 "wins" "0") })
+  (expect "the loser's card is untouched" "" (nft.attributes-policy.get-attribute-or c001 "level" ""))
+  (expect "the cards never left the wallets (no custody)" [1.0 1.0] [(nft.ledger.get-balance c001 bob) (nft.ledger.get-balance c002 carol)])
+  (let ((trophy (at 'trophy (games.arena.get-match "m1"))))
+    (expect "carol received the trophy" 1.0 (nft.ledger.get-balance trophy carol))
+    (expect "the trophy is authored by the GAME (its capability guard), serial = the match" { 'author: (create-principal (games.arena.minter-guard)), 'serial: "m1" }
+      (let ((t (nft.ledger.get-token-info trophy))) { 'author: (at 'author t), 'serial: (at 'serial t) }))
+    (expect "the trophy is bound" "bound" (nft.transfer-mode-policy.get-mode trophy))
+    (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+                , "caps": [ (nft.ledger.TRANSFER trophy carol bob 1.0) ] } ])
+    (expect-failure "a trophy cannot be given away" "bound token: free transfer is disabled"
+      (nft.ledger.transfer-create trophy carol bob (read-keyset 'studio) 1.0))
+    (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+                , "caps": [ (nft.ledger.OFFER trophy carol 1.0 0) ] } ])
+    (expect-failure "a trophy cannot be sold" "bound token: cannot be offered for sale"
+      (nft.ledger.sale trophy carol 1.0 0)))
+  (expect "BATTLE event fired" 1
+    (length (filter (lambda (e) (= "games.arena.BATTLE" (at 'name e))) (env-events true)))))
+(commit-tx)
+
+(begin-tx "a rematch: a second, different trophy (same art, new serial); a replayed match id is refused")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-05T00:00:00Z") })
+(env-hash (hash "match-2"))
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "transfer_mode": "bound"
+  , "issuance_spec": { "max-issued": 1.0, "min-mint": 1.0 } })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] }
+          , { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (mk (lambda (serial:string) (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: serial } (read-keyset 'studio))))
+       (c001 (mk "001")) (c002 (mk "002"))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (expect-failure "a match id is used once" "already found" (games.arena.battle "m1" c001 bob c002 carol))
+  (expect "Squirtle wins again (now 210 vs 186)" carol (games.arena.battle "m2" c001 bob c002 carol))
+  (expect "level 2, wins 2" { 'level: "2", 'wins: "2" }
+    { 'level: (nft.attributes-policy.get-attribute-or c002 "level" "0"), 'wins: (nft.attributes-policy.get-attribute-or c002 "wins" "0") })
+  (expect "the two trophies are distinct tokens with the same uri" true
+    (!= (at 'trophy (games.arena.get-match "m1")) (at 'trophy (games.arena.get-match "m2"))))
+  (expect "carol holds both" [1.0 1.0]
+    [(nft.ledger.get-balance (at 'trophy (games.arena.get-match "m1")) carol) (nft.ledger.get-balance (at 'trophy (games.arena.get-match "m2")) carol)]))
+(commit-tx)
+
+;; ===========================================================================
+;; ART 1/1 — royalty, evolving uri with on-chain history, holder freeze
+;; ===========================================================================
+(begin-tx "alice mints a 1/1 whose look she may evolve; the collector may freeze it")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-06T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 1.0, "min-mint": 1.0 }
+  , "transfer_mode": "free"
+  , "uri_guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "uri_history": "onchain", "uri_holder_freeze": true
+  , "royalty_spec":
+    { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                         , "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                         , "bps": 1000, "label": "artist" } ]
+    , "primary": [] } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let* ((pols [nft.royalty-policy nft.guarded-uri-policy nft.issuance-policy nft.transfer-mode-policy])
+       (art (nft.ledger.create-token-id { 'uri: "ipfs://art/dawn/v1", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (nft.ledger.create-token art 0 "ipfs://art/dawn/v1" pols "" (read-keyset 'alice))
+  (nft.ledger.mint art alice (read-keyset 'alice) 1.0)
+  (expect-failure "a 1/1 is a 1/1" "print run exhausted" (nft.ledger.mint art alice (read-keyset 'alice) 1.0))
+  (expect "alice evolves the piece" true (nft.ledger.update-uri art "ipfs://art/dawn/v2"))
+  (expect "version 1, new look" { 'uri: "ipfs://art/dawn/v2", 'version: 1 } { 'uri: (nft.ledger.get-uri art), 'version: (nft.ledger.get-uri-version art) })
+  (expect "the first look is kept on chain" "ipfs://art/dawn/v1" (at 'uri (nft.guarded-uri-policy.get-uri-at art 1)))
+  ;; alice gives the piece to bob (a sale is the market suite's job)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [ (nft.ledger.TRANSFER art alice bob 1.0) ] } ])
+  (nft.ledger.transfer-create art alice bob (read-keyset 'bob) 1.0)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (expect "alice may still evolve it while bob allows" true (nft.ledger.update-uri art "ipfs://art/dawn/v3"))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (expect "bob, the sole holder, freezes the look" true (nft.guarded-uri-policy.freeze-copy art bob))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (expect-failure "after the freeze the artist can no longer change it" "frozen by its holder"
+    (nft.ledger.update-uri art "ipfs://art/dawn/v4"))
+  (expect "the look stands at version 2" { 'uri: "ipfs://art/dawn/v3", 'version: 2 } { 'uri: (nft.ledger.get-uri art), 'version: (nft.ledger.get-uri-version art) }))
+(commit-tx)
+
+;; ===========================================================================
+;; MUSIC EDITION — 100 copies, three beneficiaries, label-only primary list
+;; ===========================================================================
+(begin-tx "a track: 100 copies, royalties split artist/producer/label, the label takes the first sale")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-07T00:00:00Z") })
+(env-data
+  { "musician": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 100.0, "min-mint": 1.0 }
+  , "transfer_mode": "free"
+  , "royalty_spec":
+    { "beneficiaries":
+      [ { "account": "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }, "bps": 500, "label": "artist" }
+      , { "account": "k:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "guard": { "keys": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"], "pred": "keys-all" }, "bps": 300, "label": "producer" }
+      , { "account": "k:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }, "bps": 200, "label": "label" } ]
+    , "primary":
+      [ { "account": "k:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }, "bps": 2000, "label": "label" } ] } })
+(env-sigs [ { "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "caps": [] } ])
+(let* ((pols [nft.royalty-policy nft.issuance-policy nft.transfer-mode-policy])
+       (track (nft.ledger.create-token-id { 'uri: "ipfs://music/track-01", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'musician)))
+       (musician "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+  (nft.ledger.create-token track 0 "ipfs://music/track-01" pols "" (read-keyset 'musician))
+  (expect "the plan has three resale beneficiaries and one primary" { 'resale: 3, 'primary: 1 }
+    (let ((r (nft.royalty-policy.get-royalty track))) { 'resale: (length (at 'beneficiaries r)), 'primary: (length (at 'primary r)) }))
+  (expect "the declared maximum is the larger list (20%)" 2000 (nft.royalty-policy.payout-bps (nft.ledger.get-token-info track)))
+  (nft.ledger.mint track musician (read-keyset 'musician) 100.0)
+  (expect "100 copies minted in one go" 100.0 (nft.ledger.total-supply track)))
+(commit-tx)
+
+;; ===========================================================================
+;; GAME ITEM — stackable potions the game consumes
+;; ===========================================================================
+(begin-tx "potions: a run of 1000, traded in stacks, consumed by burning")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-08T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 1000.0, "min-mint": 1.0 }
+  , "transfer_mode": "free" })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (potion (nft.ledger.create-token-id { 'uri: "ipfs://items/potion", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (nft.ledger.create-token potion 0 "ipfs://items/potion" pols "" (read-keyset 'studio))
+  (nft.ledger.mint potion studio (read-keyset 'studio) 1000.0)
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [ (nft.ledger.TRANSFER potion studio bob 25.0) ] } ])
+  (nft.ledger.transfer-create potion studio bob (read-keyset 'bob) 25.0)
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [ (nft.ledger.TRANSFER potion bob carol 5.0) ] } ])
+  (nft.ledger.transfer-create potion bob carol (read-keyset 'carol) 5.0)
+  (expect-failure "a stack cannot be split below a whole potion" "precision violation"
+    (nft.ledger.transfer potion bob carol 0.5))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (expect "bob drinks one (burn)" true (nft.ledger.burn potion bob 1.0))
+  (expect "stacks: bob 19, carol 5, studio 975; supply 999" [19.0 5.0 975.0 999.0]
+    [(nft.ledger.get-balance potion bob) (nft.ledger.get-balance potion carol) (nft.ledger.get-balance potion studio) (nft.ledger.total-supply potion)])
+  (expect "a burned potion does not reopen the run (issued stays 1000)" 0.0 (nft.issuance-policy.remaining potion)))
+(commit-tx)
+
+;; ===========================================================================
+;; MEMBERSHIP BADGE — soulbound
+;; ===========================================================================
+(begin-tx "the club issues bound badges: held, shown, never traded")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-09T00:00:00Z") })
+(env-data
+  { "club": { "keys": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 50.0, "min-mint": 1.0 }
+  , "transfer_mode": "bound"
+  , "quote": { "fungible": coin, "price": 10.0
+             , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+             , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+             , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+             , "fee-bps": 0, "venue-id": "", "buyer-share-bps": 0, "sale-contract": "" } })
+(env-sigs [ { "key": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (badge (nft.ledger.create-token-id { 'uri: "ipfs://club/member-2026", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'club)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (nft.ledger.create-token badge 0 "ipfs://club/member-2026" pols "" (read-keyset 'club))
+  (expect "the club issues bob's badge straight into his wallet" true (nft.ledger.mint badge bob (read-keyset 'bob) 1.0))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.TRANSFER badge bob carol 1.0), (nft.ledger.OFFER badge bob 1.0 0) ] } ])
+  (expect-failure "a badge cannot be given away" "bound token: free transfer is disabled"
+    (nft.ledger.transfer-create badge bob carol (read-keyset 'bob) 1.0))
+  (expect-failure "a badge cannot be listed" "bound token: cannot be offered for sale"
+    (nft.ledger.sale badge bob 1.0 0))
+  (expect "bob still holds it" 1.0 (nft.ledger.get-balance badge bob)))
+(commit-tx)
+
+;; ===========================================================================
+;; EVENT TICKET — sale-only, redeemed by burn
+;; ===========================================================================
+(begin-tx "tickets: resale only through the sale pact; the holder redeems by burning")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-03-10T00:00:00Z") })
+(env-data
+  { "club": { "keys": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 200.0, "min-mint": 1.0 }
+  , "transfer_mode": "sale-only" })
+(env-sigs [ { "key": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (ticket (nft.ledger.create-token-id { 'uri: "ipfs://club/show-2026-06-01", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'club)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (nft.ledger.create-token ticket 0 "ipfs://club/show-2026-06-01" pols "" (read-keyset 'club))
+  (nft.ledger.mint ticket bob (read-keyset 'bob) 2.0)
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.TRANSFER ticket bob carol 1.0) ] } ])
+  (expect-failure "a ticket cannot be handed over for free (scalping goes through the sale pact, where fees apply)"
+    "sale-only token: free transfer is disabled"
+    (nft.ledger.transfer-create ticket bob carol (read-keyset 'bob) 1.0))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (expect "bob redeems one ticket at the door (burn)" true (nft.ledger.burn ticket bob 1.0))
+  (expect "one ticket left in bob's wallet; 199 unissued" [1.0 198.0]
+    [(nft.ledger.get-balance ticket bob) (nft.issuance-policy.remaining ticket)]))
+(commit-tx)
+
+(print "")
+(print "=== EMULATION — COLLECTIBLE FAMILIES: ALL GREEN ===")
+(print "  baseball editions in a capped season; unique game cards with on-chain stats read and")
+(print "  written by an external game (no custody, bound trophies); evolving 1/1 art with history")
+(print "  and holder freeze; a 100-copy music edition with a 3-way split; stackable potions;")
+(print "  soulbound badges; sale-only tickets redeemed by burn.")

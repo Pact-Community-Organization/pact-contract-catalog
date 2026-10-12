@@ -1,0 +1,1064 @@
+;; nft framework — MARKET SIMULATION: several workshops, galleries and stores
+;; trading the emulated collectibles, every leg reconciled.
+;;
+;; The market: a fixed protocol leg (0.5% to the PCO), two WORKSHOPS where
+;; creators publish (a primary rate on the creator's own sale, a resale rate
+;; after), a GALLERY and a CARD SHOP where anyone lists (a listing rate copied
+;; at offer time), a buyer-side SCOUT venue that earns a share of the listing
+;; fee, and a GREEDY gallery whose rate does not fit. The scenarios:
+;;   S1  first sale of a baseball card through the shop, bought via the scout  (6 legs)
+;;   S2  resale on the gallery: resale rates; rate changes after creation/offer
+;;       reach nobody already in flight
+;;   S3  a gift (free trading mode)
+;;   S4  a 1/1 painting sold by ascending auction on the gallery, settled by a
+;;       third party; the outbid bidder is refunded
+;;   S5  a music edition sold 10 copies at a time: the label-only primary list
+;;   S6  a resale of 4 copies with the 3-way beneficiary split
+;;   S7  a sale-only game card: no gifting, sells through the pact; relocates
+;;       to chain 1 WITH its on-chain stats and resells there
+;;   S8  a dutch auction through the shop
+;;   S9  a listing withdrawn: the NFT comes back
+;;   S10 the 100% rule refuses a venue that does not fit
+;;   S11 a sale-only ticket resold through the shop, then redeemed
+;;   S12 a sealed pack sold like any other NFT, gifted, then opened on a real
+;;       drand beacon
+;;   FINAL every coin ever funded is still there; every supply reconciles.
+;; Every leg is asserted as a DELTA on the account inside the settling tx, so a
+;; wrong cut anywhere goes RED at the sale that produced it.
+;;
+;; REPL TIER: one database plays both chains; SPV is devnet evidence.
+;; Run: pact contracts/nft/test/market-sim.repl
+
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+(begin-tx "deploy nft framework + sale contracts + pack engine")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../interfaces/token-policy.pact")
+(load "../interfaces/poly-fungible.pact")
+(load "../interfaces/ledger-iface.pact")
+(load "../interfaces/sale.pact")
+(load "../interfaces/beacon-verifier.pact")
+(load "../core/util.pact")
+(load "../core/venue-registry.pact")
+(create-table nft.venue-registry.venues)
+(load "../core/policy-manager.pact")
+(create-table nft.policy-manager.ledgers)
+(create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.sale-contracts)
+(create-table nft.policy-manager.params)
+(create-table nft.policy-manager.creation-venues)
+(load "../core/ledger.pact")
+(create-table nft.ledger.ledger-table)
+(create-table nft.ledger.tokens)
+(nft.policy-manager.init nft.ledger)
+(load "../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
+(load "../policies/issuance-policy.pact")
+(create-table nft.issuance-policy.issuance)
+(load "../policies/transfer-mode-policy.pact")
+(create-table nft.transfer-mode-policy.modes)
+(load "../policies/attributes-policy.pact")
+(create-table nft.attributes-policy.specs)
+(create-table nft.attributes-policy.attributes)
+(create-table nft.attributes-policy.attr-history)
+(load "../sale/conventional-auction.pact")
+(create-table nft.conventional-auction.auctions)
+(nft.policy-manager.register-sale-contract nft.conventional-auction)
+(load "../sale/dutch-auction.pact")
+(create-table nft.dutch-auction.auctions)
+(nft.policy-manager.register-sale-contract nft.dutch-auction)
+(load "../core/drand-verifier.pact")
+(load "../core/pack-engine.pact")
+(create-table nft.pack-engine.verifiers)
+(create-table nft.pack-engine.series-table)
+(create-table nft.pack-engine.pool)
+(create-table nft.pack-engine.requests)
+(create-table nft.pack-engine.queues)
+(nft.pack-engine.set-verifier nft.drand-verifier)
+(commit-tx)
+
+;; personas
+;;   creators:   studio k:aaaa (cards, potions, packs)  alice k:1111 (painter)
+;;               musician k:bbbb  label k:cccc  producer k:dddd  club k:eeee (tickets)
+;;   collectors: bob k:2222  carol k:3333  dan k:4444
+;;   venues:     Smart Pacts Workshop k:5555 (500/100/250)  Indie Forge k:6666 (1000/0/0)
+;;               Smart Pacts Gallery k:7777 (listing 1000)  Card Shop k:8888 (listing 300)
+;;               Scout k:abab (buyer-side)  Greedy Gallery k:cdcd (listing 9000)
+;;   protocol:   PCO k:ffff
+(begin-tx "fund the collectors: 2500 coin enter the economy, and nothing else ever will")
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "dan": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 1000.0)
+(test-capability (coin.CREDIT "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(coin.credit "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'carol) 1000.0)
+(test-capability (coin.CREDIT "k:4444444444444444444444444444444444444444444444444444444444444444"))
+(coin.credit "k:4444444444444444444444444444444444444444444444444444444444444444" (read-keyset 'dan) 500.0)
+(commit-tx)
+
+(begin-tx "governance: 0.5% protocol leg to the PCO")
+(env-data { "pco": { "keys": ["ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"], "pred": "keys-all" } })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(nft.policy-manager.set-protocol-fee 50 "k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" (read-keyset 'pco))
+(expect "protocol 50 bps" 50 (nft.policy-manager.protocol-bps))
+(commit-tx)
+
+(begin-tx "six venues register, each owner signing for its own")
+(env-data
+  { "wsa": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "wsb": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+  , "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" }
+  , "scout": { "keys": ["abababababababababababababababababababababababababababababababab"], "pred": "keys-all" }
+  , "greedy": { "keys": ["cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"], "pred": "keys-all" } })
+(env-keys ["5555555555555555555555555555555555555555555555555555555555555555"
+           "6666666666666666666666666666666666666666666666666666666666666666"
+           "7777777777777777777777777777777777777777777777777777777777777777"
+           "8888888888888888888888888888888888888888888888888888888888888888"
+           "abababababababababababababababababababababababababababababababab"
+           "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"])
+(nft.venue-registry.register-venue "Smart Pacts Workshop" (read-keyset 'wsa) "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset 'wsa) 500 100 250)
+(nft.venue-registry.register-venue "Indie Forge" (read-keyset 'wsb) "k:6666666666666666666666666666666666666666666666666666666666666666" (read-keyset 'wsb) 1000 0 0)
+(nft.venue-registry.register-venue "Smart Pacts Gallery" (read-keyset 'gal) "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'gal) 0 0 1000)
+(nft.venue-registry.register-venue "Card Shop" (read-keyset 'shop) "k:8888888888888888888888888888888888888888888888888888888888888888" (read-keyset 'shop) 0 0 300)
+(nft.venue-registry.register-venue "Scout" (read-keyset 'scout) "k:abababababababababababababababababababababababababababababababab" (read-keyset 'scout) 0 0 0)
+(nft.venue-registry.register-venue "Greedy Gallery" (read-keyset 'greedy) "k:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" (read-keyset 'greedy) 0 0 9000)
+(expect "the shop's rates are public" { 'primary-bps: 0, 'resale-bps: 0, 'listing-bps: 300 }
+  (let ((v (nft.venue-registry.get-venue (nft.venue-registry.create-venue-id "Card Shop" (read-keyset 'shop)))))
+    { 'primary-bps: (at 'primary-bps v), 'resale-bps: (at 'resale-bps v), 'listing-bps: (at 'listing-bps v) }))
+(commit-tx)
+
+;; ===========================================================================
+;; THE SUPPLY SIDE
+;; ===========================================================================
+(begin-tx "the studio publishes 'Ace Rivera' (edition of 10, 3% royalty) through the Smart Pacts Workshop")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "wsa": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "wsa": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "creation_venue": (nft.venue-registry.create-venue-id "Smart Pacts Workshop" (read-keyset 'wsa))
+  , "issuance_spec": { "max-issued": 10.0, "min-mint": 1.0 }
+  , "transfer_mode": "free"
+  , "royalty_spec":
+    { "beneficiaries": [ { "account": "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                         , "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+                         , "bps": 300, "label": "studio" } ]
+    , "primary": [] } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+  (nft.ledger.create-token ace 0 "ipfs://baseball/2026/ace-rivera" pols "2026" (read-keyset 'studio))
+  (expect "the Workshop's rates at creation are copied into the card for good" { 'primary-bps: 500, 'resale-bps: 100 }
+    (let ((cv (nft.policy-manager.get-creation-venue ace))) { 'primary-bps: (at 'primary-bps cv), 'resale-bps: (at 'resale-bps cv) }))
+  (nft.ledger.mint ace studio (read-keyset 'studio) 10.0))
+(commit-tx)
+
+(begin-tx "alice publishes the 1/1 painting 'Dawn' (10% royalty) through Indie Forge")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "wsb": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" } })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "wsb": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+  , "creation_venue": (nft.venue-registry.create-venue-id "Indie Forge" (read-keyset 'wsb))
+  , "issuance_spec": { "max-issued": 1.0, "min-mint": 1.0 }
+  , "transfer_mode": "free"
+  , "royalty_spec":
+    { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+                         , "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+                         , "bps": 1000, "label": "artist" } ]
+    , "primary": [] } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (dawn (nft.ledger.create-token-id { 'uri: "ipfs://art/dawn", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice))))
+  (nft.ledger.create-token dawn 0 "ipfs://art/dawn" pols "" (read-keyset 'alice))
+  (nft.ledger.mint dawn "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "the musician self-publishes 'Track 01' (100 copies; artist 5 / producer 3 / label 2; label 20% on first sale)")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "musician": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 100.0, "min-mint": 1.0 }
+  , "transfer_mode": "free"
+  , "royalty_spec":
+    { "beneficiaries":
+      [ { "account": "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }, "bps": 500, "label": "artist" }
+      , { "account": "k:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "guard": { "keys": ["dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"], "pred": "keys-all" }, "bps": 300, "label": "producer" }
+      , { "account": "k:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }, "bps": 200, "label": "label" } ]
+    , "primary":
+      [ { "account": "k:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "guard": { "keys": ["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"], "pred": "keys-all" }, "bps": 2000, "label": "label" } ] } })
+(env-sigs [ { "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (track (nft.ledger.create-token-id { 'uri: "ipfs://music/track-01", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'musician))))
+  (nft.ledger.create-token track 0 "ipfs://music/track-01" pols "" (read-keyset 'musician))
+  (nft.ledger.mint track "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" (read-keyset 'musician) 100.0))
+(commit-tx)
+
+;; The game card is self-published (no creation venue) ON PURPOSE: the
+;; creation-venue record lives on the creating chain only, so a workshop's
+;; resale leg is NOT collected after a relocation on real chains (gap F2,
+;; recorded in nft-ops). One REPL database would mask that; this card keeps
+;; the chain-1 resale identical on both tiers.
+(begin-tx "the studio publishes game card #001: on-chain stats, 5% royalty, SALE-ONLY trading")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 1.0, "min-mint": 1.0 }
+  , "transfer_mode": "sale-only"
+  , "royalty_spec":
+    { "beneficiaries": [ { "account": "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                         , "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+                         , "bps": 500, "label": "studio" } ]
+    , "primary": [] }
+  , "attributes_spec":
+    { "writers":
+      [ { "key": "atk",   "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+      , { "key": "hp",    "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } }
+      , { "key": "level", "guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } } ]
+    , "max-value-bytes": 16, "history": "events", "holder-freeze": false } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (card (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: "001" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+  (nft.ledger.create-token card 0 "ipfs://cards/set1" pols "001" (read-keyset 'studio))
+  (nft.attributes-policy.set-attribute card "atk" "52")
+  (nft.attributes-policy.set-attribute card "hp" "39")
+  (nft.attributes-policy.set-attribute card "level" "1")
+  (nft.ledger.mint card studio (read-keyset 'studio) 1.0))
+(commit-tx)
+
+(begin-tx "the club issues two sale-only tickets to bob")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "club": { "keys": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 200.0, "min-mint": 1.0 }
+  , "transfer_mode": "sale-only" })
+(env-sigs [ { "key": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (ticket (nft.ledger.create-token-id { 'uri: "ipfs://club/show", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'club))))
+  (nft.ledger.create-token ticket 0 "ipfs://club/show" pols "" (read-keyset 'club))
+  (nft.ledger.mint ticket "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 2.0))
+(commit-tx)
+
+(begin-tx "the studio seals 'Set 1': 2 packs x 3 cards from a vault of 6")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "issuance_spec": { "max-issued": 2.0, "min-mint": 1.0 }
+  , "transfer_mode": "free" })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (mk (lambda (u:string) (nft.ledger.create-token-id { 'uri: u, 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'studio))))
+       (pack (mk "ipfs://set1/pack")) (a (mk "ipfs://set1/A")) (b (mk "ipfs://set1/B")) (x (mk "ipfs://set1/X"))
+       (slots [ { 'name: "common", 'picks: 2, 'tiers: ["C"] }, { 'name: "rare", 'picks: 1, 'tiers: ["R"] } ]))
+  (map (lambda (u:string) (nft.ledger.create-token (mk u) 0 u pols "" (read-keyset 'studio))) ["ipfs://set1/pack" "ipfs://set1/A" "ipfs://set1/B" "ipfs://set1/X"])
+  (let ((sid (nft.pack-engine.create-series "Set 1" (read-keyset 'studio) pack 3 2 slots)))
+    (nft.pack-engine.add-pool-card sid a "C" 2)
+    (nft.pack-engine.add-pool-card sid b "C" 2)
+    (nft.pack-engine.add-pool-card sid x "R" 2)
+    (nft.pack-engine.lock-series sid)
+    (nft.pack-engine.mint-pool sid [a b x])
+    (nft.pack-engine.seal-series sid)
+    (expect "the studio holds 2 sealed packs" 2.0 (nft.ledger.get-balance pack "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))))
+(commit-tx)
+
+;; ===========================================================================
+;; S1 — FIRST SALE through the Card Shop, bought via the Scout
+;;   price 20: pco 0.10 | workshop primary 5% 1.00 | royalty 3% 0.60 (studio)
+;;   | shop 3% 0.60 of which 1% 0.20 to the scout | seller 17.70
+;; ===========================================================================
+(begin-tx "S1 offer: the studio lists one Ace Rivera on the Card Shop at 20")
+(env-hash (hash "ms-s1"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 20.0
+    , "seller-account": "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    , "seller-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Card Shop" (read-keyset 'shop))
+    , "fee-account": "", "fee-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 100, "sale-contract": "" } })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [ (nft.ledger.OFFER ace studio 1.0 0) ] } ])
+  (nft.ledger.sale ace studio 1.0 0)
+  (expect "the shop's registry rate was copied into the quote" { 'fee-bps: 300, 'fee-account: "k:8888888888888888888888888888888888888888888888888888888888888888" }
+    (let ((q (nft.policy-manager.get-quote (hash "ms-s1")))) { 'fee-bps: (at 'fee-bps q), 'fee-account: (at 'fee-account q) }))
+  (expect "the card sits in escrow, not with the seller" 9.0 (nft.ledger.get-balance ace studio)))
+(commit-tx)
+
+(begin-tx "S1 buy: bob buys through the Scout; six legs reconcile")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "scout": { "keys": ["abababababababababababababababababababababababababababababababab"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "scout": { "keys": ["abababababababababababababababababababababababababababababababab"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer_venue_id": (nft.venue-registry.create-venue-id "Scout" (read-keyset 'scout)) })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" "k:5555555555555555555555555555555555555555555555555555555555555555" studio
+               "k:8888888888888888888888888888888888888888888888888888888888888888" "k:abababababababababababababababababababababababababababababababab" bob])
+       (before (map bal accts)))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY ace studio bob 1.0 (hash "ms-s1"))
+                        , (coin.TRANSFER bob (nft.policy-manager.escrow-account (hash "ms-s1")) 20.0) ] } ])
+  (continue-pact 1 false (hash "ms-s1"))
+  (expect "bob holds his Ace" 1.0 (nft.ledger.get-balance ace bob))
+  (expect "legs: pco 0.10 | workshop 1.00 | studio 0.60 + 17.70 | shop 0.40 | scout 0.20 | bob -20"
+    [0.1 1.0 18.3 0.4 0.2 -20.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before))
+  (expect "the settlement escrow is empty" 0.0 (coin.get-balance (nft.policy-manager.escrow-account (hash "ms-s1")))))
+(commit-tx)
+
+;; ===========================================================================
+;; S2 — RESALE on the Gallery; rate changes reach nothing in flight
+;;   price 50: pco 0.25 | workshop resale 1% 0.50 | royalty 3% 1.50 | gallery 10% 5.00 | bob 42.75
+;; ===========================================================================
+(begin-tx "the Workshop doubles its rates: future creations only")
+(env-data { "wsa": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+(env-keys ["5555555555555555555555555555555555555555555555555555555555555555"])
+(nft.venue-registry.set-rates (nft.venue-registry.create-venue-id "Smart Pacts Workshop" (read-keyset 'wsa)) 1000 200 500)
+(commit-tx)
+
+(begin-tx "S2 offer: bob lists his Ace on the Smart Pacts Gallery at 50")
+(env-hash (hash "ms-s2"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 50.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Smart Pacts Gallery" (read-keyset 'gal))
+    , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [ (nft.ledger.OFFER ace bob 1.0 0) ] } ])
+  (nft.ledger.sale ace bob 1.0 0))
+(commit-tx)
+
+(begin-tx "the Gallery doubles its listing rate AFTER bob's offer: his listing keeps 10%")
+(env-data { "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-keys ["7777777777777777777777777777777777777777777777777777777777777777"])
+(nft.venue-registry.set-rates (nft.venue-registry.create-venue-id "Smart Pacts Gallery" (read-keyset 'gal)) 0 0 2000)
+(expect "the quote still carries 10%" 1000 (at 'fee-bps (nft.policy-manager.get-quote (hash "ms-s2"))))
+(commit-tx)
+
+(begin-tx "S2 buy: carol buys; the resale legs use the rates copied at creation and at offer")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "buyer": "k:3333333333333333333333333333333333333333333333333333333333333333"
+  , "buyer-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:3333333333333333333333333333333333333333333333333333333333333333" })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" "k:5555555555555555555555555555555555555555555555555555555555555555"
+               "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "k:7777777777777777777777777777777777777777777777777777777777777777" bob carol])
+       (before (map bal accts)))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.BUY ace bob carol 1.0 (hash "ms-s2"))
+                        , (coin.TRANSFER carol (nft.policy-manager.escrow-account (hash "ms-s2")) 50.0) ] } ])
+  (continue-pact 1 false (hash "ms-s2"))
+  (expect "carol holds the Ace" 1.0 (nft.ledger.get-balance ace carol))
+  (expect "legs: pco 0.25 | workshop RESALE 1% 0.50 (not the new 2%) | studio royalty 1.50 | gallery 10% 5.00 (not 20%) | bob 42.75 | carol -50"
+    [0.25 0.5 1.5 5.0 42.75 -50.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before)))
+(commit-tx)
+
+(begin-tx "the Gallery returns to 10% for the rest of the market")
+(env-data { "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-keys ["7777777777777777777777777777777777777777777777777777777777777777"])
+(nft.venue-registry.set-rates (nft.venue-registry.create-venue-id "Smart Pacts Gallery" (read-keyset 'gal)) 0 0 1000)
+(commit-tx)
+
+;; ===========================================================================
+;; S3 — A GIFT (free trading mode): no money, no fees
+;; ===========================================================================
+(begin-tx "S3: carol gives her Ace to dan")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "dan": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" } })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (dan "k:4444444444444444444444444444444444444444444444444444444444444444")
+       (before (coin.get-balance carol)))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [ (nft.ledger.TRANSFER ace carol dan 1.0) ] } ])
+  (nft.ledger.transfer-create ace carol dan (read-keyset 'dan) 1.0)
+  (expect "dan holds the gift; carol paid nothing" [1.0 0.0] [(nft.ledger.get-balance ace dan) (- (coin.get-balance carol) before)]))
+(commit-tx)
+
+;; ===========================================================================
+;; S4 — THE PAINTING by ascending auction on the Gallery, settled by a third party
+;;   winning bid 150: pco 0.75 | Indie Forge primary 10% 15 | royalty 10% 15 (alice)
+;;   | gallery 10% 15 | alice 104.25  -> alice nets 119.25
+;; ===========================================================================
+(begin-tx "S4 offer: alice lists Dawn through the auction contract on the Gallery")
+(env-hash (hash "ms-s4"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Smart Pacts Gallery" (read-keyset 'gal))
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "nft.conventional-auction" } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (dawn (nft.ledger.create-token-id { 'uri: "ipfs://art/dawn", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111"))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [ (nft.ledger.OFFER dawn alice 1.0 0) ] } ])
+  (nft.ledger.sale dawn alice 1.0 0)
+  ;; start +100 s, end +1000 s, reserve 50, increment 10, settlement grace 500 s (seller-signed)
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (nft.conventional-auction.create-auction (hash "ms-s4") dawn 1767225700 1767226600 50.0 10.0 500))
+(commit-tx)
+
+(begin-tx "S4 bids: bob 100, carol 150; bob's bid is refunded in full")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-01-01T00:00:00Z") 200) })
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let* ((bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (escrow (nft.conventional-auction.bid-escrow-account (hash "ms-s4")))
+       (bob-before (coin.get-balance bob)))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (coin.TRANSFER bob escrow 100.0), (nft.conventional-auction.PLACE-BID (read-keyset 'bob)) ] } ])
+  (nft.conventional-auction.place-bid (hash "ms-s4") bob (read-keyset 'bob) 100.0)
+  (expect "bob's 100 is held in the bid escrow" [-100.0 100.0] [(- (coin.get-balance bob) bob-before) (coin.get-balance escrow)])
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (coin.TRANSFER carol escrow 150.0), (nft.conventional-auction.PLACE-BID (read-keyset 'carol)) ] } ])
+  (nft.conventional-auction.place-bid (hash "ms-s4") carol (read-keyset 'carol) 150.0)
+  (expect "bob is refunded in full; only carol's 150 remains in escrow" [0.0 150.0] [(- (coin.get-balance bob) bob-before) (coin.get-balance escrow)]))
+(commit-tx)
+
+(begin-tx "S4 settlement: dan (a stranger) settles to carol; four legs reconcile")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-01-01T00:00:00Z") 1100) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:3333333333333333333333333333333333333333333333333333333333333333"
+  , "buyer-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyer_fungible_account": (nft.conventional-auction.bid-escrow-account (hash "ms-s4"))
+  , "quoted_price": 150.0 })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (dawn (nft.ledger.create-token-id { 'uri: "ipfs://art/dawn", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" "k:6666666666666666666666666666666666666666666666666666666666666666" alice
+               "k:7777777777777777777777777777777777777777777777777777777777777777" carol])
+       (before (map bal accts)))
+  (env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444"
+              , "caps": [ (nft.ledger.BUY dawn alice carol 1.0 (hash "ms-s4"))
+                        , (coin.TRANSFER (nft.conventional-auction.bid-escrow-account (hash "ms-s4"))
+                            (nft.policy-manager.escrow-account (hash "ms-s4")) 150.0) ] } ])
+  (continue-pact 1 false (hash "ms-s4"))
+  (expect "carol owns Dawn" 1.0 (nft.ledger.get-balance dawn carol))
+  (expect "legs: pco 0.75 | Indie Forge primary 15 | alice royalty 15 + proceeds 104.25 | gallery 15 | carol 0 (already paid at bid time)"
+    [0.75 15.0 119.25 15.0 0.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before))
+  (expect "both escrows are empty" [0.0 0.0]
+    [(coin.get-balance (nft.conventional-auction.bid-escrow-account (hash "ms-s4"))) (coin.get-balance (nft.policy-manager.escrow-account (hash "ms-s4")))]))
+(commit-tx)
+
+;; ===========================================================================
+;; S5 — MUSIC: 10 copies at once; the label-only PRIMARY list applies
+;;   price 30 for the lot: pco 0.15 | no creation venue | label 20% 6.00 | shop 3% 0.90 | musician 22.95
+;; ===========================================================================
+(begin-tx "S5 offer: the musician lists 10 copies of Track 01 on the Card Shop at 30")
+(env-hash (hash "ms-s5"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" } })
+(env-data
+  { "musician": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 30.0
+    , "seller-account": "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    , "seller-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Card Shop" (read-keyset 'shop))
+    , "fee-account": "", "fee-guard": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (track (nft.ledger.create-token-id { 'uri: "ipfs://music/track-01", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'musician)))
+       (musician "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+  (env-sigs [ { "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "caps": [ (nft.ledger.OFFER track musician 10.0 0) ] } ])
+  (nft.ledger.sale track musician 10.0 0))
+(commit-tx)
+
+(begin-tx "S5 buy: dan buys the lot of 10")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "musician": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "buyer": "k:4444444444444444444444444444444444444444444444444444444444444444"
+  , "buyer-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:4444444444444444444444444444444444444444444444444444444444444444" })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (track (nft.ledger.create-token-id { 'uri: "ipfs://music/track-01", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'musician)))
+       (musician "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+       (dan "k:4444444444444444444444444444444444444444444444444444444444444444")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" "k:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+               "k:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" "k:8888888888888888888888888888888888888888888888888888888888888888" musician dan])
+       (before (map bal accts)))
+  (env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444"
+              , "caps": [ (nft.ledger.BUY track musician dan 10.0 (hash "ms-s5"))
+                        , (coin.TRANSFER dan (nft.policy-manager.escrow-account (hash "ms-s5")) 30.0) ] } ])
+  (continue-pact 1 false (hash "ms-s5"))
+  (expect "dan holds 10 copies" 10.0 (nft.ledger.get-balance track dan))
+  (expect "legs: pco 0.15 | label PRIMARY 6.00 | producer 0 (primary list only) | shop 0.90 | musician 22.95 | dan -30"
+    [0.15 6.0 0.0 0.9 22.95 -30.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before)))
+(commit-tx)
+
+;; ===========================================================================
+;; S6 — MUSIC RESALE: 4 copies, raw quote (no venue), the 3-way split applies
+;;   price 8: pco 0.04 | artist 5% 0.40 | producer 3% 0.24 | label 2% 0.16 | dan 7.16
+;; ===========================================================================
+(begin-tx "S6 offer: dan resells 4 copies at 8 with no venue at all")
+(env-hash (hash "ms-s6"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "musician": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 8.0
+    , "seller-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "seller-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "venue-id": "", "fee-account": "", "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (track (nft.ledger.create-token-id { 'uri: "ipfs://music/track-01", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'musician)))
+       (dan "k:4444444444444444444444444444444444444444444444444444444444444444"))
+  (env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444", "caps": [ (nft.ledger.OFFER track dan 4.0 0) ] } ])
+  (nft.ledger.sale track dan 4.0 0))
+(commit-tx)
+
+(begin-tx "S6 buy: bob buys the 4")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "musician": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (track (nft.ledger.create-token-id { 'uri: "ipfs://music/track-01", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'musician)))
+       (dan "k:4444444444444444444444444444444444444444444444444444444444444444")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+               "k:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" "k:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" dan bob])
+       (before (map bal accts)))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY track dan bob 4.0 (hash "ms-s6"))
+                        , (coin.TRANSFER bob (nft.policy-manager.escrow-account (hash "ms-s6")) 8.0) ] } ])
+  (continue-pact 1 false (hash "ms-s6"))
+  (expect "bob 4, dan 6" [4.0 6.0] [(nft.ledger.get-balance track bob) (nft.ledger.get-balance track dan)])
+  (expect "legs: pco 0.04 | artist 0.40 | producer 0.24 | label 0.16 | dan 7.16 | bob -8"
+    [0.04 0.4 0.24 0.16 7.16 -8.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before)))
+(commit-tx)
+
+;; ===========================================================================
+;; S7 — THE GAME CARD (sale-only): sells through the shop, cannot be gifted,
+;;      relocates to chain 1 with its stats, resells there on the Gallery
+;;   S7a price 40: pco 0.20 | royalty 5% 2.00 | shop 3% 1.20 | studio 36.60 (+2.00)
+;;   S7b price 60 on chain 1: pco 0.30 | royalty 3.00 | gallery 10% 6.00 | bob 50.70
+;; ===========================================================================
+(begin-tx "S7a offer: the studio lists card #001 on the Card Shop at 40")
+(env-hash (hash "ms-s7a"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 40.0
+    , "seller-account": "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    , "seller-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Card Shop" (read-keyset 'shop))
+    , "fee-account": "", "fee-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (card (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: "001" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [ (nft.ledger.OFFER card studio 1.0 0) ] } ])
+  (nft.ledger.sale card studio 1.0 0))
+(commit-tx)
+
+(begin-tx "S7a buy: bob buys the card; then he cannot gift it")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (card (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: "001" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" studio "k:8888888888888888888888888888888888888888888888888888888888888888" bob])
+       (before (map bal accts)))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY card studio bob 1.0 (hash "ms-s7a"))
+                        , (coin.TRANSFER bob (nft.policy-manager.escrow-account (hash "ms-s7a")) 40.0) ] } ])
+  (continue-pact 1 false (hash "ms-s7a"))
+  (expect "legs: pco 0.20 | studio royalty 2.00 + proceeds 36.60 | shop 1.20 | bob -40"
+    [0.2 38.6 1.2 -40.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [ (nft.ledger.TRANSFER card bob carol 1.0) ] } ])
+  (expect-failure "a sale-only card cannot be handed over for free" "sale-only token: free transfer is disabled"
+    (nft.ledger.transfer-create card bob carol (read-keyset 'carol) 1.0)))
+(commit-tx)
+
+(begin-tx "S7 relocation step 0: bob moves the card to chain 1 (same owner); its stats leave with it")
+(env-hash (hash "ms-xc"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (card (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: "001" } (read-keyset 'studio)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.XTRANSFER card bob carol "1" 1.0), (nft.ledger.XTRANSFER card bob bob "1" 1.0) ] } ])
+  (expect-failure "a sale-only card cannot change owner by relocating either" "cross-chain relocation only to the same owner"
+    (nft.ledger.transfer-crosschain card bob carol (read-keyset 'carol) "1" 1.0))
+  (nft.ledger.transfer-crosschain card bob bob (read-keyset 'bob) "1" 1.0)
+  (expect "the card has left chain 0" 0.0 (nft.ledger.get-balance card bob)))
+(commit-tx)
+
+(begin-tx "S7 relocation step 1 on chain 1: the card arrives with atk/hp/level intact")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-01-01T00:01:00Z") })
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(continue-pact 1 false (hash "ms-xc"))
+(env-chain-data { "chain-id": "0" })
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (card (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: "001" } (read-keyset 'studio)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-chain-data { "chain-id": "1" })
+  (expect "bob holds the card on chain 1" 1.0 (nft.ledger.get-balance card bob))
+  (expect "the stats travelled" ["52" "39" "1"]
+    (map (lambda (k:string) (nft.attributes-policy.get-attribute-or card k "")) ["atk" "hp" "level"]))
+  (expect "the origin chain is still 0" "0" (nft.ledger.get-origin-chain card))
+  (expect "the trading mode travelled" "sale-only" (nft.transfer-mode-policy.get-mode card)))
+(commit-tx)
+
+(begin-tx "S7b offer on chain 1: bob lists the card on the Gallery at 60")
+(env-hash (hash "ms-s7b"))
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-01-01T00:02:00Z") })
+(env-data { "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 60.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Smart Pacts Gallery" (read-keyset 'gal))
+    , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(env-chain-data { "chain-id": "0" })
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (card (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: "001" } (read-keyset 'studio)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-chain-data { "chain-id": "1", "block-time": (time "2026-01-01T00:02:00Z") })
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [ (nft.ledger.OFFER card bob 1.0 0) ] } ])
+  (nft.ledger.sale card bob 1.0 0))
+(commit-tx)
+
+(begin-tx "S7b buy on chain 1: carol buys; the studio's royalty follows the card to chain 1")
+(env-chain-data { "chain-id": "1", "block-time": (time "2026-01-01T00:03:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "buyer": "k:3333333333333333333333333333333333333333333333333333333333333333"
+  , "buyer-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:3333333333333333333333333333333333333333333333333333333333333333" })
+(env-chain-data { "chain-id": "0" })
+(let* ((pols [nft.attributes-policy nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (card (nft.ledger.create-token-id { 'uri: "ipfs://cards/set1", 'precision: 0, 'policies: pols, 'serial: "001" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" studio "k:7777777777777777777777777777777777777777777777777777777777777777" bob carol])
+       (before (map bal accts)))
+  (env-chain-data { "chain-id": "1", "block-time": (time "2026-01-01T00:03:00Z") })
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.BUY card bob carol 1.0 (hash "ms-s7b"))
+                        , (coin.TRANSFER carol (nft.policy-manager.escrow-account (hash "ms-s7b")) 60.0) ] } ])
+  (continue-pact 1 false (hash "ms-s7b"))
+  (expect "carol holds the card on chain 1" 1.0 (nft.ledger.get-balance card carol))
+  (expect "legs: pco 0.30 | studio royalty 3.00 | gallery 6.00 | bob 50.70 | carol -60"
+    [0.3 3.0 6.0 50.7 -60.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before)))
+(commit-tx)
+
+;; ===========================================================================
+;; S8 — DUTCH AUCTION through the Card Shop: 30 -> 10 over 10 intervals of 100 s
+;;   dan buys at +250 s (one full interval): 28
+;;   pco 0.14 | workshop primary 5% 1.40 | royalty 3% 0.84 | shop 3% 0.84 | studio 24.78 (+0.84)
+;; ===========================================================================
+(begin-tx "S8 offer: the studio puts an Ace on a falling-price auction at the Card Shop")
+(env-hash (hash "ms-s8"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 0.0
+    , "seller-account": "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    , "seller-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Card Shop" (read-keyset 'shop))
+    , "fee-account": "", "fee-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "nft.dutch-auction" } })
+(env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [ (nft.ledger.OFFER ace studio 1.0 0) ] } ])
+  (nft.ledger.sale ace studio 1.0 0)
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [] } ])
+  (nft.dutch-auction.create-auction (hash "ms-s8") ace 1767225700 1767226700 30.0 10.0 100))
+(commit-tx)
+
+(begin-tx "S8 buy: dan takes it at the curve price 28")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-01-01T00:00:00Z") 250) })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "buyer": "k:4444444444444444444444444444444444444444444444444444444444444444"
+  , "buyer-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+  , "quoted_price": 28.0 })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+       (dan "k:4444444444444444444444444444444444444444444444444444444444444444")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" "k:5555555555555555555555555555555555555555555555555555555555555555" studio
+               "k:8888888888888888888888888888888888888888888888888888888888888888" dan])
+       (before (map bal accts)))
+  (expect "the curve reads 28 now" 28.0 (nft.dutch-auction.current-price (hash "ms-s8")))
+  (env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444"
+              , "caps": [ (nft.ledger.BUY ace studio dan 1.0 (hash "ms-s8"))
+                        , (coin.TRANSFER dan (nft.policy-manager.escrow-account (hash "ms-s8")) 28.0) ] } ])
+  (continue-pact 1 false (hash "ms-s8"))
+  (expect "dan now holds 2 Aces (gift + auction)" 2.0 (nft.ledger.get-balance ace dan))
+  (expect "legs: pco 0.14 | workshop primary 1.40 (the rates the card was BORN with) | studio 0.84 + 24.78 | shop 0.84 | dan -28"
+    [0.14 1.4 25.62 0.84 -28.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before)))
+(commit-tx)
+
+;; ===========================================================================
+;; S9 — A LISTING WITHDRAWN: the NFT comes back, nothing moves
+;; ===========================================================================
+(begin-tx "S9 offer: dan lists an Ace on the Gallery at 100")
+(env-hash (hash "ms-s9"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "gal": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:4444444444444444444444444444444444444444444444444444444444444444"
+    , "seller-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Smart Pacts Gallery" (read-keyset 'gal))
+    , "fee-account": "", "fee-guard": { "keys": ["4444444444444444444444444444444444444444444444444444444444444444"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (dan "k:4444444444444444444444444444444444444444444444444444444444444444"))
+  (env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444", "caps": [ (nft.ledger.OFFER ace dan 1.0 0) ] } ])
+  (nft.ledger.sale ace dan 1.0 0)
+  (expect "one Ace is in escrow" 1.0 (nft.ledger.get-balance ace dan)))
+(commit-tx)
+
+(begin-tx "S9 withdraw: dan changes his mind; the Ace returns")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: pols, 'serial: "2026" } (read-keyset 'studio)))
+       (dan "k:4444444444444444444444444444444444444444444444444444444444444444")
+       (before (coin.get-balance dan)))
+  (env-sigs [ { "key": "4444444444444444444444444444444444444444444444444444444444444444", "caps": [ (nft.ledger.WITHDRAW ace dan 1.0 0 (hash "ms-s9")) ] } ])
+  (continue-pact 0 true (hash "ms-s9"))
+  (expect "dan has both Aces again and paid nothing" [2.0 0.0] [(nft.ledger.get-balance ace dan) (- (coin.get-balance dan) before)]))
+(commit-tx)
+
+;; ===========================================================================
+;; S10 — THE 100% RULE: a venue that does not fit cannot list the painting
+;;   committed = protocol 50 + Indie Forge max 1000 + royalty 1000 + Greedy 9000 = 11050
+;; ===========================================================================
+(begin-tx "S10: carol tries the Greedy Gallery with Dawn")
+(env-hash (hash "ms-s10"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "greedy": { "keys": ["cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"], "pred": "keys-all" } })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "greedy": { "keys": ["cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 1000.0
+    , "seller-account": "k:3333333333333333333333333333333333333333333333333333333333333333"
+    , "seller-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Greedy Gallery" (read-keyset 'greedy))
+    , "fee-account": "", "fee-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let* ((pols [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+       (dawn (nft.ledger.create-token-id { 'uri: "ipfs://art/dawn", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [ (nft.ledger.OFFER dawn carol 1.0 0) ] } ])
+  (expect-failure "a 90% listing fee on top of 20.5% committed does not fit in 100%" "exceeds the headroom"
+    (nft.ledger.sale dawn carol 1.0 0))
+  (expect "carol keeps Dawn" 1.0 (nft.ledger.get-balance dawn carol)))
+(rollback-tx)
+
+;; ===========================================================================
+;; S11 — THE TICKET: resold through the shop (the only way), then redeemed
+;;   price 15: pco 0.075 | shop 3% 0.45 | bob 14.475
+;; ===========================================================================
+(begin-tx "S11 offer: bob resells one ticket on the Card Shop at 15")
+(env-hash (hash "ms-s11"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" } })
+(env-data
+  { "club": { "keys": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"], "pred": "keys-all" }
+  , "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 15.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Card Shop" (read-keyset 'shop))
+    , "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (ticket (nft.ledger.create-token-id { 'uri: "ipfs://club/show", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'club)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222"))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [ (nft.ledger.OFFER ticket bob 1.0 0) ] } ])
+  (nft.ledger.sale ticket bob 1.0 0))
+(commit-tx)
+
+(begin-tx "S11 buy + redeem: carol buys the ticket and burns it at the door")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "club": { "keys": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"], "pred": "keys-all" }
+  , "buyer": "k:3333333333333333333333333333333333333333333333333333333333333333"
+  , "buyer-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:3333333333333333333333333333333333333333333333333333333333333333" })
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (ticket (nft.ledger.create-token-id { 'uri: "ipfs://club/show", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'club)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" "k:8888888888888888888888888888888888888888888888888888888888888888" bob carol])
+       (before (map bal accts)))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.BUY ticket bob carol 1.0 (hash "ms-s11"))
+                        , (coin.TRANSFER carol (nft.policy-manager.escrow-account (hash "ms-s11")) 15.0) ] } ])
+  (continue-pact 1 false (hash "ms-s11"))
+  (expect "legs: pco 0.075 | shop 0.45 | bob 14.475 | carol -15"
+    [0.075 0.45 14.475 -15.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before))
+  (expect "carol holds the ticket" 1.0 (nft.ledger.get-balance ticket carol)))
+(commit-tx)
+
+(begin-tx "S11 redeem: carol burns her ticket at the door")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "club": { "keys": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (ticket (nft.ledger.create-token-id { 'uri: "ipfs://club/show", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'club)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (nft.ledger.burn ticket carol 1.0)
+  (expect "the ticket is spent; bob keeps his other one; supply 1" [0.0 1.0 1.0]
+    [(nft.ledger.get-balance ticket carol) (nft.ledger.get-balance ticket bob) (nft.ledger.total-supply ticket)]))
+(commit-tx)
+
+;; ===========================================================================
+;; S12 — A SEALED PACK is just an NFT: sold on the shop, gifted, then opened
+;;   price 12: pco 0.06 | shop 3% 0.36 | studio 11.58
+;; ===========================================================================
+(begin-tx "S12 offer: the studio lists a sealed pack on the Card Shop at 12")
+(env-hash (hash "ms-s12"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "shop": { "keys": ["8888888888888888888888888888888888888888888888888888888888888888"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 12.0
+    , "seller-account": "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    , "seller-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Card Shop" (read-keyset 'shop))
+    , "fee-account": "", "fee-guard": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (pack (nft.ledger.create-token-id { 'uri: "ipfs://set1/pack", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+  (env-sigs [ { "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "caps": [ (nft.ledger.OFFER pack studio 1.0 0) ] } ])
+  (nft.ledger.sale pack studio 1.0 0))
+(commit-tx)
+
+(begin-tx "S12 buy: bob buys the pack, then gives it to carol unopened")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyer": "k:2222222222222222222222222222222222222222222222222222222222222222"
+  , "buyer-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:2222222222222222222222222222222222222222222222222222222222222222" })
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (pack (nft.ledger.create-token-id { 'uri: "ipfs://set1/pack", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'studio)))
+       (studio "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (accts ["k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" studio "k:8888888888888888888888888888888888888888888888888888888888888888" bob])
+       (before (map bal accts)))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.BUY pack studio bob 1.0 (hash "ms-s12"))
+                        , (coin.TRANSFER bob (nft.policy-manager.escrow-account (hash "ms-s12")) 12.0) ] } ])
+  (continue-pact 1 false (hash "ms-s12"))
+  (expect "legs: pco 0.06 | studio 11.58 | shop 0.36 | bob -12"
+    [0.06 11.58 0.36 -12.0]
+    (zip (lambda (a:string b:decimal) (- (bal a) b)) accts before))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [ (nft.ledger.TRANSFER pack bob carol 1.0) ] } ])
+  (nft.ledger.transfer-create pack bob carol (read-keyset 'carol) 1.0)
+  (expect "carol holds the sealed pack" 1.0 (nft.ledger.get-balance pack carol)))
+(commit-tx)
+
+(begin-tx "S12 open: carol requests an opening (the pack burns, a future beacon round is pinned)")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (nft.drand-verifier.time-of-round 20801766) -120.0) })
+(env-hash (hash "ms-pack-open"))
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (pack (nft.ledger.create-token-id { 'uri: "ipfs://set1/pack", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'studio)))
+       (sid (nft.pack-engine.create-series-id "Set 1" (read-keyset 'studio)))
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333"))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+  (let ((rid (nft.pack-engine.request-open sid carol)))
+    (expect "the pack is gone; supply 1 (the studio's unsold one)" [0.0 1.0] [(nft.ledger.get-balance pack carol) (nft.ledger.total-supply pack)])
+    (expect "pinned to round 20801767" 20801767 (at 'round (nft.pack-engine.get-request rid)))))
+(commit-tx)
+
+(begin-tx "S12 reveal: anyone posts the real beacon; carol receives 3 cards, 1 of them rare")
+(env-chain-data { "chain-id": "0", "block-time": (nft.drand-verifier.time-of-round 20801767) })
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-sigs [])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+       (mk (lambda (u:string) (nft.ledger.create-token-id { 'uri: u, 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'studio))))
+       (a (mk "ipfs://set1/A")) (b (mk "ipfs://set1/B")) (x (mk "ipfs://set1/X"))
+       (sid (nft.pack-engine.create-series-id "Set 1" (read-keyset 'studio)))
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (bal (lambda (t:string acct:string) (try 0.0 (nft.ledger.get-balance t acct)))))
+  (nft.pack-engine.reveal sid 20801767 "0d745db068db9e16379a49f65d76353d721d79fb459d20b33a50e750e5cdb10400af36e03d4a8414b3a86770d1d1e90e85462dce40b3cf5c27f9fdb477b6f6e0")
+  (expect "carol received exactly 3 cards, exactly 1 rare" [3.0 1.0]
+    [(fold (+) 0.0 (map (lambda (t:string) (bal t carol)) [a b x])) (bal x carol)])
+  (expect "3 cards remain in the vault for the last pack" 3.0
+    (fold (+) 0.0 (map (lambda (t:string) (bal t (nft.pack-engine.vault-account sid))) [a b x]))))
+(commit-tx)
+
+;; ===========================================================================
+;; FINAL RECONCILIATION
+;; ===========================================================================
+(begin-tx "every coin funded is still in the economy; every supply reconciles")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "musician": { "keys": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], "pred": "keys-all" }
+  , "club": { "keys": ["eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"], "pred": "keys-all" } })
+(let* ((bal (lambda (a:string) (try 0.0 (coin.get-balance a))))
+       (people [ "k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "k:1111111111111111111111111111111111111111111111111111111111111111"
+                 "k:2222222222222222222222222222222222222222222222222222222222222222" "k:3333333333333333333333333333333333333333333333333333333333333333"
+                 "k:4444444444444444444444444444444444444444444444444444444444444444" "k:5555555555555555555555555555555555555555555555555555555555555555"
+                 "k:6666666666666666666666666666666666666666666666666666666666666666" "k:7777777777777777777777777777777777777777777777777777777777777777"
+                 "k:8888888888888888888888888888888888888888888888888888888888888888" "k:abababababababababababababababababababababababababababababababab"
+                 "k:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" "k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                 "k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" "k:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                 "k:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" "k:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ])
+       (sales ["ms-s1" "ms-s2" "ms-s4" "ms-s5" "ms-s6" "ms-s7a" "ms-s7b" "ms-s8" "ms-s9" "ms-s11" "ms-s12"])
+       (escrows (+ (map (lambda (s:string) (nft.policy-manager.escrow-account (hash s))) sales)
+                   [(nft.conventional-auction.bid-escrow-account (hash "ms-s4"))]))
+       (sum (lambda (xs:[decimal]) (fold (+) 0.0 xs))))
+  (expect "no escrow holds a single coin" 0.0 (sum (map bal escrows)))
+  (expect "the 2500 coin funded are exactly the coin held by the 16 participants" 2500.0 (sum (map bal people)))
+  (expect "the protocol collected 0.5% of every sale: 20+50+150+30+8+40+60+28+15+12 = 413 -> 2.065" 2.065
+    (bal "k:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"))
+  (expect "the collectors' spend equals everyone else's income" true
+    (= (- 2500.0 (sum (map bal (take 3 (drop 2 people)))))
+       (sum (map bal (+ (take 2 people) (drop 5 people))))))
+  ;; supplies
+  (let* ((p3 [nft.issuance-policy nft.royalty-policy nft.transfer-mode-policy])
+         (p2 [nft.issuance-policy nft.transfer-mode-policy])
+         (ace (nft.ledger.create-token-id { 'uri: "ipfs://baseball/2026/ace-rivera", 'precision: 0, 'policies: p3, 'serial: "2026" } (read-keyset 'studio)))
+         (dawn (nft.ledger.create-token-id { 'uri: "ipfs://art/dawn", 'precision: 0, 'policies: p3, 'serial: "" } (read-keyset 'alice)))
+         (track (nft.ledger.create-token-id { 'uri: "ipfs://music/track-01", 'precision: 0, 'policies: p3, 'serial: "" } (read-keyset 'musician)))
+         (ticket (nft.ledger.create-token-id { 'uri: "ipfs://club/show", 'precision: 0, 'policies: p2, 'serial: "" } (read-keyset 'club)))
+         (pack (nft.ledger.create-token-id { 'uri: "ipfs://set1/pack", 'precision: 0, 'policies: p2, 'serial: "" } (read-keyset 'studio))))
+    (expect "supplies: Ace 10 | Dawn 1 | Track 100 | tickets 1 (2 issued, 1 redeemed) | packs 1 (2 sealed, 1 opened)"
+      [10.0 1.0 100.0 1.0 1.0]
+      (map (lambda (t:string) (nft.ledger.total-supply t)) [ace dawn track ticket pack]))
+    (expect "Ace holders: studio 7, dan 2, bob 0, carol 0, escrow 0 -> 9 in wallets + 1 unsold copy still with the studio = 10" 10.0
+      (fold (+) 0.0 (map (lambda (a:string) (try 0.0 (nft.ledger.get-balance ace a)))
+        ["k:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "k:2222222222222222222222222222222222222222222222222222222222222222"
+         "k:3333333333333333333333333333333333333333333333333333333333333333" "k:4444444444444444444444444444444444444444444444444444444444444444"])))
+    (expect "Track holders: musician 90, dan 6, bob 4" [90.0 6.0 4.0]
+      (map (lambda (a:string) (nft.ledger.get-balance track a))
+        ["k:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" "k:4444444444444444444444444444444444444444444444444444444444444444" "k:2222222222222222222222222222222222222222222222222222222222222222"]))))
+(commit-tx)
+
+(print "")
+(print "=== MARKET SIMULATION: ALL GREEN ===")
+(print "  2 workshops, 2 listing venues, a buyer-side scout, a greedy venue refused; 11 settlements")
+(print "  (fixed price, ascending + dutch auctions, lots of 10 and 4, a chain-1 resale, a pack);")
+(print "  every leg asserted as a delta; a gift, a withdrawal, a redemption, a pack opened on a")
+(print "  real drand beacon; 2500 coin in, 2500 coin accounted for.")

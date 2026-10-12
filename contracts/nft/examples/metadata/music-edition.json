@@ -1,0 +1,16 @@
+{
+  "$schema": "https://pact-community.org/nft/meta-schema-v1.json",
+  "name": "Track 01",
+  "description": "Edition of 100. Royalties: artist 5%, producer 3%, label 2%; the label takes 20% of the first sale.",
+  "image": "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/track-01-cover.png",
+  "animation_url": "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/track-01.mp3",
+  "attributes": [
+    { "trait_type": "Duration", "value": "3:42" },
+    { "trait_type": "Genre", "value": "electronic" }
+  ],
+  "properties": {
+    "external_url": "https://nft.smartpacts.io/music/track-01",
+    "authors": [ { "name": "The Musician" }, { "name": "The Producer", "role": "producer" } ],
+    "edition": { "size": 100 }
+  }
+}

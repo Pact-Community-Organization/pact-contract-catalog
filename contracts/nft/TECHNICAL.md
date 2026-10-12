@@ -1543,6 +1543,8 @@ pact composition.repl         # 24 — three policies stacked, all rules at once
 pact conventional-auction.repl # 41  pact dutch-auction.repl         # 24
 pact xchain.repl              # 20 — passport mechanics (REPL tier only)
 pact marketplace-sim.repl     # 19 — the §6.4 story, end to end
+pact emulation-collectibles.repl # 59 — seven collectible families + an external game module
+pact market-sim.repl          # 55 — 6 venues, 11 settlements, every leg a delta, conservation
 ```
 
 14 suites, 278 assertions. Then the adversarial tier —

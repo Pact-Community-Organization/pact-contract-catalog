@@ -1,0 +1,17 @@
+{
+  "$schema": "https://pact-community.org/nft/meta-schema-v1.json",
+  "name": "Set 1 — Booster Pack",
+  "description": "Sealed. 3 cards: 2 common + 1 rare, drawn without replacement from a sealed vault when the holder opens it; the draw is fixed by a public drand beacon round pinned at least 120 s ahead. The pack is an NFT like any other: hold it, sell it, move it across chains, or never open it.",
+  "image": "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/set1-pack.png",
+  "properties": {
+    "external_url": "https://nft.smartpacts.io/packs/set1",
+    "authors": [ { "name": "Pixel Studio" } ],
+    "collection": { "name": "Set 1", "family": "Smart Pacts Cards" },
+    "pack": {
+      "engine": "nft.pack-engine",
+      "odds": "(nft.pack-engine.get-odds series-id)  ;; live counts per card and tier",
+      "cards-per-pack": 3,
+      "slots": [ { "name": "common", "picks": 2, "tiers": ["C"] }, { "name": "rare", "picks": 1, "tiers": ["R"] } ]
+    }
+  }
+}
