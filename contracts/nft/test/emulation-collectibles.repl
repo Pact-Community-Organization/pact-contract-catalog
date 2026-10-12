@@ -84,86 +84,16 @@
 ;; ===========================================================================
 ;; THE EXTERNAL GAME: games.arena — reads stats, verifies ownership, no custody
 ;; ===========================================================================
-(begin-tx "deploy the arena game (an external contract, its own namespace)")
+(begin-tx "deploy the arena game (an external contract, its own namespace) from examples/arena")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-03-01T00:00:00Z") })
-(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-data
+  { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "arena-ns": "games", "arena-admin-ks": "games.arena-admin" })
 (env-keys ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
 (define-namespace "games" (read-keyset 'studio) (read-keyset 'studio))
 (namespace "games")
 (define-keyset "games.arena-admin" (read-keyset 'studio))
-
-(module arena GOVERNANCE
-  @doc "A card battle game that USES the nft framework without owning anything: \
-       \it reads a card's on-chain attributes, requires the player's own \
-       \signature on the card account (no custody, ADR-NFT-003), writes the \
-       \game-owned keys through its capability-guard writer, and mints one \
-       \bound trophy per match through its capability-guard author."
-
-  (defcap GOVERNANCE () (enforce-keyset "games.arena-admin"))
-
-  ;; the game's two on-chain identities: attribute WRITER and trophy MINTER.
-  ;; Weak-bodied by design: acquired ONLY inside `battle`, after both players'
-  ;; guards passed; a test fixture, never deployed (static-gate WARN reviewed).
-  (defcap WRITER:bool () true)
-  (defcap MINTER:bool () true)
-  (defun writer-guard:guard () (create-capability-guard (WRITER)))
-  (defun minter-guard:guard () (create-capability-guard (MINTER)))
-
-  (defcap BATTLE:bool (match-id:string card-a:string card-b:string winner-card:string winner:string trophy:string)
-    @event true)
-
-  (defconst TROPHY-URI:string "ipfs://arena/trophy")
-
-  (defschema match-row
-    card-a:string card-b:string winner-card:string winner:string power-a:integer power-b:integer trophy:string)
-  (deftable matches:{match-row})
-
-  ;; --- reading the card the useful way: one call per stat, typed ----------------
-  (defun stat:integer (card:string key:string)
-    @doc "An integer attribute; 0 when the key was never written."
-    (str-to-int (nft.attributes-policy.get-attribute-or card key "0")))
-
-  (defun power:integer (card:string)
-    (+ (+ (* 2 (stat card "atk")) (+ (stat card "def") (stat card "hp"))) (* 5 (stat card "level"))))
-
-  (defun enforce-player-holds:bool (card:string player:string)
-    @doc "Ownership without custody: the card is in PLAYER's wallet and PLAYER \
-         \signed this transaction with the card account's own guard."
-    (enforce (> (try 0.0 (nft.ledger.get-balance card player)) 0.0) "player does not hold the card")
-    (enforce-guard (nft.ledger.account-guard card player)))
-
-  (defun trophy-policies:[module{nft.token-policy}] ()
-    [nft.transfer-mode-policy nft.issuance-policy])
-
-  (defun trophy-id:string (match-id:string)
-    (nft.ledger.create-token-id
-      { 'uri: TROPHY-URI, 'precision: 0, 'policies: (trophy-policies), 'serial: match-id }
-      (minter-guard)))
-
-  (defun battle:string (match-id:string card-a:string player-a:string card-b:string player-b:string)
-    @doc "Both players sign. The higher power wins; the winner's card gains a \
-         \level and a win; the winner receives a bound trophy unique to this match."
-    (enforce (!= card-a card-b) "a card cannot battle itself")
-    (enforce-player-holds card-a player-a)
-    (enforce-player-holds card-b player-b)
-    (let* ((pa (power card-a)) (pb (power card-b))
-           (wcard (if (>= pa pb) card-a card-b))
-           (winner (if (>= pa pb) player-a player-b))
-           (tid (trophy-id match-id)))
-      (insert matches match-id
-        { 'card-a: card-a, 'card-b: card-b, 'winner-card: wcard, 'winner: winner
-        , 'power-a: pa, 'power-b: pb, 'trophy: tid })
-      (with-capability (WRITER)
-        (nft.attributes-policy.set-attribute wcard "level" (int-to-str 10 (+ 1 (stat wcard "level"))))
-        (nft.attributes-policy.set-attribute wcard "wins" (int-to-str 10 (+ 1 (stat wcard "wins")))))
-      (with-capability (MINTER)
-        (nft.ledger.create-token tid 0 TROPHY-URI (trophy-policies) match-id (minter-guard))
-        (nft.ledger.mint tid winner (nft.ledger.account-guard wcard winner) 1.0))
-      (emit-event (BATTLE match-id card-a card-b wcard winner tid))
-      winner))
-
-  (defun get-match:object{match-row} (match-id:string) (read matches match-id))
-)
+(load "../examples/arena/arena.pact")
 (create-table games.arena.matches)
 (commit-tx)
 
