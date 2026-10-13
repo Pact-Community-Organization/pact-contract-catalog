@@ -34,6 +34,7 @@ const CHAINS = (process.env.NFT_CHAINS ?? '0,1').split(',').map((c) => c.trim())
 const ADMIN_KS = `${NS}.nft-site-admin`;
 const ARENA_KS = `${NS}.nft-site-arena-admin`;
 const PROTOCOL_BPS = 50;
+const SWAP_FEE = 0.5;   // flat KDA per accepted swap — a devnet placeholder, the founder's figure at the ceremony
 
 type Keys = { gov: Keypair; pco: Keypair };
 function loadOrCreateKeys(): Keys {
@@ -77,6 +78,7 @@ const MODULES: Mod[] = [
   { name: 'dutch-auction', file: 'sale/dutch-auction.pact', tables: ['auctions'] },
   { name: 'drand-verifier', file: 'core/drand-verifier.pact' },
   { name: 'pack-engine', file: 'core/pack-engine.pact', tables: ['verifiers', 'series-table', 'pool', 'requests', 'queues'] },
+  { name: 'swap', file: 'core/swap.pact', tables: ['offers', 'params'] },
   // the reference game: its framework references are written as nft.*; the deployment substitutes
   { name: 'arena', file: 'examples/arena/arena.pact', tables: ['matches'], transform: (c) => c.replace(/\bnft\./g, `${NS}.`) },
 ];
@@ -122,6 +124,12 @@ async function deployChain(chainId: ChainId, keys: Keys): Promise<void> {
       label: `ch${chainId}: protocol fee ${PROTOCOL_BPS} bps -> ${keys.pco.account.slice(0, 14)}… (gov)`,
       signers: gov, data: { ...data, pco: ks(keys.pco) }, chainId });
   } else console.log(`  · protocol fee already ${PROTOCOL_BPS} bps`);
+  const swapFee = await localCall(`(at 'fee (${NS}.swap.get-swap-fee))`, chainId).catch(() => 0);
+  if (Number(swapFee) !== SWAP_FEE) {
+    await send({ code: `(${NS}.swap.set-swap-fee ${SWAP_FEE.toFixed(1)} "${keys.pco.account}" (read-keyset "pco"))`,
+      label: `ch${chainId}: swap fee ${SWAP_FEE} KDA -> ${keys.pco.account.slice(0, 14)}… (gov)`,
+      signers: gov, data: { ...data, pco: ks(keys.pco) }, chainId });
+  } else console.log(`  · swap fee already ${SWAP_FEE}`);
   const verifier = await localCall(`(try false (let ((v (${NS}.pack-engine.verifier))) true))`, chainId).catch(() => false);
   if (!verifier) {
     await send({ code: `(${NS}.pack-engine.set-verifier ${NS}.drand-verifier)`, label: `ch${chainId}: pack-engine verifier (gov)`, signers: gov, data, chainId });

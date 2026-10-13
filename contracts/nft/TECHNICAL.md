@@ -1184,6 +1184,28 @@ three cards costs about 4,200 gas including verification. Proof:
 [test/pack-engine.repl](test/pack-engine.repl), driven by a genuine drand beacon (round
 20801767, used unmodified).
 
+## 8.5 NFT-for-NFT exchange — `swap` (ADR-NFT-014)
+
+The price is a token. `core/swap.pact` lets a holder **offer** an exact amount of one token for an
+exact amount of **any one of** the tokens it names — one id for an exact card, several for "any of
+these" (an edition's copies are interchangeable balances under one id, so "any copy" is that id; a
+serialised card is its own id) — optionally **reserved** for one taker. The offered copies move into
+a per-offer escrow (`x:` id derived from offerer, give, wants, nonce, chain; a capability-guarded
+principal only the module releases, the pack engine's vault pattern). A taker who holds one of the
+wanted tokens **accepts** with it: the wanted copies go to the offerer, the escrow to the taker, in
+one transaction. The offerer may **cancel** an open offer; the escrow returns.
+
+Authorization is the ledger's own: the offerer signs `ledger.TRANSFER` into the escrow, the taker
+signs `ledger.TRANSFER` of the wanted copies. No payload guard is trusted. Every attached policy runs
+on both transfers, so a `sale-only` or `bound` token cannot be offered: barter is for free-trading
+tokens, and a creator who wants every change of hands priced and royaltied chooses `sale-only` once.
+
+A barter has no price, so it pays **flat fees in coin** instead of legs: a governance-set protocol fee
+(`set-swap-fee fee account guard`, zero allowed) and, when the offerer named a venue, a venue fee the
+offerer declared with the offer — both paid by the taker, both visible before accepting. A swap pays
+no royalty and no publisher leg. Events: `SWAP-OFFERED`, `SWAP-ACCEPTED`, `SWAP-CANCELLED`,
+`SWAP-FEE`. Suite: `test/swap.repl`.
+
 ## 9 · Cross-chain relocation
 
 Kadena is a braid of parallel chains; an NFT that can only ever live on its
