@@ -1184,27 +1184,58 @@ three cards costs about 4,200 gas including verification. Proof:
 [test/pack-engine.repl](test/pack-engine.repl), driven by a genuine drand beacon (round
 20801767, used unmodified).
 
-## 8.5 NFT-for-NFT exchange — `swap` (ADR-NFT-014)
+## 8.5 NFT-for-NFT exchange, bundles, coin on top, bids — `swap` (ADR-NFT-014)
 
-The price is a token. `core/swap.pact` lets a holder **offer** an exact amount of one token for an
-exact amount of **any one of** the tokens it names — one id for an exact card, several for "any of
-these" (an edition's copies are interchangeable balances under one id, so "any copy" is that id; a
-serialised card is its own id) — optionally **reserved** for one taker. The offered copies move into
-a per-offer escrow (`x:` id derived from offerer, give, wants, nonce, chain; a capability-guarded
-principal only the module releases, the pack engine's vault pattern). A taker who holds one of the
-wanted tokens **accepts** with it: the wanted copies go to the offerer, the escrow to the taker, in
-one transaction. The offerer may **cancel** an open offer; the escrow returns.
+`core/swap.pact` lets a holder **offer** what they give for what they want, with a per-offer escrow
+(`x:` id derived from offerer, gives, wants, nonce, chain; a capability-guarded principal only the
+module releases):
 
-Authorization is the ledger's own: the offerer signs `ledger.TRANSFER` into the escrow, the taker
-signs `ledger.TRANSFER` of the wanted copies. No payload guard is trusted. Every attached policy runs
-on both transfers, so a `sale-only` or `bound` token cannot be offered: barter is for free-trading
-tokens, and a creator who wants every change of hands priced and royaltied chooses `sale-only` once.
+- **gives**: zero or more tokens, each an exact amount, escrowed at offer; and/or **coin-give**, coin
+  escrowed at offer. Zero tokens plus coin is a **bid** on a token nobody listed.
+- **wants**: one or more token ids with one amount; **want-all** true means every one of them (a
+  bundle), false means any ONE of them, the taker's choice. An edition's copies are interchangeable
+  balances under one id, so "any copy" is that id; a serialised card is its own id. **coin-ask** is
+  coin the taker adds on top.
+- optionally the one account allowed to accept; a venue and the flat coin fee it is paid; an
+  **expiry** (unix seconds, 0 = never).
 
-A barter has no price, so it pays **flat fees in coin** instead of legs: a governance-set protocol fee
-(`set-swap-fee fee account guard`, zero allowed) and, when the offerer named a venue, a venue fee the
-offerer declared with the offer — both paid by the taker, both visible before accepting. A swap pays
-no royalty and no publisher leg. Events: `SWAP-OFFERED`, `SWAP-ACCEPTED`, `SWAP-CANCELLED`,
-`SWAP-FEE`. Suite: `test/swap.repl`.
+A taker **accepts** in one transaction: the wanted copies go to the offerer, the escrow to the taker,
+the coin on top is settled. The offerer may **cancel**; after the expiry **anyone may close** an open
+offer and the escrow returns to the offerer, so no stale escrow outlives its deadline.
+
+Authorization is the ledger's own: the offerer signs `ledger.TRANSFER` of each give leg into the
+escrow (and `coin.TRANSFER` of coin-give); the taker signs `ledger.TRANSFER` of each wanted token
+to the offerer, `coin.TRANSFER` of each flat fee, and `coin.TRANSFER` of coin-ask into the escrow.
+No payload guard is trusted. Every attached policy runs on every transfer, so `sale-only` and
+`bound` tokens cannot be offered or accepted: barter is for free-trading tokens.
+
+**Money.** Flat fees in coin, paid by the taker: a governance-set protocol fee (`set-swap-fee`) and
+the venue fee the offerer declared. **Coin on top is a price** and is settled with the sale's legs
+— protocol percentage, the creation-venue rate, the royalty plan — of the PRICED token: for coin-ask
+the first give (sold by the offerer), for coin-give the chosen want (sold by the taker); same-payee
+legs are merged; conservation is asserted on the escrow's coin. Pure token-for-token pays no royalty.
+Events: `SWAP-OFFERED`, `SWAP-ACCEPTED`, `SWAP-CANCELLED`, `SWAP-CLOSED`, `SWAP-FEE`, `SWAP-SETTLED`.
+Suite: `test/swap.repl`.
+
+### Listing expiry and the publisher record across chains (2026-10-13)
+
+A fixed-price listing may carry `quote_expires` (unix seconds) in the seller's offer transaction:
+refused if in the past, unbuyable after it (`listing has expired`), withdrawable per the ledger's
+timeout rule. It lives in a sidecar table (`quote-expiry`, default 0) so rows written before it stay
+readable. And the **creation venue travels**: the manager adds its own passport (`policy-manager`) to
+the relocation yield and re-binds it on arrival, so a publisher's resale rate holds on every chain
+(finding F2 closed; devnet-tier evidence, the REPL's single database cannot distinguish it).
+
+### Upgrading a module others depend on (verified on the devnet, 2026-10-13)
+
+A Pact 5 module records the hash of every module it calls. After `policy-manager` was upgraded on
+the devnet, every call from the ledger into it failed with `Execution aborted, hash not blessed for
+module: user.policy-manager with hash …` (`Pact/Core/Errors.hs:874`): the ledger still referenced
+the old hash. An upgrade of a core module therefore does ONE of two things, and the deployer does the
+second: (a) the new module `bless`es its previous hash(es), so dependents keep working unchanged; or
+(b) every dependent is upgraded afterwards, in dependency order (`nft-site-devnet.ts` with
+`UPGRADE=<list>`), so each records the new hash. A mainnet upgrade plan must say which, before it
+is signed. Tables are never created by an upgrade; the deployer probes and creates the missing ones.
 
 ## 9 · Cross-chain relocation
 

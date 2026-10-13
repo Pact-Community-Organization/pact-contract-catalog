@@ -1,18 +1,21 @@
-;; nft framework — swap suite (ADR-NFT-014): NFT-for-NFT exchange.
+;; nft framework — swap suite (ADR-NFT-014): NFT-for-NFT exchange, bundles, coin on top, bids, expiry.
 ;;
 ;; Proves:
-;;   * an offer escrows exactly the offered copies under a guard only the module
-;;     can satisfy; the offerer's authorization is the ledger transfer they sign;
-;;   * validation: same token both sides, zero amounts, a venue without a fee and a
-;;     fee without a venue, an unknown wanted token, a reserved taker;
-;;   * accept: anyone (or only the reserved taker); the taker must hold the wanted
-;;     copies and pay the flat fees (protocol + venue) in coin; both tokens change
-;;     hands in one transaction; the escrow empties; an offer takes once;
+;;   * an offer escrows exactly the given tokens (and coin) under a guard only the module
+;;     satisfies; the offerer's authorization is the ledger transfers they sign;
+;;   * validation: a wanted token also given, empty / repeated / over-long lists, zero
+;;     amounts, coin both ways, nothing given, a venue without a fee and a fee without a
+;;     venue, an unknown token, a non-principal taker, an expiry in the past;
+;;   * accept: anyone, or only the reserved taker; the taker must hold the wanted copies and
+;;     pay the flat fees (protocol + venue) in coin; both sides move in one transaction; one
+;;     accept per offer; the chosen token must be one the offer wants;
+;;   * "any one of" vs "all of" (a bundle on the want side); a bundle on the give side;
+;;   * coin on top (the taker's) and a BID (the offerer's coin for a token) are settled like
+;;     a sale — protocol %, creation venue, royalties, remainder — with conservation;
+;;   * expiry: accept refused after it, ANYONE may close an expired offer and the escrow
+;;     (tokens and coin) returns to the offerer;
 ;;   * cancel: offerer only, open offers only, the escrow returns;
-;;   * the escrow cannot be debited outside accept/cancel;
-;;   * sale-only and bound tokens cannot be offered (the ledger's transfer path
-;;     refuses them, policies included) — barter is for free-trading tokens;
-;;   * the fee is governance-set, principal-checked, and zero means no transfer.
+;;   * sale-only and bound tokens cannot be offered; the escrow is not debitable outside.
 ;; Each expect goes RED if the mechanism it names is removed.
 ;;
 ;; Run: pact contracts/nft/test/swap.repl
@@ -47,10 +50,13 @@
 (create-table nft.policy-manager.sale-contracts)
 (create-table nft.policy-manager.params)
 (create-table nft.policy-manager.creation-venues)
+(create-table nft.policy-manager.quote-expiry)
 (load "../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
 (nft.policy-manager.init nft.ledger)
+(load "../policies/royalty-policy.pact")
+(create-table nft.royalty-policy.royalties)
 (load "../policies/issuance-policy.pact")
 (create-table nft.issuance-policy.issuance)
 (load "../policies/transfer-mode-policy.pact")
@@ -60,26 +66,26 @@
 (create-table nft.swap.params)
 (commit-tx)
 
-;; personas: alice k:1111 (gives A), bob k:2222 (holds B, takes), carol k:3333 (stranger),
-;; venue owner k:5555 ("Swap Shop"), pco k:7777 (protocol fee payee)
-(begin-tx "fund bob and carol; register the Swap Shop")
+;; personas: alice k:1111 (gives A), bob k:2222 (holds B), carol k:3333 (holds C),
+;; venue owner k:5555 ("Swap Shop"), pco k:7777 (protocol), workshop k:6666 (publisher of A)
+(begin-tx "fund, register venues, set the protocol legs")
 (env-data
-  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
-  , "shop": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
+  , "shop": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" }
+  , "ws": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+  , "pco": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(coin.credit "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 100.0)
 (test-capability (coin.CREDIT "k:2222222222222222222222222222222222222222222222222222222222222222"))
 (coin.credit "k:2222222222222222222222222222222222222222222222222222222222222222" (read-keyset 'bob) 100.0)
 (test-capability (coin.CREDIT "k:3333333333333333333333333333333333333333333333333333333333333333"))
 (coin.credit "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'carol) 100.0)
-(env-keys ["5555555555555555555555555555555555555555555555555555555555555555"])
+(env-keys ["5555555555555555555555555555555555555555555555555555555555555555" "6666666666666666666666666666666666666666666666666666666666666666" "9999999999999999999999999999999999999999999999999999999999999999"])
 (nft.venue-registry.register-venue "Swap Shop" (read-keyset 'shop) "k:5555555555555555555555555555555555555555555555555555555555555555" (read-keyset 'shop) 0 0 300)
-(commit-tx)
-
-;; ---------------------------------------------------------------------------
-;; the flat protocol fee: governance only, principal payee, zero allowed
-;; ---------------------------------------------------------------------------
-(begin-tx "swap fee: governance only, principal-checked")
-(env-data { "pco": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
+(nft.venue-registry.register-venue "Workshop" (read-keyset 'ws) "k:6666666666666666666666666666666666666666666666666666666666666666" (read-keyset 'ws) 500 100 0)
+(nft.policy-manager.set-protocol-fee 50 "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'pco))
 (env-keys [])
 (expect-failure "a stranger cannot set the swap fee" "Keyset failure"
   (nft.swap.set-swap-fee 0.5 "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'pco)))
@@ -89,54 +95,70 @@
 (expect-failure "the payee must be the principal of its guard" "principal"
   (nft.swap.set-swap-fee 0.5 "k:1234" (read-keyset 'pco)))
 (expect "fee unset reads 0" 0.0 (at 'fee (nft.swap.get-swap-fee)))
-(expect "governance sets 0.5 coin to the protocol account" true
-  (nft.swap.set-swap-fee 0.5 "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'pco)))
+(nft.swap.set-swap-fee 0.5 "k:7777777777777777777777777777777777777777777777777777777777777777" (read-keyset 'pco))
 (expect "fee reads 0.5" 0.5 (at 'fee (nft.swap.get-swap-fee)))
 (commit-tx)
 
 ;; ---------------------------------------------------------------------------
-;; the tokens: A (alice, free, 3 copies), B (bob, free, 2 copies),
-;; S (alice, sale-only), D (bob, bound)
+;; tokens: A (alice, free, 5 copies, published through the Workshop, royalty 4%),
+;; B (bob, free, 3), C (carol, free, 2), S (alice, sale-only), D (bob, bound)
 ;; ---------------------------------------------------------------------------
 (begin-tx "create the tokens")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "ws": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" } })
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "ws": { "keys": ["6666666666666666666666666666666666666666666666666666666666666666"], "pred": "keys-all" }
+  , "creation_venue": (nft.venue-registry.create-venue-id "Workshop" (read-keyset 'ws))
+  , "issuance_spec": { "max-issued": 5.0, "min-mint": 1.0 }
+  , "transfer_mode": "free"
+  , "royalty_spec": { "beneficiaries": [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111", "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 400, "label": "creator" } ], "primary": [] } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let* ((pols [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice))))
+  (nft.ledger.create-token a 0 "ipfs://A" pols "" (read-keyset 'alice))
+  (nft.ledger.mint a alice (read-keyset 'alice) 5.0))
+(env-data
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
   , "issuance_spec": { "max-issued": 3.0, "min-mint": 1.0 }
   , "transfer_mode": "free" })
-(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] }
-          , { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] }
+          , { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
 (let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
-       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
        (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
-       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob))))
-  (nft.ledger.create-token a 0 "ipfs://A" pols "" (read-keyset 'alice))
-  (nft.ledger.mint a alice (read-keyset 'alice) 3.0)
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
+       (c (nft.ledger.create-token-id { 'uri: "ipfs://C", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'carol))))
   (nft.ledger.create-token b 0 "ipfs://B" pols "" (read-keyset 'bob))
-  (nft.ledger.mint b bob (read-keyset 'bob) 2.0))
+  (nft.ledger.mint b bob (read-keyset 'bob) 3.0)
+  (nft.ledger.create-token c 0 "ipfs://C" pols "" (read-keyset 'carol))
+  (nft.ledger.mint c carol (read-keyset 'carol) 2.0))
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "issuance_spec": { "max-issued": 3.0, "min-mint": 1.0 }
   , "transfer_mode": "sale-only" })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
 (let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
        (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
        (s (nft.ledger.create-token-id { 'uri: "ipfs://S", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice))))
   (nft.ledger.create-token s 0 "ipfs://S" pols "" (read-keyset 'alice))
   (nft.ledger.mint s alice (read-keyset 'alice) 1.0))
 (env-data
-  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  { "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "issuance_spec": { "max-issued": 3.0, "min-mint": 1.0 }
   , "transfer_mode": "bound" })
+(env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
 (let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
        (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
        (d (nft.ledger.create-token-id { 'uri: "ipfs://D", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob))))
   (nft.ledger.create-token d 0 "ipfs://D" pols "" (read-keyset 'bob))
   (nft.ledger.mint d bob (read-keyset 'bob) 1.0))
 (commit-tx)
+
+;; the ids, recomputed in each tx (REPL style)
+;; A: [issuance transfer-mode royalty] alice · B: [issuance transfer-mode] bob · C: same, carol
 
 ;; ---------------------------------------------------------------------------
 ;; offer validation
@@ -147,41 +169,48 @@
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "shop": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
-(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
        (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
-       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
-       (shop-id (nft.venue-registry.create-venue-id "Swap Shop" (read-keyset 'shop))))
-  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
-              , "caps": [ (nft.ledger.TRANSFER a alice (nft.swap.escrow-account (nft.swap.create-offer-id alice a [b] "n1")) 1.0) ] } ])
-  (expect-failure "cannot want the token being given" "cannot want the token being given"
-    (nft.swap.offer "n1" alice a 1.0 [a] 1.0 "" "" 0.0))
-  (expect-failure "give-amount must be positive" "give-amount must be positive"
-    (nft.swap.offer "n1" alice a 0.0 [b] 1.0 "" "" 0.0))
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (shop-id (nft.venue-registry.create-venue-id "Swap Shop" (read-keyset 'shop)))
+       (ga [{ 'id: a, 'amount: 1.0 }]))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+  (expect-failure "cannot want a token being given" "cannot want a token being given"
+    (nft.swap.offer "n1" alice ga 0.0 [a] 1.0 false 0.0 "" "" 0.0 0))
+  (expect-failure "a given amount must be positive" "a given amount must be positive"
+    (nft.swap.offer "n1" alice [{ 'id: a, 'amount: 0.0 }] 0.0 [b] 1.0 false 0.0 "" "" 0.0 0))
   (expect-failure "want-amount must be positive" "want-amount must be positive"
-    (nft.swap.offer "n1" alice a 1.0 [b] 0.0 "" "" 0.0))
-  (expect-failure "a venue needs a positive fee" "a named venue needs a positive venue-fee"
-    (nft.swap.offer "n1" alice a 1.0 [b] 1.0 "" shop-id 0.0))
-  (expect-failure "a fee needs a venue" "a venue-fee needs a venue"
-    (nft.swap.offer "n1" alice a 1.0 [b] 1.0 "" "" 1.0))
-  (expect-failure "an unknown venue is refused" "No value found"
-    (nft.swap.offer "n1" alice a 1.0 [b] 1.0 "" "v:nope" 1.0))
-  (expect-failure "an unknown wanted token is refused" "No value found"
-    (nft.swap.offer "n1" alice a 1.0 ["n:nope"] 1.0 "" "" 0.0))
+    (nft.swap.offer "n1" alice ga 0.0 [b] 0.0 false 0.0 "" "" 0.0 0))
+  (expect-failure "nothing given is refused" "an offer must give a token or coin"
+    (nft.swap.offer "n1" alice [] 0.0 [b] 1.0 false 0.0 "" "" 0.0 0))
+  (expect-failure "coin both ways is refused" "coin flows one way"
+    (nft.swap.offer "n1" alice ga 1.0 [b] 1.0 false 1.0 "" "" 0.0 0))
   (expect-failure "an empty wanted list is refused" "want-ids must name 1 to"
-    (nft.swap.offer "n1" alice a 1.0 [] 1.0 "" "" 0.0))
+    (nft.swap.offer "n1" alice ga 0.0 [] 1.0 false 0.0 "" "" 0.0 0))
   (expect-failure "a wanted list with a repeat is refused" "want-ids must be distinct"
-    (nft.swap.offer "n1" alice a 1.0 [b b] 1.0 "" "" 0.0))
+    (nft.swap.offer "n1" alice ga 0.0 [b b] 1.0 false 0.0 "" "" 0.0 0))
   (expect-failure "a list longer than the bound is refused" "want-ids must name 1 to"
-    (nft.swap.offer "n1" alice a 1.0 (make-list 17 b) 1.0 "" "" 0.0))
+    (nft.swap.offer "n1" alice ga 0.0 (make-list 17 b) 1.0 false 0.0 "" "" 0.0 0))
+  (expect-failure "a venue needs a positive fee" "a named venue needs a positive venue-fee"
+    (nft.swap.offer "n1" alice ga 0.0 [b] 1.0 false 0.0 "" shop-id 0.0 0))
+  (expect-failure "a fee needs a venue" "a venue-fee needs a venue"
+    (nft.swap.offer "n1" alice ga 0.0 [b] 1.0 false 0.0 "" "" 1.0 0))
+  (expect-failure "an unknown venue is refused" "No value found"
+    (nft.swap.offer "n1" alice ga 0.0 [b] 1.0 false 0.0 "" "v:nope" 1.0 0))
+  (expect-failure "an unknown wanted token is refused" "No value found"
+    (nft.swap.offer "n1" alice ga 0.0 ["n:nope"] 1.0 false 0.0 "" "" 0.0 0))
   (expect-failure "a reserved taker must be a principal account" "reserved taker must be a principal account"
-    (nft.swap.offer "n1" alice a 1.0 [b] 1.0 "notakey" "" 0.0))
+    (nft.swap.offer "n1" alice ga 0.0 [b] 1.0 false 0.0 "notakey" "" 0.0 0))
+  (expect-failure "an expiry in the past is refused" "expiry must be in the future"
+    (nft.swap.offer "n1" alice ga 0.0 [b] 1.0 false 0.0 "" "" 0.0 1700000000))
   (expect-failure "an offer without the offerer's transfer signature fails at the escrow" "Managed capability"
-    (nft.swap.offer "n2" alice a 1.0 [b] 1.0 "" "" 0.0)))
+    (nft.swap.offer "n2" alice ga 0.0 [b] 1.0 false 0.0 "" "" 0.0 0)))
 (rollback-tx)
 
 ;; ---------------------------------------------------------------------------
-;; offer A x1 for B x1 through the Swap Shop (venue fee 1 coin), anyone may take
+;; 1 A for 1 B through the Swap Shop (venue fee 1), anyone, no expiry
 ;; ---------------------------------------------------------------------------
 (begin-tx "alice offers 1 A for 1 B, venue fee 1 coin to the Swap Shop")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
@@ -190,227 +219,368 @@
   , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
   , "shop": { "keys": ["5555555555555555555555555555555555555555555555555555555555555555"], "pred": "keys-all" } })
 (env-events true)
-(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
        (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
-       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
        (shop-id (nft.venue-registry.create-venue-id "Swap Shop" (read-keyset 'shop)))
-       (oid (nft.swap.create-offer-id alice a [b] "n1"))
+       (ga [{ 'id: a, 'amount: 1.0 }])
+       (oid (nft.swap.create-offer-id alice ga [b] "n1"))
        (escrow (nft.swap.escrow-account oid)))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.TRANSFER a alice escrow 1.0) ] } ])
-  (expect "the offer id is derived" oid (nft.swap.offer "n1" alice a 1.0 [b] 1.0 "" shop-id 1.0))
-  (expect "the escrow holds the offered copy" 1.0 (nft.ledger.get-balance a escrow))
-  (expect "alice keeps 2" 2.0 (nft.ledger.get-balance a alice))
+  (expect "the offer id is derived" oid (nft.swap.offer "n1" alice ga 0.0 [b] 1.0 false 0.0 "" shop-id 1.0 0))
+  (expect "the escrow holds the offered copy; alice keeps 4" [1.0 4.0] [(nft.ledger.get-balance a escrow) (nft.ledger.get-balance a alice)])
   (expect "the offer is open with the venue copied" { 'active: true, 'venue-account: "k:5555555555555555555555555555555555555555555555555555555555555555", 'venue-fee: 1.0 }
     (let ((o (nft.swap.get-offer oid))) { 'active: (at 'active o), 'venue-account: (at 'venue-account o), 'venue-fee: (at 'venue-fee o) }))
   (expect "SWAP-OFFERED event fired" 1
     (length (filter (lambda (e) (= "nft.swap.SWAP-OFFERED" (at 'name e))) (env-events true))))
   (expect-failure "the same nonce cannot be reused" "already found"
-    (nft.swap.offer "n1" alice a 1.0 [b] 1.0 "" shop-id 1.0)))
+    (nft.swap.offer "n1" alice ga 0.0 [b] 1.0 false 0.0 "" shop-id 1.0 0)))
 (commit-tx)
 
-(begin-tx "the escrow cannot be debited outside accept/cancel")
+(begin-tx "the escrow cannot be debited outside accept/cancel/close")
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
-(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
        (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
-       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
-       (escrow (nft.swap.escrow-account (nft.swap.create-offer-id alice a [b] "n1"))))
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (escrow (nft.swap.escrow-account (nft.swap.create-offer-id alice [{ 'id: a, 'amount: 1.0 }] [b] "n1"))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.TRANSFER a escrow alice 1.0) ] } ])
   (expect-failure "the offerer cannot pull the escrow back by hand" "Capability"
     (nft.ledger.transfer-create a escrow alice (read-keyset 'alice) 1.0)))
 (rollback-tx)
 
-(begin-tx "take: refusals")
+(begin-tx "accept: refusals")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
-  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
-(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
        (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
        (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
        (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
-       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
-       (oid (nft.swap.create-offer-id alice a [b] "n1")))
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (oid (nft.swap.create-offer-id alice [{ 'id: a, 'amount: 1.0 }] [b] "n1")))
   (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
               , "caps": [ (coin.TRANSFER carol "k:7777777777777777777777777777777777777777777777777777777777777777" 0.5)
                         , (coin.TRANSFER carol "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0) ] } ])
-  (expect-failure "a taker who holds none of the wanted token cannot take" "No value found"
+  (expect-failure "a taker who holds none of the wanted token cannot accept" "No value found"
     (nft.swap.accept oid carol b))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
-  (expect-failure "the offerer cannot take their own offer" "cannot accept their own offer"
+  (expect-failure "the offerer cannot accept their own offer" "cannot accept their own offer"
     (nft.swap.accept oid alice b))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.TRANSFER b bob alice 1.0) ] } ])
-  (expect-failure "a taker who does not sign the fee cannot take" "Managed capability"
+  (expect-failure "a taker who does not sign the fee cannot accept" "Managed capability"
     (nft.swap.accept oid bob b))
-  (expect-failure "a stranger cannot cancel" "Keyset failure" (nft.swap.cancel oid)))
+  (expect-failure "a token outside the list is refused" "not one the offer wants"
+    (nft.swap.accept oid bob a))
+  (expect-failure "a stranger cannot cancel" "Keyset failure" (nft.swap.cancel oid))
+  (expect-failure "an offer without expiry cannot be closed" "offer has not expired" (nft.swap.close oid bob)))
 (rollback-tx)
 
-(begin-tx "bob takes: both tokens change hands, both flat fees are paid")
+(begin-tx "bob accepts: both tokens change hands, both flat fees are paid")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
 (env-events true)
-(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
        (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
        (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
-       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
-       (oid (nft.swap.create-offer-id alice a [b] "n1"))
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (oid (nft.swap.create-offer-id alice [{ 'id: a, 'amount: 1.0 }] [b] "n1"))
        (escrow (nft.swap.escrow-account oid)))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
               , "caps": [ (nft.ledger.TRANSFER b bob alice 1.0)
                         , (coin.TRANSFER bob "k:7777777777777777777777777777777777777777777777777777777777777777" 0.5)
                         , (coin.TRANSFER bob "k:5555555555555555555555555555555555555555555555555555555555555555" 1.0) ] } ])
   (expect "the exchange completes" true (nft.swap.accept oid bob b))
-  (expect "alice received 1 B" 1.0 (nft.ledger.get-balance b alice))
-  (expect "bob received 1 A" 1.0 (nft.ledger.get-balance a bob))
-  (expect "bob keeps 1 B" 1.0 (nft.ledger.get-balance b bob))
+  (expect "alice received 1 B; bob received 1 A and keeps 2 B" [1.0 1.0 2.0]
+    [(nft.ledger.get-balance b alice) (nft.ledger.get-balance a bob) (nft.ledger.get-balance b bob)])
   (expect "the escrow is empty" 0.0 (nft.ledger.get-balance a escrow))
-  (expect "the protocol fee 0.5 reached the payee" 0.5 (coin.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777"))
-  (expect "the venue fee 1 reached the Swap Shop" 1.0 (coin.get-balance "k:5555555555555555555555555555555555555555555555555555555555555555"))
+  (expect "the protocol fee 0.5 and the venue fee 1 reached their payees" [0.5 1.0]
+    [(coin.get-balance "k:7777777777777777777777777777777777777777777777777777777777777777") (coin.get-balance "k:5555555555555555555555555555555555555555555555555555555555555555")])
   (expect "bob paid exactly 1.5" 98.5 (coin.get-balance bob))
   (expect "the offer is closed and names the taker" { 'active: false, 'taken-by: bob }
     (let ((o (nft.swap.get-offer oid))) { 'active: (at 'active o), 'taken-by: (at 'taken-by o) }))
   (expect "SWAP-ACCEPTED + 2 SWAP-FEE events" 3
     (length (filter (lambda (e) (contains (at 'name e) ["nft.swap.SWAP-ACCEPTED" "nft.swap.SWAP-FEE"])) (env-events true))))
-  (expect-failure "an offer takes once" "offer is not active" (nft.swap.accept oid bob b))
+  (expect-failure "an offer accepts once" "offer is not active" (nft.swap.accept oid bob b))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
   (expect-failure "a taken offer cannot be cancelled" "offer is not active" (nft.swap.cancel oid)))
 (commit-tx)
 
 ;; ---------------------------------------------------------------------------
-;; a reserved offer, zero protocol fee, and cancel
+;; coin on top: alice gives 1 A and asks 10 coin; the 10 are settled like a sale of A
+;;   A was published through the Workshop (primary 5% / resale 1%), royalty 4%, protocol 0.5%
+;;   alice is A's AUTHOR, so the Workshop's PRIMARY rate applies: 0.05 + 0.5 + 0.4 = 0.95 → alice 9.05 (+0.4 royalty)
 ;; ---------------------------------------------------------------------------
-(begin-tx "governance drops the protocol fee to 0")
+(begin-tx "governance drops the flat fee to 0 for the priced cases")
 (env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
 (env-data { "pco": { "keys": ["7777777777777777777777777777777777777777777777777777777777777777"], "pred": "keys-all" } })
 (nft.swap.set-swap-fee 0.0 "" (read-keyset 'pco))
-(expect "fee reads 0" 0.0 (at 'fee (nft.swap.get-swap-fee)))
 (commit-tx)
 
-(begin-tx "alice offers 1 A for 1 B reserved for bob, no venue; carol cannot take; bob takes with no fee")
-(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
-(env-data
-  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
-(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
-       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
-       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
-       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
-       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
-       (oid (nft.swap.create-offer-id alice a [b] "n2"))
-       (escrow (nft.swap.escrow-account oid)))
-  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
-              , "caps": [ (nft.ledger.TRANSFER a alice escrow 1.0) ] } ])
-  (nft.swap.offer "n2" alice a 1.0 [b] 1.0 bob "" 0.0)
-  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
-  (expect-failure "carol cannot take an offer reserved for bob" "reserved for another taker"
-    (nft.swap.accept oid carol b))
-  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
-              , "caps": [ (nft.ledger.TRANSFER b bob alice 1.0) ] } ])
-  (expect "bob takes with no coin signature: no fee is due" true (nft.swap.accept oid bob b))
-  (expect "alice now holds 2 B, bob 2 A" [2.0 2.0] [(nft.ledger.get-balance b alice) (nft.ledger.get-balance a bob)])
-  (expect "bob paid nothing" 98.5 (coin.get-balance bob)))
-(commit-tx)
-
-(begin-tx "any of these: alice offers 1 A for 1 B OR 1 C; carol accepts with C; a token outside the list is refused")
-(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
-(env-data
-  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
-  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
-  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
-  , "issuance_spec": { "max-issued": 3.0, "min-mint": 1.0 }
-  , "transfer_mode": "free" })
-(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
-(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
-       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
-       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
-       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
-       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
-       (c (nft.ledger.create-token-id { 'uri: "ipfs://C", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'carol)))
-       (oid (nft.swap.create-offer-id bob a [b c] "any1"))
-       (escrow (nft.swap.escrow-account oid)))
-  (nft.ledger.create-token c 0 "ipfs://C" pols "" (read-keyset 'carol))
-  (nft.ledger.mint c carol (read-keyset 'carol) 1.0)
-  ;; bob (who holds 2 A now) offers 1 A for 1 B or 1 C
-  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
-              , "caps": [ (nft.ledger.TRANSFER a bob escrow 1.0) ] } ])
-  (expect "the offer names two alternatives" [b c] (at 'want-ids (nft.swap.get-offer (nft.swap.offer "any1" bob a 1.0 [b c] 1.0 "" "" 0.0))))
-  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
-              , "caps": [ (nft.ledger.TRANSFER c carol bob 1.0), (nft.ledger.TRANSFER a carol bob 1.0) ] } ])
-  (expect-failure "a token outside the list is refused" "not one the offer wants"
-    (nft.swap.accept oid carol a))
-  (expect "carol accepts with C" true (nft.swap.accept oid carol c))
-  (expect "bob received C, carol received A" [1.0 1.0] [(nft.ledger.get-balance c bob) (nft.ledger.get-balance a carol)]))
-(commit-tx)
-
-(begin-tx "cancel: offerer only, the escrow returns")
+(begin-tx "coin on top: 1 A + 10 coin from bob for 1 B; the coin is settled with the sale's legs")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
 (env-events true)
-(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
        (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
-       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
-       (oid (nft.swap.create-offer-id alice a [b] "n3"))
-       (escrow (nft.swap.escrow-account oid)))
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (oid (nft.swap.create-offer-id alice [{ 'id: a, 'amount: 1.0 }] [b] "c1"))
+       (escrow (nft.swap.escrow-account oid))
+       (bal (lambda (acct:string) (try 0.0 (coin.get-balance acct))))
+       (before [(bal alice) (bal bob) (bal "k:7777777777777777777777777777777777777777777777777777777777777777") (bal "k:6666666666666666666666666666666666666666666666666666666666666666")]))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
               , "caps": [ (nft.ledger.TRANSFER a alice escrow 1.0) ] } ])
-  (nft.swap.offer "n3" alice a 1.0 [b] 1.0 "" "" 0.0)
-  (expect "alice has 0 A left in her wallet" 0.0 (nft.ledger.get-balance a alice))
-  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
-  (expect-failure "bob cannot cancel alice's offer" "Keyset failure" (nft.swap.cancel oid))
-  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
-  (expect "alice cancels" true (nft.swap.cancel oid))
-  (expect "the copy is back with alice; the escrow is empty" [1.0 0.0] [(nft.ledger.get-balance a alice) (nft.ledger.get-balance a escrow)])
-  (expect "SWAP-CANCELLED event fired" 1
-    (length (filter (lambda (e) (= "nft.swap.SWAP-CANCELLED" (at 'name e))) (env-events true))))
-  (expect-failure "a cancelled offer cannot be taken" "offer is not active" (nft.swap.accept oid "k:2222222222222222222222222222222222222222222222222222222222222222" b)))
+  (nft.swap.offer "c1" alice [{ 'id: a, 'amount: 1.0 }] 0.0 [b] 1.0 false 10.0 "" "" 0.0 0)
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.TRANSFER b bob alice 1.0), (coin.TRANSFER bob escrow 10.0) ] } ])
+  (expect "bob accepts, paying 10 coin on top" true (nft.swap.accept oid bob b))
+  (expect "legs: alice +9.45 (9.05 proceeds + 0.4 royalty) | bob -10 | protocol +0.05 | Workshop +0.5"
+    [9.45 -10.0 0.05 0.5]
+    (zip (lambda (x:decimal y:decimal) (- x y)) [(bal alice) (bal bob) (bal "k:7777777777777777777777777777777777777777777777777777777777777777") (bal "k:6666666666666666666666666666666666666666666666666666666666666666")] before))
+  (expect "the escrow holds no coin (conservation)" 0.0 (coin.get-balance escrow))
+  (expect "SWAP-SETTLED event names the priced token and the legs" 1
+    (length (filter (lambda (e) (= "nft.swap.SWAP-SETTLED" (at 'name e))) (env-events true)))))
 (commit-tx)
 
 ;; ---------------------------------------------------------------------------
-;; barter is for free-trading tokens: sale-only and bound cannot be offered
+;; a BID: carol offers 20 coin (no token) for 1 A from anyone; bob (a RESELLER) accepts
+;;   seller = bob, not the author: Workshop RESALE 1% = 0.2, royalty 4% = 0.8, protocol 0.1 → bob 18.9
 ;; ---------------------------------------------------------------------------
+(begin-tx "a bid: 20 coin for 1 A; bob accepts and the legs are the resale legs")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (oid (nft.swap.create-offer-id carol [] [a] "bid1"))
+       (escrow (nft.swap.escrow-account oid))
+       (bal (lambda (acct:string) (try 0.0 (coin.get-balance acct))))
+       (before [(bal alice) (bal bob) (bal carol) (bal "k:7777777777777777777777777777777777777777777777777777777777777777") (bal "k:6666666666666666666666666666666666666666666666666666666666666666")]))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (coin.TRANSFER carol escrow 20.0) ] } ])
+  (expect "the bid is placed; 20 coin sit in the escrow" oid (nft.swap.offer "bid1" carol [] 20.0 [a] 1.0 false 0.0 "" "" 0.0 0))
+  (expect "escrow holds 20 coin" 20.0 (coin.get-balance escrow))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.TRANSFER a bob carol 1.0) ] } ])
+  (expect "bob (holding 1 A) accepts the bid" true (nft.swap.accept oid bob a))
+  (expect "carol holds 1 A; bob keeps his other A (he had 2)" [1.0 1.0] [(nft.ledger.get-balance a carol) (nft.ledger.get-balance a bob)])
+  (expect "legs: alice +0.8 royalty | bob +18.9 | carol -20 (paid at offer) | protocol +0.1 | Workshop +0.2 resale"
+    [0.8 18.9 -20.0 0.1 0.2]
+    (zip (lambda (x:decimal y:decimal) (- x y)) [(bal alice) (bal bob) (bal carol) (bal "k:7777777777777777777777777777777777777777777777777777777777777777") (bal "k:6666666666666666666666666666666666666666666666666666666666666666")] before))
+  (expect "the escrow is empty" 0.0 (coin.get-balance escrow)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; bundles: carol gives 1 C and wants ALL of A and B. alice holds A (3) and B (2).
+;; The one-leg negative sits in its OWN rolled-back tx: an expect-failure leaks the
+;; writes made before the failure (the A transfer) through a commit.
+;; ---------------------------------------------------------------------------
+(begin-tx "a bundle: carol gives 1 C and wants ALL of A and B")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (c (nft.ledger.create-token-id { 'uri: "ipfs://C", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'carol)))
+       (oid (nft.swap.create-offer-id carol [{ 'id: c, 'amount: 1.0 }] [a b] "bundle1"))
+       (escrow (nft.swap.escrow-account oid)))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.TRANSFER c carol escrow 1.0) ] } ])
+  (nft.swap.offer "bundle1" carol [{ 'id: c, 'amount: 1.0 }] 0.0 [a b] 1.0 true 0.0 "" "" 0.0 0)
+  (expect "the offer wants all of both" true (at 'want-all (nft.swap.get-offer oid))))
+(commit-tx)
+
+(begin-tx "a bundle needs every wanted transfer signed")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (c (nft.ledger.create-token-id { 'uri: "ipfs://C", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'carol)))
+       (oid (nft.swap.create-offer-id carol [{ 'id: c, 'amount: 1.0 }] [a b] "bundle1")))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER a alice carol 1.0) ] } ])
+  (expect-failure "a taker who signs only one leg of the wanted bundle cannot accept" "Managed capability"
+    (nft.swap.accept oid alice "")))
+(rollback-tx)
+
+(begin-tx "alice (holding both) accepts the bundle; then a GIVE bundle is offered and cancelled")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (c (nft.ledger.create-token-id { 'uri: "ipfs://C", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'carol)))
+       (oid (nft.swap.create-offer-id carol [{ 'id: c, 'amount: 1.0 }] [a b] "bundle1")))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER a alice carol 1.0), (nft.ledger.TRANSFER b alice carol 1.0) ] } ])
+  (expect "alice delivers both and receives the C" true (nft.swap.accept oid alice ""))
+  (expect "carol holds 2 A (bid + bundle) and 1 B; alice holds the C" [2.0 1.0 1.0]
+    [(nft.ledger.get-balance a carol) (nft.ledger.get-balance b carol) (nft.ledger.get-balance c alice)])
+  (let* ((oid2 (nft.swap.create-offer-id carol [{ 'id: a, 'amount: 1.0 } { 'id: b, 'amount: 1.0 }] [c] "bundle2"))
+         (escrow2 (nft.swap.escrow-account oid2)))
+    (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+                , "caps": [ (nft.ledger.TRANSFER a carol escrow2 1.0), (nft.ledger.TRANSFER b carol escrow2 1.0) ] } ])
+    (nft.swap.offer "bundle2" carol [{ 'id: a, 'amount: 1.0 } { 'id: b, 'amount: 1.0 }] 0.0 [c] 1.0 false 0.0 "" "" 0.0 0)
+    (expect "both legs sit in the escrow" [1.0 1.0] [(nft.ledger.get-balance a escrow2) (nft.ledger.get-balance b escrow2)])))
+(commit-tx)
+
+;; the cancel in its own tx: a signature set changed mid-transaction does not reach the next call (REPL trap)
+(begin-tx "carol cancels the give bundle: both legs return")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333", "caps": [] } ])
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (c (nft.ledger.create-token-id { 'uri: "ipfs://C", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'carol)))
+       (oid2 (nft.swap.create-offer-id carol [{ 'id: a, 'amount: 1.0 } { 'id: b, 'amount: 1.0 }] [c] "bundle2")))
+  (expect "carol cancels" true (nft.swap.cancel oid2))
+  (expect "both legs are back with carol" [2.0 1.0] [(nft.ledger.get-balance a carol) (nft.ledger.get-balance b carol)]))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; expiry: a bid with coin that expires; accept refused after; anyone closes; the coin returns
+;; ---------------------------------------------------------------------------
+(begin-tx "expiry: alice bids 5 coin for 1 C until T+600; after T+601 bob (a stranger) closes it")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let* ((pb [nft.issuance-policy nft.transfer-mode-policy])
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (c (nft.ledger.create-token-id { 'uri: "ipfs://C", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'carol)))
+       (oid (nft.swap.create-offer-id alice [] [c] "exp1"))
+       (escrow (nft.swap.escrow-account oid))
+       (t0 (nft.swap.now-seconds)))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (coin.TRANSFER alice escrow 5.0) ] } ])
+  (nft.swap.offer "exp1" alice [] 5.0 [c] 1.0 false 0.0 "" "" 0.0 (+ t0 600))
+  (expect "not expired yet" false (nft.swap.is-expired oid))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (expect-failure "cannot close before the expiry" "offer has not expired" (nft.swap.close oid bob))
+  (env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-01-01T00:00:00Z") 601) })
+  (expect "expired" true (nft.swap.is-expired oid))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.TRANSFER c carol alice 1.0) ] } ])
+  (expect-failure "an expired offer cannot be accepted" "offer has expired" (nft.swap.accept oid carol c))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222", "caps": [] } ])
+  (let ((before (coin.get-balance alice)))
+    (expect "a stranger closes the expired offer" true (nft.swap.close oid bob))
+    (expect "alice got her 5 coin back; the escrow is empty" [5.0 0.0] [(- (coin.get-balance alice) before) (coin.get-balance escrow)]))
+  (expect-failure "a closed offer cannot be closed again" "offer is not active" (nft.swap.close oid bob)))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; a reserved offer; sale-only and bound refused; direct capability acquisition refused
+;; ---------------------------------------------------------------------------
+(begin-tx "reserved: only the named taker may accept")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "carol": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(let* ((pa [nft.issuance-policy nft.transfer-mode-policy nft.royalty-policy])
+       (pb [nft.issuance-policy nft.transfer-mode-policy])
+       (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
+       (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
+       (carol "k:3333333333333333333333333333333333333333333333333333333333333333")
+       (a (nft.ledger.create-token-id { 'uri: "ipfs://A", 'precision: 0, 'policies: pa, 'serial: "" } (read-keyset 'alice)))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (oid (nft.swap.create-offer-id alice [{ 'id: a, 'amount: 1.0 }] [b] "r1"))
+       (escrow (nft.swap.escrow-account oid)))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.TRANSFER a alice escrow 1.0) ] } ])
+  (nft.swap.offer "r1" alice [{ 'id: a, 'amount: 1.0 }] 0.0 [b] 1.0 false 0.0 carol "" 0.0 0)
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.TRANSFER b bob alice 1.0) ] } ])
+  (expect-failure "bob cannot accept an offer reserved for carol" "reserved for another taker"
+    (nft.swap.accept oid bob b))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.TRANSFER b carol alice 1.0) ] } ])
+  (expect "carol (holding 1 B) accepts" true (nft.swap.accept oid carol b)))
+(commit-tx)
+
 (begin-tx "a sale-only token and a bound token cannot be offered")
 (env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
 (env-data
   { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
   , "bob": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
-(let* ((pols [nft.issuance-policy nft.transfer-mode-policy])
+(let* ((pb [nft.issuance-policy nft.transfer-mode-policy])
        (alice "k:1111111111111111111111111111111111111111111111111111111111111111")
        (bob "k:2222222222222222222222222222222222222222222222222222222222222222")
-       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob)))
-       (s (nft.ledger.create-token-id { 'uri: "ipfs://S", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'alice)))
-       (d (nft.ledger.create-token-id { 'uri: "ipfs://D", 'precision: 0, 'policies: pols, 'serial: "" } (read-keyset 'bob))))
+       (b (nft.ledger.create-token-id { 'uri: "ipfs://B", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob)))
+       (s (nft.ledger.create-token-id { 'uri: "ipfs://S", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'alice)))
+       (d (nft.ledger.create-token-id { 'uri: "ipfs://D", 'precision: 0, 'policies: pb, 'serial: "" } (read-keyset 'bob))))
   (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
-              , "caps": [ (nft.ledger.TRANSFER s alice (nft.swap.escrow-account (nft.swap.create-offer-id alice s [b] "n4")) 1.0) ] } ])
+              , "caps": [ (nft.ledger.TRANSFER s alice (nft.swap.escrow-account (nft.swap.create-offer-id alice [{ 'id: s, 'amount: 1.0 }] [b] "n4")) 1.0) ] } ])
   (expect-failure "a sale-only token cannot be bartered" "sale-only token: free transfer is disabled"
-    (nft.swap.offer "n4" alice s 1.0 [b] 1.0 "" "" 0.0))
+    (nft.swap.offer "n4" alice [{ 'id: s, 'amount: 1.0 }] 0.0 [b] 1.0 false 0.0 "" "" 0.0 0))
   (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
-              , "caps": [ (nft.ledger.TRANSFER d bob (nft.swap.escrow-account (nft.swap.create-offer-id bob d [b] "n5")) 1.0) ] } ])
+              , "caps": [ (nft.ledger.TRANSFER d bob (nft.swap.escrow-account (nft.swap.create-offer-id bob [{ 'id: d, 'amount: 1.0 }] [b] "n5")) 1.0) ] } ])
   (expect-failure "a bound token cannot be bartered" "bound token: free transfer is disabled"
-    (nft.swap.offer "n5" bob d 1.0 [b] 1.0 "" "" 0.0)))
+    (nft.swap.offer "n5" bob [{ 'id: d, 'amount: 1.0 }] 0.0 [b] 1.0 false 0.0 "" "" 0.0 0)))
 (rollback-tx)
 
 (begin-tx "direct capability acquisition is refused")
+(env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
 (expect-failure "ESCROW is not acquirable from outside" "not granted"
   (require-capability (nft.swap.ESCROW "x:any")))
+(expect-failure "settle-coin is not callable from outside" "not granted"
+  (nft.swap.settle-coin "x:any" "n:any" "k:any" (read-keyset 'alice) 1.0))
 (rollback-tx)
 
 (print "")
 (print "=== SWAP: ALL GREEN ===")
-(print "  escrowed offers released only by take or cancel; reserved takers; flat protocol + venue fees")
-(print "  paid by the taker; one take per offer; barter refused for sale-only and bound tokens.")
+(print "  escrowed offers released only by accept, cancel or close; any-one-of and all-of wants; give bundles;")
+(print "  coin on top and bids settled with the sale's legs under conservation; flat fees; expiry; reserved takers;")
+(print "  barter refused for sale-only and bound tokens.")

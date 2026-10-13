@@ -44,6 +44,7 @@
 (create-table nft.policy-manager.sale-contracts)
 (create-table nft.policy-manager.params)
 (create-table nft.policy-manager.creation-venues)
+(create-table nft.policy-manager.quote-expiry)
 (load "../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
@@ -450,6 +451,83 @@
     (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")))
 (expect "the venue received 94.5" 195.0 (coin.get-balance "k:5555555555555555555555555555555555555555555555555555555555555555"))
 (expect "escrow empty (conservation)" 0.0 (coin.get-balance (nft.policy-manager.escrow-account (hash "pp-sale-4"))))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; LISTING EXPIRY (sidecar `quote_expires`): refused in the past; unbuyable after; withdrawable
+;; ---------------------------------------------------------------------------
+(begin-tx "a listing with an expiry in the past is refused at offer")
+(env-hash (hash "pp-exp-0"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote_expires": 1700000000
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "venue-id": "", "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://card", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] } ])
+  (expect-failure "an expiry in the past is refused" "listing expiry must be in the future"
+    (nft.ledger.sale id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0)))
+(rollback-tx)
+
+(begin-tx "bob lists with an expiry 600 s ahead")
+(env-hash (hash "pp-exp-1"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "quote_expires": 1767226200
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:2222222222222222222222222222222222222222222222222222222222222222"
+    , "seller-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "venue-id": "", "fee-account": "", "fee-guard": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://card", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.OFFER id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0)
+  (expect "the expiry is recorded" 1767226200 (nft.policy-manager.listing-expires (hash "pp-exp-1")))
+  (expect "a listing without one reads 0" 0 (nft.policy-manager.listing-expires (hash "pp-sale-2"))))
+(commit-tx)
+
+(begin-tx "after the expiry the listing cannot be bought, and the seller withdraws")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-01-01T00:00:00Z") 601) })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:3333333333333333333333333333333333333333333333333333333333333333"
+  , "buyer-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:3333333333333333333333333333333333333333333333333333333333333333" })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://card", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.BUY id "k:2222222222222222222222222222222222222222222222222222222222222222"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 (hash "pp-exp-1"))
+                        , (coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                            (nft.policy-manager.escrow-account (hash "pp-exp-1")) 100.0) ] } ])
+  (expect-failure "an expired listing cannot be bought" "listing has expired"
+    (continue-pact 1 false (hash "pp-exp-1"))))
+(rollback-tx)
+
+(begin-tx "the seller withdraws the expired listing")
+(env-chain-data { "chain-id": "0", "block-time": (add-time (time "2026-01-01T00:00:00Z") 601) })
+(env-data { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" } })
+(let ((id (nft.ledger.create-token-id
+            { 'uri: "ipfs://card", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" }
+            (read-keyset 'alice))))
+  (env-sigs [ { "key": "2222222222222222222222222222222222222222222222222222222222222222"
+              , "caps": [ (nft.ledger.WITHDRAW id "k:2222222222222222222222222222222222222222222222222222222222222222" 1.0 0 (hash "pp-exp-1")) ] } ])
+  (continue-pact 0 true (hash "pp-exp-1"))
+  (expect "the card is back with bob" 1.0 (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
 (commit-tx)
 
 (print "")

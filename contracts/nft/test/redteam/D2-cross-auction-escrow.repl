@@ -37,6 +37,7 @@
 (load "../../core/policy-manager.pact")
 (create-table nft.policy-manager.ledgers)
 (create-table nft.policy-manager.quotes)
+(create-table nft.policy-manager.quote-expiry)
 (create-table nft.policy-manager.sale-contracts)
 (create-table nft.policy-manager.params)
 (create-table nft.policy-manager.creation-venues)

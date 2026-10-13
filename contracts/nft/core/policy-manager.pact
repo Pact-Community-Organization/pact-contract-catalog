@@ -216,6 +216,24 @@
     active:bool)
   (deftable quotes:{quote-schema})
 
+  ;; LISTING EXPIRY (founder 2026-10-13, "expiry"): an optional deadline after which the listing can
+  ;; no longer be bought. Kept in a SIDECAR table keyed by sale-id rather than a quote field: a field
+  ;; added to `quotes` would break every row written before it at first access (an upgrade creates no
+  ;; migration), while a missing sidecar ROW defaults cleanly to "no expiry". The seller's offer tx
+  ;; carries it under `quote_expires` (unix seconds; absent or 0 = none). Withdrawal is the ledger's
+  ;; timeout rule, unchanged; an expired listing is simply unbuyable until withdrawn.
+  (defschema quote-expiry-row expires:integer)
+  (deftable quote-expiry:{quote-expiry-row})
+  (defconst QUOTE-EXPIRES-MSG-KEY:string "quote_expires")
+  (defcap LISTING-EXPIRY:bool (sale-id:string expires:integer) @event true)
+
+  (defun now-seconds:integer ()
+    (floor (diff-time (at 'block-time (chain-data)) (time "1970-01-01T00:00:00Z"))))
+
+  (defun listing-expires:integer (sale-id:string)
+    @doc "The listing's deadline in unix seconds, 0 when it has none."
+    (with-default-read quote-expiry sale-id { 'expires: 0 } { 'expires := e } e))
+
   (defconst QUOTE-MSG-KEY:string "quote"
     @doc "Offer-tx payload key carrying the quote-spec (SELLER's tx — safe). \
          \venue-id \"\" means the raw fee-account/fee-guard/fee-bps apply; a \
@@ -314,10 +332,15 @@
          \passport. The result rides the ledger's yield to the target chain."
     (let ((l:module{ledger-iface} (retrieve-ledger)))
       (require-capability (l::XCHAIN-SEND-CALL (at 'id token) sender receiver target-chain amount)))
-    (map (lambda (p:module{token-policy})
-           { 'policy: (format "{}" [p])
-           , 'state: (p::enforce-xchain-send token sender receiver receiver-guard target-chain amount) })
-         (at 'policies token)))
+    ;; the manager's OWN passport first: the creation venue (ADR-NFT-011) is manager state that was
+    ;; born on the creating chain only; it travels so the publisher's resale rate holds everywhere
+    ;; (finding F2, 2026-10-12)
+    (let ((mine:[object] [{ 'policy: "policy-manager", 'state: (get-creation-venue (at 'id token)) }])
+          (theirs:[object] (map (lambda (p:module{token-policy})
+                                  { 'policy: (format "{}" [p])
+                                  , 'state: (p::enforce-xchain-send token sender receiver receiver-guard target-chain amount) })
+                                (at 'policies token))))
+      (+ mine theirs)))
 
   (defun enforce-xchain-receive:bool (token:object{token-info} receiver:string receiver-guard:guard amount:decimal passports:[object])
     @doc "Target chain: every attached policy gets ITS OWN passport back and \
@@ -330,6 +353,18 @@
              (enforce (= 1 (length matches)) (format "passport missing for policy {}" [k]))
              (p::enforce-xchain-receive token receiver receiver-guard amount (at 'state (at 0 matches)))))
          (at 'policies token))
+    ;; the manager's passport: re-bind the creation venue here (first arrival), or check it (a return)
+    (let ((mine:[object] (filter (lambda (pp:object) (= "policy-manager" (at 'policy pp))) passports)))
+      (if (= 1 (length mine))
+        (let ((cv:object{creation-venue} (at 'state (at 0 mine))))
+          (if (= "" (at 'venue-id cv))
+            true
+            (with-default-read creation-venues (at 'id token) { 'venue-id: "" } { 'venue-id := existing }
+              (if (= "" existing)
+                (let ((_ (insert creation-venues (at 'id token) cv)))
+                  (emit-event (CREATION-VENUE (at 'id token) (at 'venue-id cv) (at 'primary-bps cv) (at 'resale-bps cv))))
+                (enforce (= existing (at 'venue-id cv)) "creation-venue passport mismatch")))))
+        true))
     true)
 
   (defun mint-delegated:bool (token:object{token-info} account:string amount:decimal)
@@ -398,7 +433,13 @@
         , 'fee-bps: (at 'fee-bps q), 'buyer-share-bps: (at 'buyer-share-bps q)
         , 'sale-contract: (at 'sale-contract q)
         , 'active: true })
-      (emit-event (QUOTE sale-id (at 'id token) (at 'price q) (at 'venue-id q) (at 'fee-bps q) (at 'sale-contract q))))
+      (emit-event (QUOTE sale-id (at 'id token) (at 'price q) (at 'venue-id q) (at 'fee-bps q) (at 'sale-contract q)))
+      (let ((expires:integer (try 0 (read-integer QUOTE-EXPIRES-MSG-KEY))))
+        (enforce (or (= expires 0) (> expires (now-seconds))) "listing expiry must be in the future")
+        (if (> expires 0)
+          (let ((_ (insert quote-expiry sale-id { 'expires: expires })))
+            (emit-event (LISTING-EXPIRY sale-id expires)))
+          true)))
     ;; run policy enforce-offer hooks
     (map (lambda (p:module{token-policy}) (p::enforce-offer token seller amount timeout sale-id)) (at 'policies token))
     true)
@@ -471,6 +512,8 @@
   (defun enforce-buy:bool (token:object{token-info} seller:string buyer:string buyer-guard:guard amount:decimal sale-id:string)
     (let ((l:module{ledger-iface} (retrieve-ledger)))
       (require-capability (l::BUY-CALL (at 'id token) seller buyer amount sale-id)))
+    (let ((expires (listing-expires sale-id)))
+      (enforce (or (= expires 0) (<= (now-seconds) expires)) "listing has expired"))
     (with-read quotes sale-id
       { 'fungible := fungible:module{fungible-v2}, 'price := stored-price
       , 'seller-account := seller-account, 'seller-guard := seller-guard

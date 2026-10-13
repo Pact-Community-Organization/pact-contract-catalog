@@ -34,6 +34,7 @@ const CHAINS = (process.env.NFT_CHAINS ?? '0,1').split(',').map((c) => c.trim())
 const ADMIN_KS = `${NS}.nft-site-admin`;
 const ARENA_KS = `${NS}.nft-site-arena-admin`;
 const PROTOCOL_BPS = 50;
+const UPGRADE = (process.env.UPGRADE ?? '').split(',').map((x) => x.trim()).filter(Boolean);
 const SWAP_FEE = 0.5;   // flat KDA per accepted swap — a devnet placeholder, the founder's figure at the ceremony
 
 type Keys = { gov: Keypair; pco: Keypair };
@@ -63,7 +64,7 @@ type Mod = { name: string; file: string; tables?: string[]; transform?: (code: s
 const MODULES: Mod[] = [
   { name: 'util', file: 'core/util.pact' },
   { name: 'venue-registry', file: 'core/venue-registry.pact', tables: ['venues'] },
-  { name: 'policy-manager', file: 'core/policy-manager.pact', tables: ['ledgers', 'quotes', 'sale-contracts', 'params', 'creation-venues'] },
+  { name: 'policy-manager', file: 'core/policy-manager.pact', tables: ['ledgers', 'quotes', 'sale-contracts', 'params', 'creation-venues', 'quote-expiry'] },
   { name: 'ledger', file: 'core/ledger.pact', tables: ['ledger-table', 'tokens'] },
   { name: 'royalty-policy', file: 'policies/royalty-policy.pact', tables: ['royalties'] },
   { name: 'non-fungible-policy', file: 'policies/non-fungible-policy.pact', tables: ['minted-table'] },
@@ -103,9 +104,26 @@ async function deployChain(chainId: ChainId, keys: Keys): Promise<void> {
   } else console.log(`  · keysets + interfaces present (util exists)`);
 
   for (const m of MODULES) {
-    if (await moduleExists(m.name, chainId)) { console.log(`  · ${NS}.${m.name} present, skipped`); continue; }
-    const code = (m.transform ?? ((c: string) => c))(src(m.file)) + '\n' + tables(m.name, m.tables ?? []);
-    await send({ code, label: `ch${chainId}: deploy ${m.name}${m.tables?.length ? ` (+${m.tables.length} tables)` : ''}`, signers: plain, data, chainId });
+    const present = await moduleExists(m.name, chainId);
+    if (present && !UPGRADE.includes(m.name)) { console.log(`  · ${NS}.${m.name} present, skipped`); continue; }
+    const body = (m.transform ?? ((c: string) => c))(src(m.file));
+    if (!present) {
+      await send({ code: body + '\n' + tables(m.name, m.tables ?? []), label: `ch${chainId}: deploy ${m.name}${m.tables?.length ? ` (+${m.tables.length} tables)` : ''}`, signers: plain, data, chainId });
+      continue;
+    }
+    // UPGRADE (UPGRADE=name,name): the module's governance keyset signs; an upgrade creates no table
+    // (memory: pact_upgrade_does_not_create_tables), so every table the new code names is probed and
+    // created when missing — the one-shot a schema change otherwise forgets
+    await send({ code: body, label: `ch${chainId}: UPGRADE ${m.name} (gov)`, signers: gov, data, chainId });
+    for (const t of m.tables ?? []) {
+      // 🔴 `describe-table` answers from the module's DECLARATION and resolves for a table that was never
+      // created (devnet, 2026-10-13: it said quote-expiry was present while every read failed "Table …
+      // not found"). Only a real read proves the table exists.
+      const exists = await localCall(`(keys ${NS}.${m.name}.${t})`, chainId).then(() => true).catch(() => false);
+      // Pact 5: top-level `create-table` needs the module's admin acquired explicitly (the gov keyset signs)
+      if (!exists) await send({ code: `(acquire-module-admin ${NS}.${m.name}) (create-table ${NS}.${m.name}.${t})`, label: `ch${chainId}: create ${m.name}.${t}`, signers: gov, data, chainId });
+      else console.log(`  · table ${m.name}.${t} present`);
+    }
   }
 
   // governance wiring — each call is idempotent-guarded by a read, so a rerun does not fail

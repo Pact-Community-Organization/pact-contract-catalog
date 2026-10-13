@@ -40,6 +40,7 @@
 (create-table nft.policy-manager.sale-contracts)
 (create-table nft.policy-manager.params)
 (create-table nft.policy-manager.creation-venues)
+(create-table nft.policy-manager.quote-expiry)
 (load "../core/ledger.pact")
 (create-table nft.ledger.ledger-table)
 (create-table nft.ledger.tokens)
