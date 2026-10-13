@@ -81,8 +81,8 @@
       (format "{}: at most {} beneficiaries" [label MAX-BENEFICIARIES]))
     (map (lambda (b:object{beneficiary})
            (enforce (>= (at 'bps b) 0) (format "{}: bps must not be negative" [label]))
-           (enforce (validate-principal (at 'guard b) (at 'account b))
-             (format "{}: account must be the principal of its guard" [label])))
+           ;; ADR-NFT-016: k:/w:/c:, or r: in a principal namespace (never a name a stranger could define elsewhere)
+           (util.enforce-binding-payee (at 'account b) (at 'guard b)))
          bs)
     (enforce (<= (total-bps bs) BPS-DENOM) (format "{}: total exceeds 100%" [label])))
 

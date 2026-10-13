@@ -153,3 +153,5 @@ Every change: all suites in `test/` green (`pact <name>.repl`) and the repositor
 chain switch (provenance-checked), but SPV verification and first-arrival row materialization on a
 genuinely fresh chain are only provable against real chains — the devnet campaign runs the full
 marketplace-hop scenario there.
+
+- `examples/split/split.pact` — a shared payout account divided by fixed shares, any fungible-v2, push distribution by anyone (ADR-NFT-016).

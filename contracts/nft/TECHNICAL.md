@@ -1237,6 +1237,26 @@ second: (a) the new module `bless`es its previous hash(es), so dependents keep w
 `UPGRADE=<list>`), so each records the new hash. A mainnet upgrade plan must say which, before it
 is signed. Tables are never created by an upgrade; the deployer probes and creates the missing ones.
 
+### Payee accounts and splits (ADR-NFT-016, 2026-10-13)
+
+Every fee leg pays ONE account, and every such account obeys one rule, `util.enforce-binding-payee`:
+it is the principal of its guard AND its name binds that authority — `k:`, `w:`, `c:`, or `r:` **inside a
+principal namespace** (`r:n_<40 hex>.name`). An `r:` outside one is refused: on a chain where that
+namespace is not yet defined, a stranger could define the keyset and own the payee there; inside `n_…`
+only the governing keyset can. Applied to royalty beneficiaries, venue payout accounts (venues therefore
+now accept rotatable `r:` accounts), the protocol account and raw listing fee accounts. Holder accounts
+stay stricter (the ledger refuses every `r:`, L7). Tests: `test/payout-plans.repl` (an `r:` venue and an
+`r:` artist are PAID at accounts created with their keyset-ref guards; `r:nft.x` and `u:` are refused).
+
+**Splits — `examples/split/split.pact`** (example tier, not core): one transaction creates a split with 1
+to 16 payees whose shares total exactly 100 %; the split owns a `c:` account only the module can debit;
+ANYONE may `distribute` its balance of ANY `fungible-v2` to the payees (push via `transfer-create`,
+floored to the token's precision, the dust stays); the owner may `set-payees` until `renounce`, which
+is forever; nothing but `distribute` moves money. Name `(split.account id)` wherever the framework asks
+for a payee. Deploy it on every chain the framework lives on: a `c:` payee named in a token pays the
+same account on every chain the token reaches, and funds that arrive before the module exists there
+wait under the same guard. Suite: `test/split.repl`.
+
 ## 9 · Cross-chain relocation
 
 Kadena is a braid of parallel chains; an NFT that can only ever live on its

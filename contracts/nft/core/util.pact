@@ -43,6 +43,33 @@
     (let ((pfx (take 2 account)))
       (if (= ":" (take -1 pfx)) (take 1 pfx) "")))
 
+  ;; --- payee accounts (ADR-NFT-016) ---------------------------------------------------
+  ;; Every fee leg pays ONE account. Its name must be the principal of its guard AND bind that
+  ;; authority: k:/w:/c:, or r: INSIDE A PRINCIPAL NAMESPACE (r:n_<40 hex>.name). An r: name in an
+  ;; ordinary namespace is refused: on a chain where the namespace is not yet defined a stranger
+  ;; could define the keyset and own the payee there; only the governing keyset can define n_….
+  ;; (Holder accounts are stricter still: ledger.enforce-account-principal refuses every r:.)
+  (defconst BINDING-PAYEE-PROTOCOLS:[string] ["k" "w" "c" "r"])
+  (defconst PRINCIPAL-NS-LEN:integer 42
+    @doc "ns.create-principal-namespace: \"n_\" + 40 hex chars of the guard hash.")
+
+  (defun principal-namespace-r?:bool (account:string)
+    @doc "True when ACCOUNT is r:n_<40 hex>.<keyset-name>."
+    (and (= "r:n_" (take 4 account))
+         (and (= "." (take 1 (drop (+ 2 PRINCIPAL-NS-LEN) account)))
+              (> (length account) (+ 3 PRINCIPAL-NS-LEN)))))
+
+  (defun enforce-binding-payee:bool (account:string guard:guard)
+    @doc "A payee (royalty beneficiary, venue, protocol, listing fee) must be the principal \
+         \of GUARD and use a binding name: k:, w:, c:, or r: in a principal namespace."
+    (enforce (validate-principal guard account) "payee account must be the principal of its guard")
+    (let ((p (check-reserved account)))
+      (enforce (contains p BINDING-PAYEE-PROTOCOLS)
+        "payee account must pin its authority (k:, w:, c:, or r: in a principal namespace)")
+      (if (= p "r")
+        (enforce (principal-namespace-r? account) "an r: payee must live in a principal namespace (r:n_…)")
+        true)))
+
   (defun enforce-reserved:bool (account:string guard:guard)
     @doc "Enforce reserved account-name protocols. A k:/w: principal account \
          \name MUST validate against its GUARD (validate-principal); a k: name \

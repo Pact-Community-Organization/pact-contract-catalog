@@ -1,0 +1,186 @@
+;; split.repl — ADR-NFT-016: the split example module.
+;; A shared payout account divided by fixed shares; any fungible-v2; push distribution by anyone;
+;; the owner edits payees until they renounce, which is forever; nothing but distribute moves money.
+;;
+;; Run: pact contracts/nft/test/split.repl
+
+(begin-tx "coin")
+(load "../../registry/kip/fungible-v2/fungible-v2.pact")
+(load "../../registry/kip/fungible-xchain-v1/fungible-xchain-v1.pact")
+(load "../../registry/core/coin/coin-v6.pact")
+(create-table coin.coin-table)
+(commit-tx)
+
+(begin-tx "nft util + the split module under its own namespace")
+(env-chain-data { "chain-id": "0" })
+(env-data
+  { "g": { "keys": ["9999999999999999999999999999999999999999999999999999999999999999"], "pred": "keys-all" }
+  , "ns": "nft", "admin-ks": "nft.admin"
+  , "split-ns": "studio", "split-admin-ks": "studio.admin" })
+(env-keys ["9999999999999999999999999999999999999999999999999999999999999999"])
+(define-namespace "nft" (read-keyset 'g) (read-keyset 'g))
+(namespace "nft")
+(define-keyset "nft.admin" (read-keyset 'g))
+(load "../interfaces/account-protocols.pact")
+(load "../core/util.pact")
+(define-namespace "studio" (read-keyset 'g) (read-keyset 'g))
+(namespace "studio")
+(define-keyset "studio.admin" (read-keyset 'g))
+(load "../examples/split/split.pact")
+(create-table studio.split.splits)
+;; a principal namespace with a rotatable keyset, for the r: payee case
+(define-namespace "n_0123456789abcdef0123456789abcdef01234567" (read-keyset 'g) (read-keyset 'g))
+(namespace "n_0123456789abcdef0123456789abcdef01234567")
+(define-keyset "n_0123456789abcdef0123456789abcdef01234567.artist" (read-keyset 'g))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; fixtures: the company (owner), the artist (r: in a principal namespace), a producer (k:)
+;; ---------------------------------------------------------------------------
+(begin-tx "accounts")
+(env-data
+  { "company": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "producer": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" }
+  , "payer": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(test-capability (coin.CREDIT "k:3333333333333333333333333333333333333333333333333333333333333333"))
+(coin.credit "k:3333333333333333333333333333333333333333333333333333333333333333" (read-keyset 'payer) 1000.0)
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; create: validation, then a 3-way split (company 75%, artist 20%, producer 5%)
+;; ---------------------------------------------------------------------------
+(begin-tx "create-split refuses malformed payee lists")
+(env-data
+  { "company": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "producer": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(expect-failure "shares must total exactly 100%" "shares must total exactly 100%"
+  (studio.split.create-split "s1" (read-keyset 'company)
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 7000, 'label: "company" }
+    , { 'account: "k:2222222222222222222222222222222222222222222222222222222222222222", 'guard: (read-keyset 'producer), 'bps: 500, 'label: "producer" } ]))
+(expect-failure "a zero share is refused" "bps must be positive"
+  (studio.split.create-split "s1" (read-keyset 'company)
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 10000, 'label: "company" }
+    , { 'account: "k:2222222222222222222222222222222222222222222222222222222222222222", 'guard: (read-keyset 'producer), 'bps: 0, 'label: "producer" } ]))
+(expect-failure "duplicate payee accounts are refused" "must be distinct"
+  (studio.split.create-split "s1" (read-keyset 'company)
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 5000, 'label: "a" }
+    , { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 5000, 'label: "b" } ]))
+(expect-failure "a payee that is not the principal of its guard is refused" "principal of its guard"
+  (studio.split.create-split "s1" (read-keyset 'company)
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'producer), 'bps: 10000, 'label: "x" } ]))
+(expect-failure "an r: payee outside a principal namespace is refused" "principal namespace"
+  (studio.split.create-split "s1" (read-keyset 'company)
+    [ { 'account: "r:studio.admin", 'guard: (keyset-ref-guard "studio.admin"), 'bps: 10000, 'label: "x" } ]))
+(expect-failure "a split cannot pay itself" "cannot pay itself"
+  (studio.split.create-split "s1" (read-keyset 'company)
+    [ { 'account: (studio.split.account "s1"), 'guard: (studio.split.split-guard "s1"), 'bps: 10000, 'label: "me" } ]))
+(expect-failure "an empty list is refused" "1 to 16 payees"
+  (studio.split.create-split "s1" (read-keyset 'company) []))
+(expect-failure "an empty id is refused" "1 to 64 characters"
+  (studio.split.create-split "" (read-keyset 'company)
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 10000, 'label: "company" } ]))
+(rollback-tx)
+
+(begin-tx "the company creates the split: 75 / 20 (artist, rotatable r:) / 5")
+(env-data
+  { "company": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "producer": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(expect "create-split returns the c: payout account"
+  (studio.split.account "s1")
+  (studio.split.create-split "s1" (read-keyset 'company)
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 7500, 'label: "company" }
+    , { 'account: "r:n_0123456789abcdef0123456789abcdef01234567.artist", 'guard: (keyset-ref-guard "n_0123456789abcdef0123456789abcdef01234567.artist"), 'bps: 2000, 'label: "artist" }
+    , { 'account: "k:2222222222222222222222222222222222222222222222222222222222222222", 'guard: (read-keyset 'producer), 'bps: 500, 'label: "producer" } ]))
+(expect "the account is a c: principal" "c" (nft.util.check-reserved (studio.split.account "s1")))
+(expect-failure "the same id cannot be created twice" "found"
+  (studio.split.create-split "s1" (read-keyset 'company)
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 10000, 'label: "company" } ]))
+(expect "it is mutable until renounced" true (at 'mutable (studio.split.get-split "s1")))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; distribute: a stranger pushes the balance; every payee is paid; dust stays
+;; ---------------------------------------------------------------------------
+(begin-tx "nothing to distribute yet")
+(expect-failure "an empty split has nothing to distribute" "nothing to distribute"
+  (studio.split.distribute "s1" coin))
+(rollback-tx)
+
+(begin-tx "a royalty leg lands in the split and a stranger distributes it")
+(env-data { "payer": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [ (coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333" (studio.split.account "s1") 10.000000000001) ] } ])
+;; 10.000000000001 coin: 75% = 7.50000000000075 → floored to 7.500000000000 at coin's 12 decimals, the dust stays
+(coin.transfer-create "k:3333333333333333333333333333333333333333333333333333333333333333" (studio.split.account "s1") (studio.split.split-guard "s1") 10.000000000001)
+(env-sigs [])
+(expect "anyone may distribute" true (studio.split.distribute "s1" coin))
+(expect "company received 75%" 7.5 (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "the artist's r: account was created with its keyset-ref guard and received 20%" 2.0
+  (coin.get-balance "r:n_0123456789abcdef0123456789abcdef01234567.artist"))
+(expect "the artist's account is guarded by the rotatable keyset"
+  (keyset-ref-guard "n_0123456789abcdef0123456789abcdef01234567.artist")
+  (at 'guard (coin.details "r:n_0123456789abcdef0123456789abcdef01234567.artist")))
+(expect "producer received 5%" 0.5 (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "only the rounding dust stays in the split" 0.000000000001 (coin.get-balance (studio.split.account "s1")))
+(commit-tx)
+
+;; ---------------------------------------------------------------------------
+;; the SPLIT capability is the only key to the account, and nobody outside can hold it
+;; ---------------------------------------------------------------------------
+(begin-tx "nobody can debit the split's account directly")
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+            , "caps": [ (coin.TRANSFER (studio.split.account "s1") "k:1111111111111111111111111111111111111111111111111111111111111111" 0.000000000001) ] } ])
+(expect-failure "the owner cannot pull the balance with a plain transfer" "Capability not acquired"
+  (coin.transfer (studio.split.account "s1") "k:1111111111111111111111111111111111111111111111111111111111111111" 0.000000000001))
+(expect-failure "SPLIT cannot be acquired from outside the module" "Module admin"
+  (with-capability (studio.split.SPLIT "s1") true))
+(rollback-tx)
+
+;; ---------------------------------------------------------------------------
+;; set-payees: owner only, validated, and refused once renounced
+;; ---------------------------------------------------------------------------
+(begin-tx "a stranger cannot change the payees")
+(env-data { "producer": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-keys ["2222222222222222222222222222222222222222222222222222222222222222"])
+(expect-failure "set-payees needs the owner" "Keyset failure"
+  (studio.split.set-payees "s1"
+    [ { 'account: "k:2222222222222222222222222222222222222222222222222222222222222222", 'guard: (read-keyset 'producer), 'bps: 10000, 'label: "producer" } ]))
+(rollback-tx)
+
+(begin-tx "the owner replaces the artist's share, then renounces")
+(env-data
+  { "company": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "producer": { "keys": ["2222222222222222222222222222222222222222222222222222222222222222"], "pred": "keys-all" } })
+(env-keys ["1111111111111111111111111111111111111111111111111111111111111111"])
+(expect-failure "a replacement list is validated too" "shares must total exactly 100%"
+  (studio.split.set-payees "s1"
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 9000, 'label: "company" } ]))
+(expect "the owner sets a 50/50 split" true
+  (studio.split.set-payees "s1"
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 5000, 'label: "company" }
+    , { 'account: "k:2222222222222222222222222222222222222222222222222222222222222222", 'guard: (read-keyset 'producer), 'bps: 5000, 'label: "producer" } ]))
+(expect "two payees now" 2 (length (at 'payees (studio.split.get-split "s1"))))
+(expect "the owner renounces" true (studio.split.renounce "s1"))
+(expect "renounced is recorded" false (at 'mutable (studio.split.get-split "s1")))
+(expect-failure "after renouncing, payees are fixed for good" "fixed for good"
+  (studio.split.set-payees "s1"
+    [ { 'account: "k:1111111111111111111111111111111111111111111111111111111111111111", 'guard: (read-keyset 'company), 'bps: 10000, 'label: "company" } ]))
+(expect-failure "renouncing twice is refused" "already fixed" (studio.split.renounce "s1"))
+(commit-tx)
+
+(begin-tx "distribution follows the new shares")
+(env-data { "payer": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" } })
+(env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+            , "caps": [ (coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333" (studio.split.account "s1") 4.0) ] } ])
+(coin.transfer "k:3333333333333333333333333333333333333333333333333333333333333333" (studio.split.account "s1") 4.0)
+(env-sigs [])
+(expect "distribute" true (studio.split.distribute "s1" coin))
+;; 4.000000000001 in the account: 50% each = 2.0000000000005 → 2.000000000000 each; dust 0.000000000001 stays
+(expect "company 7.5 + 2" 9.5 (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111"))
+(expect "producer 0.5 + 2" 2.5 (coin.get-balance "k:2222222222222222222222222222222222222222222222222222222222222222"))
+(expect "the artist, no longer a payee, received nothing more" 2.0
+  (coin.get-balance "r:n_0123456789abcdef0123456789abcdef01234567.artist"))
+(expect "dust stays" 0.000000000001 (coin.get-balance (studio.split.account "s1")))
+(commit-tx)
+
+(print "split.repl: done")

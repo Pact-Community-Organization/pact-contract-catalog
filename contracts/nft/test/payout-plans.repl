@@ -530,6 +530,110 @@
   (expect "the card is back with bob" 1.0 (nft.ledger.get-balance id "k:2222222222222222222222222222222222222222222222222222222222222222")))
 (commit-tx)
 
+;; ---------------------------------------------------------------------------
+;; ADR-NFT-016 — payees: k:/w:/c:, or r: INSIDE a principal namespace; never a name a stranger
+;; could define on another chain. A store with rotatable keys; an artist paid at an r: account.
+;; ---------------------------------------------------------------------------
+(begin-tx "a principal namespace with a rotatable keyset (the studio's)")
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-keys ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
+(define-namespace "n_0123456789abcdef0123456789abcdef01234567" (read-keyset 'studio) (read-keyset 'studio))
+(namespace "n_0123456789abcdef0123456789abcdef01234567")
+(define-keyset "n_0123456789abcdef0123456789abcdef01234567.pay" (read-keyset 'studio))
+(define-keyset "n_0123456789abcdef0123456789abcdef01234567.artist" (read-keyset 'studio))
+(commit-tx)
+
+(begin-tx "venues: r: in a principal namespace is accepted; r: elsewhere and u: are refused")
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-keys ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "9999999999999999999999999999999999999999999999999999999999999999"])
+(expect-failure "an r: payout account outside a principal namespace is refused" "principal namespace"
+  (nft.venue-registry.register-venue "Bad Store" (read-keyset 'studio) "r:nft.admin" (keyset-ref-guard "nft.admin") 0 0 300))
+(expect-failure "a user-guard payout account is refused" "pin its authority"
+  (let ((ug:guard (create-user-guard (nft.util.enforce-valid-account "probe"))))
+    (nft.venue-registry.register-venue "Bad Store" (read-keyset 'studio) (create-principal ug) ug 0 0 300)))
+(expect "a store registers with an r: payout account whose keys its owner may rotate"
+  (nft.venue-registry.create-venue-id "Studio Store" (read-keyset 'studio))
+  (nft.venue-registry.register-venue "Studio Store" (read-keyset 'studio)
+    "r:n_0123456789abcdef0123456789abcdef01234567.pay" (keyset-ref-guard "n_0123456789abcdef0123456789abcdef01234567.pay") 0 0 300))
+(commit-tx)
+
+(begin-tx "royalty plans: an r: beneficiary outside a principal namespace is refused at creation")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec":
+    { "beneficiaries": [ { "account": "r:nft.admin", "guard": (keyset-ref-guard "nft.admin"), "bps": 100, "label": "x" } ]
+    , "primary": [] } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(expect-failure "refused" "principal namespace"
+  (nft.ledger.create-token (nft.ledger.create-token-id { 'uri: "ipfs://rbad", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))
+    0 "ipfs://rbad" [nft.royalty-policy] "" (read-keyset 'alice)))
+(rollback-tx)
+
+(begin-tx "a company + artist plan: company 3% (k:), artist 1% at a rotatable r: account")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "royalty_spec":
+    { "beneficiaries":
+      [ { "account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+        , "guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }, "bps": 300, "label": "company" }
+      , { "account": "r:n_0123456789abcdef0123456789abcdef01234567.artist"
+        , "guard": (keyset-ref-guard "n_0123456789abcdef0123456789abcdef01234567.artist"), "bps": 100, "label": "artist" } ]
+    , "primary": [] } })
+(env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111", "caps": [] } ])
+(let ((id (nft.ledger.create-token-id { 'uri: "ipfs://studio-card", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))))
+  (expect "created with the two-payee plan" true
+    (nft.ledger.create-token id 0 "ipfs://studio-card" [nft.royalty-policy] "" (read-keyset 'alice)))
+  (nft.ledger.mint id "k:1111111111111111111111111111111111111111111111111111111111111111" (read-keyset 'alice) 1.0))
+(commit-tx)
+
+(begin-tx "alice lists it on the Studio Store (the r: venue) for 100")
+(env-hash (hash "pp-r-sale"))
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data { "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" } })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "studio": { "keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], "pred": "keys-all" }
+  , "quote":
+    { "fungible": coin, "price": 100.0
+    , "seller-account": "k:1111111111111111111111111111111111111111111111111111111111111111"
+    , "seller-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "venue-id": (nft.venue-registry.create-venue-id "Studio Store" (read-keyset 'studio))
+    , "fee-account": "", "fee-guard": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+    , "fee-bps": 0, "buyer-share-bps": 0, "sale-contract": "" } })
+(let ((id (nft.ledger.create-token-id { 'uri: "ipfs://studio-card", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice))))
+  (env-sigs [ { "key": "1111111111111111111111111111111111111111111111111111111111111111"
+              , "caps": [ (nft.ledger.OFFER id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0) ] } ])
+  (nft.ledger.sale id "k:1111111111111111111111111111111111111111111111111111111111111111" 1.0 0))
+(commit-tx)
+
+(begin-tx "carol buys: the r: venue and the r: artist are paid at accounts created with their keyset-ref guards")
+(env-chain-data { "chain-id": "0", "block-time": (time "2026-01-01T00:00:00Z") })
+(env-data
+  { "alice": { "keys": ["1111111111111111111111111111111111111111111111111111111111111111"], "pred": "keys-all" }
+  , "buyer": "k:3333333333333333333333333333333333333333333333333333333333333333"
+  , "buyer-guard": { "keys": ["3333333333333333333333333333333333333333333333333333333333333333"], "pred": "keys-all" }
+  , "buyer_fungible_account": "k:3333333333333333333333333333333333333333333333333333333333333333" })
+(let ((id (nft.ledger.create-token-id { 'uri: "ipfs://studio-card", 'precision: 0, 'policies: [nft.royalty-policy], 'serial: "" } (read-keyset 'alice)))
+      (before (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111")))
+  (env-sigs [ { "key": "3333333333333333333333333333333333333333333333333333333333333333"
+              , "caps": [ (nft.ledger.BUY id "k:1111111111111111111111111111111111111111111111111111111111111111"
+                            "k:3333333333333333333333333333333333333333333333333333333333333333" 1.0 (hash "pp-r-sale"))
+                        , (coin.TRANSFER "k:3333333333333333333333333333333333333333333333333333333333333333"
+                            (nft.policy-manager.escrow-account (hash "pp-r-sale")) 100.0) ] } ])
+  (continue-pact 1 false (hash "pp-r-sale"))
+  ;; no first-sale list, so the resale plan applies to the author's own sale: company 3% (alice herself) + artist 1%;
+  ;; the store takes 3%, the protocol 0.5%: alice nets 100 - 0.5 - 3 - 4 = 92.5 plus her own 3% leg = 95.5
+  (expect "alice received 92.5 plus her own 3% leg" 95.5 (- (coin.get-balance "k:1111111111111111111111111111111111111111111111111111111111111111") before)))
+(expect "the artist's r: account received 1%" 1.0 (coin.get-balance "r:n_0123456789abcdef0123456789abcdef01234567.artist"))
+(expect "the artist's account is guarded by the rotatable keyset"
+  (keyset-ref-guard "n_0123456789abcdef0123456789abcdef01234567.artist")
+  (at 'guard (coin.details "r:n_0123456789abcdef0123456789abcdef01234567.artist")))
+(expect "the store's r: account received its 3%" 3.0 (coin.get-balance "r:n_0123456789abcdef0123456789abcdef01234567.pay"))
+(expect "escrow empty (conservation)" 0.0 (coin.get-balance (nft.policy-manager.escrow-account (hash "pp-r-sale"))))
+(commit-tx)
+
 (print "")
 (print "=== PAYOUT PLANS: ALL GREEN ===")
 (print "  protocol leg governance-set; venue registry derived ids + future-only rates;")

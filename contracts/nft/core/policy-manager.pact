@@ -85,7 +85,7 @@
          \name must be the principal of its guard."
     (enforce (and (>= bps 0) (<= bps BPS-DENOM)) "protocol bps must be in [0, 10000]")
     (if (> bps 0)
-      (enforce (validate-principal guard account) "protocol account must be the principal of its guard")
+      (util.enforce-binding-payee account guard)   ;; ADR-NFT-016
       true)
     (with-capability (GOVERNANCE)
       (write params PARAMS-KEY { 'bps: bps, 'account: account, 'guard: guard }))
@@ -474,8 +474,7 @@
       (enforce (validate-principal (at 'seller-guard q) (at 'seller-account q))
         "seller-account must be a principal")
       (if (> fee-bps 0)
-        (enforce (validate-principal (at 'fee-guard q) (at 'fee-account q))
-          "fee-account must be a principal when a fee is charged")
+        (util.enforce-binding-payee (at 'fee-account q) (at 'fee-guard q))   ;; ADR-NFT-016
         true)
       ;; THE ONE RULE at offer: protocol + this sale's creation-venue rate +
       ;; the policies' maximum + the listing fee must fit in 100%. A venue whose

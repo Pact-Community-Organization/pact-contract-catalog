@@ -30,9 +30,6 @@
 
   (defconst BPS-DENOM:integer 10000)
   (defconst VENUE-ID-PREFIX:string "v")
-  (defconst BINDING-PAYOUT-PROTOCOLS:[string] ["k" "w" "c"]
-    @doc "A venue's payout account must pin its authority immutably, for the \
-         \same reasons the ledger refuses r:/u:/m:/p: names (ledger.pact).")
 
   (defschema venue
     name:string
@@ -67,13 +64,13 @@
     ( name:string owner-guard:guard account:string guard:guard
       primary-bps:integer resale-bps:integer listing-bps:integer )
     @doc "Register a venue. Returns its id. The payout ACCOUNT must be the \
-         \principal of GUARD under a binding protocol (k:/w:/c:). One-time: \
+         \principal of GUARD under a binding protocol (k:/w:/c:, or r: in a \
+         \principal namespace — util.enforce-binding-payee). One-time: \
          \the insert refuses a second registration of the same name by the \
          \same owner (use set-rates to change rates)."
     (enforce (!= "" name) "venue name required")
-    (enforce (validate-principal guard account) "venue account must be the principal of its guard")
-    (enforce (contains (util.check-reserved account) BINDING-PAYOUT-PROTOCOLS)
-      "venue account must pin its authority immutably (k:, w: or c:)")
+    ;; ADR-NFT-016: k:/w:/c:, or r: in a principal namespace (a store may rotate its payout keys)
+    (util.enforce-binding-payee account guard)
     (enforce-valid-bps "primary-bps" primary-bps)
     (enforce-valid-bps "resale-bps" resale-bps)
     (enforce-valid-bps "listing-bps" listing-bps)

@@ -33,6 +33,7 @@ const NS = process.env.NFT_NS ?? 'user';
 const CHAINS = (process.env.NFT_CHAINS ?? '0,1').split(',').map((c) => c.trim()) as ChainId[];
 const ADMIN_KS = `${NS}.nft-site-admin`;
 const ARENA_KS = `${NS}.nft-site-arena-admin`;
+const SPLIT_KS = `${NS}.nft-site-split-admin`;
 const PROTOCOL_BPS = 50;
 const UPGRADE = (process.env.UPGRADE ?? '').split(',').map((x) => x.trim()).filter(Boolean);
 const SWAP_FEE = 0.5;   // flat KDA per accepted swap — a devnet placeholder, the founder's figure at the ceremony
@@ -82,6 +83,8 @@ const MODULES: Mod[] = [
   { name: 'swap', file: 'core/swap.pact', tables: ['offers', 'params'] },
   // the reference game: its framework references are written as nft.*; the deployment substitutes
   { name: 'arena', file: 'examples/arena/arena.pact', tables: ['matches'], transform: (c) => c.replace(/\bnft\./g, `${NS}.`) },
+  // ADR-NFT-016: shared payout accounts (an example module, deployed on every framework chain)
+  { name: 'split', file: 'examples/split/split.pact', tables: ['splits'], transform: (c) => c.replace(/\bnft\./g, `${NS}.`) },
 ];
 const INTERFACES = [
   'interfaces/account-protocols.pact', 'interfaces/token-policy.pact', 'interfaces/poly-fungible.pact',
@@ -93,15 +96,20 @@ async function deployChain(chainId: ChainId, keys: Keys): Promise<void> {
   const data = {
     ns: NS, 'admin-ks': ADMIN_KS, g: ks(keys.gov),
     'arena-ns': NS, 'arena-admin-ks': ARENA_KS, 'arena-admin': ks(keys.gov),
+    'split-ns': NS, 'split-admin-ks': SPLIT_KS, 'split-admin': ks(keys.gov),
   };
   const gov = [{ kp: SENDER00 }, { kp: keys.gov }];
   const plain = [{ kp: SENDER00 }];
 
   if (!(await moduleExists('util', chainId))) {
-    await send({ code: `(namespace "${NS}")(define-keyset "${ADMIN_KS}" (read-keyset "g"))(define-keyset "${ARENA_KS}" (read-keyset "arena-admin"))`,
+    await send({ code: `(namespace "${NS}")(define-keyset "${ADMIN_KS}" (read-keyset "g"))(define-keyset "${ARENA_KS}" (read-keyset "arena-admin"))(define-keyset "${SPLIT_KS}" (read-keyset "split-admin"))`,
       label: `ch${chainId}: define ${ADMIN_KS} + ${ARENA_KS}`, signers: gov, data, chainId });
     await send({ code: INTERFACES.map(src).join('\n'), label: `ch${chainId}: deploy the interfaces`, signers: plain, data, chainId });
   } else console.log(`  · keysets + interfaces present (util exists)`);
+  // the split module's admin keyset (ADR-NFT-016) — defined once, also on a devnet bootstrapped before it existed
+  if (!(await localCall(`(describe-keyset "${SPLIT_KS}")`, chainId).then(() => true).catch(() => false))) {
+    await send({ code: `(namespace "${NS}")(define-keyset "${SPLIT_KS}" (read-keyset "split-admin"))`, label: `ch${chainId}: define ${SPLIT_KS}`, signers: gov, data, chainId });
+  }
 
   for (const m of MODULES) {
     const present = await moduleExists(m.name, chainId);
