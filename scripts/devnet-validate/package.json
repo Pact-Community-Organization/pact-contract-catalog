@@ -16,7 +16,8 @@
     "royalty-sale": "tsx src/royalty-sale.ts",
     "royalty-sale-sim": "tsx src/royalty-sale-market-sim.ts",
     "nft-framework": "tsx src/nft-framework.ts",
-    "nft-site-devnet": "tsx src/nft-site-devnet.ts"
+    "nft-site-devnet": "tsx src/nft-site-devnet.ts",
+    "nft-test-token": "tsx src/nft-test-token.ts"
   },
   "dependencies": {
     "@kadena/client": "^1.18.3",
