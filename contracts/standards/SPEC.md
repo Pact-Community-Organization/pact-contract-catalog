@@ -88,9 +88,9 @@ software treats them uniformly. This is the `fungible-v2` model — every token
 contract is its own ledger, yet one wallet handles them all. Full asset
 portability across a shared ledger (a token minted in marketplace A, held in
 marketplace B's ledger) is explicitly **not** a v1 goal; that shared-ledger
-track now exists as the PCO [`nft` framework](../nft/README.md)
-(`contracts/nft/`) — a separate product with its own design, which does not
-change v1's custody model or any clause below.
+track exists as a separate NFT framework, maintained by Smart Pacts outside
+this catalog, with its own design; it does not change v1's custody model or
+any clause below.
 
 ## The rules (normative)
 
@@ -202,7 +202,7 @@ document plus the three interfaces.
 
 Auctions and offers/bids; bundles/collections as first-class sale units; lazy
 minting; fractional ownership; a shared cross-marketplace ledger (full
-portability — delivered outside v1 by the PCO `nft` framework,
-`contracts/nft/`); metadata schema standardization beyond a `uri` string. Each is a
+portability — delivered outside v1 by a separate NFT framework maintained by
+Smart Pacts); metadata schema standardization beyond a `uri` string. Each is a
 separate, additive interface so v1 stays small and every clause above stays
 mechanically checkable.

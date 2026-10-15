@@ -62,7 +62,7 @@ BLOCKS_PER_CHAIN_90D = 259_200
 
 # Modules / interfaces excluded from census results by default: either already
 # present in the catalog, or excluded by policy (the marmalade stack is not
-# catalogued — the catalog's NFT architecture is contracts/nft)
+# catalogued)
 ALREADY_CATALOGED: set[str] = {
     # kip — standard interfaces
     "fungible-v2",

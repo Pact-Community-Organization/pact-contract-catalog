@@ -4,14 +4,13 @@
 
 Provide a layered, dependency-aware catalog of production Pact smart contracts on KDA-CE. Each contract entry ships with its source code (as deployed on-chain), human-readable documentation, machine-readable metadata, and an audit record.
 
-The catalog ships four product trees: **`contracts/library/`** (PCO-authored
+The catalog ships three product trees: **`contracts/library/`** (PCO-authored
 deployable templates with a strict quality gate), **`contracts/registry/`** (the
-observatory — verbatim observed contracts, read-only reference),
+observatory — verbatim observed contracts, read-only reference), and
 **`contracts/standards/`** (the Kadena NFT interface standard v1 — a normative
-SPEC, three un-upgradeable interfaces, and a runnable conformance suite), and
-**`contracts/nft/`** (the NFT Framework — the PCO-authored shared-ledger NFT
-ecosystem: one hardened ledger, a conservation-asserted settlement manager, six
-policies, two auction sale contracts, and cross-chain relocation).
+SPEC, three un-upgradeable interfaces, and a runnable conformance suite). The
+NFT Framework that used to live in `contracts/nft/` has moved out of the
+catalog and is now maintained by Smart Pacts.
 
 ---
 
@@ -32,7 +31,6 @@ contracts/
     ecosystem/         — production third-party modules (deployment breadth + call-frequency census)
     community/         — census-observed community free-namespace modules
   standards/           — Kadena NFT interface standard v1 (normative SPEC + conformance suite)
-  nft/                 — the NFT Framework (PCO-authored shared-ledger NFT ecosystem)
 scripts/               — validation, index generation
 docs/                  — onboarding, policies, index output (index.md, index.json)
 ```
@@ -115,15 +113,6 @@ Standards — Kadena NFT Interface Standard v1 (contracts/standards/)
   namespace (testnet06: n_e82dd10f74b7e8c253553de95629fdfa35cf8379);
   every marketplace implements them fully qualified from there.
   royalty-sale is the reference implementation.
-
-NFT Framework (contracts/nft/)
-  The catalog's NFT architecture: a PCO-authored shared-ledger NFT
-  ecosystem. Outside the registry layer stack; an original,
-  independent implementation.
-  One hardened ledger (token identity), a policy-manager with a
-  single conservation-asserted settlement, six policies, two
-  auction sale contracts, cross-chain relocation via policy
-  passports. Gate: 14 REPL suites + static analysis on every change.
 ```
 
 ### Full dependency graph
@@ -218,7 +207,6 @@ keywords: ['pact', 'smart-contract']
 | `registry/community/` | Community projects | Census-observed free-namespace modules (see each module's `metadata.yaml`) |
 | `library/` | PCO contributors | [Pact-Community-Organization/pact-contract-catalog](https://github.com/Pact-Community-Organization/pact-contract-catalog) |
 | `standards/` | PCO-authored & PCO-owned on-chain | This repository (normative interface standard, un-upgradeable; published in the PCO principal namespace per network) |
-| `nft/` | PCO-authored | This repository (original, independent implementation) |
 
 > All `registry/` entries are **observed entries** — verbatim snapshots of upstream or on-chain code, catalogued to document what community modules build upon and integrate with. PCO makes no security claim beyond the recorded audit status. Only `library/` entries are authored, maintained, and quality-gated by PCO.
 
@@ -231,5 +219,4 @@ keywords: ['pact', 'smart-contract']
 - Additions to `library/` require a PR linking a GitHub issue, passing CI (including the library quality gate: schema-A metadata, co-located `.repl` tests, `audit_status` of `self-reviewed` or better), and approval per `CONTRIBUTING.md`.
 - Entries with an open CRITICAL finding live in `registry/`, never `library/`.
 - `contracts/standards/` is normative and canonical: the three interfaces are un-upgradeable (`CannotUpgradeInterface`) and the SPEC's clauses are versioned — breaking changes ship as `-v2`, never as edits. On-chain the standard lives in the PCO-owned principal namespace (one publication per network; consumers implement fully qualified); every vendored copy elsewhere is a byte-identical fixture of this directory. Changes go through maintainer PRs.
-- `contracts/nft/` changes require every suite under `contracts/nft/test/` green and the static gate at 0 violations (see the Gates section of [contracts/nft/README.md](contracts/nft/README.md)); cross-chain behavior classes additionally require multi-chain devnet evidence.
 - Audit promotions follow the ladder in `docs/CONTRACT_POLICIES.md` §3.1 (`reference` / `unaudited` / `self-reviewed` / `community-reviewed` / `independently-audited`) and require evidence in `AUDIT.md`.

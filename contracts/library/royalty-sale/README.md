@@ -67,7 +67,7 @@ cd contracts/library/royalty-sale/examples && pact royalty-sale-test.repl
 
 ## Known limits
 
-- **Instant fixed-price sales only.** Auctions and Dutch auctions exist in the catalog as part of the [NFT Framework](../../nft/README.md) (`contracts/nft/`), which generalizes this template's conservation-checked settlement behind a shared-ledger policy architecture; this template stays the minimal standalone reference.
+- **Instant fixed-price sales only.** Auctions and Dutch auctions are not part of this template; it stays the minimal standalone reference.
 - **Sale-only tokens cannot be gifted or freely migrated** — that is the cost of enforceable royalties, and it is the creator's explicit opt-in, not a default.
 - **1-of-1 NFTs.** Fractional / multi-edition supply is out of scope for this template.
 - **The escrow is shared across sales but nets to zero each sale** (conservation is asserted per sale). Do not send funds to the escrow account directly.

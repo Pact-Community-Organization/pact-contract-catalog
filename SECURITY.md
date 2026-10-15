@@ -9,9 +9,9 @@ smart contracts. Security reporting is central to that promise.
 This policy covers:
 
 - The catalog tooling (`scripts/`, CI workflows, validation logic).
-- Contracts **authored by PCO**: the `contracts/library/` templates, the NFT
-  interface standard (`contracts/standards/`), and the NFT Framework
-  (`contracts/nft/`).
+- Contracts **authored by PCO**: the `contracts/library/` templates and the NFT
+  interface standard (`contracts/standards/`). The NFT Framework is no longer
+  part of this catalog; it is maintained by Smart Pacts.
 
 Contract entries under `contracts/registry/` are catalogued
 **verbatim** from upstream or on-chain sources and carry the `reference` or

@@ -44,12 +44,6 @@ ladder, and it does not cover the token's `TRANSFER_XCHAIN` SPV path (which
 needs a multi-chain devnet). Templates remain `self-reviewed`; devnet
 validation is corroborating evidence for the node-safety claim, cited as such.
 
-The same harness also carries the [NFT Framework](../contracts/nft/README.md)'s
-own campaign (`npm run nft-framework`) — a genuinely **multi-chain** run with
-real SPV relocation; see
-[scripts/devnet-validate/README.md](../scripts/devnet-validate/README.md). That
-run does not close the token template's `TRANSFER_XCHAIN` gap above.
-
 ## Reproducing
 
 ```bash
