@@ -5,7 +5,6 @@ _Generated from `contracts/**/metadata.yaml`._
 - **Library** — PCO-authored deployable templates: copy, adapt, deploy.
 - **Registry** — observed contracts (upstream standards + on-chain census): read-only reference.
 - **Standards** — the Kadena NFT interface standard v1: not metadata-indexed; see [contracts/standards/](../contracts/standards/SPEC.md).
-- **NFT Framework** — the PCO shared-ledger NFT ecosystem: not metadata-indexed; see [contracts/nft/](../contracts/nft/README.md).
 
 ## Library — Deployable Templates (`library/`)
 

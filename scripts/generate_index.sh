@@ -40,7 +40,6 @@ echo "" >> "$INDEX_MD"
 echo "- **Library** — PCO-authored deployable templates: copy, adapt, deploy." >> "$INDEX_MD"
 echo "- **Registry** — observed contracts (upstream standards + on-chain census): read-only reference." >> "$INDEX_MD"
 echo "- **Standards** — the Kadena NFT interface standard v1: not metadata-indexed; see [contracts/standards/](../contracts/standards/SPEC.md)." >> "$INDEX_MD"
-echo "- **NFT Framework** — the PCO shared-ledger NFT ecosystem: not metadata-indexed; see [contracts/nft/](../contracts/nft/README.md)." >> "$INDEX_MD"
 echo "" >> "$INDEX_MD"
 
 # emit_section <dir> <heading> <style>

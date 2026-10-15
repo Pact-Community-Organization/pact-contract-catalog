@@ -18,7 +18,7 @@ This tree contains **Pact Community Organization (PCO)** contract templates: dep
 | Property Lease | [property-lease/](property-lease/README.md) | Rental rails: escrowed deposit, rent buckets with revenue split, vault conservation |
 | Royalty Sale | [royalty-sale/](royalty-sale/README.md) | Conservation-checked NFT marketplace; reference implementation of the [NFT interface standard](../standards/SPEC.md) |
 
-**Building NFTs?** The catalog's NFT architecture is the [NFT Framework](../nft/README.md) (`contracts/nft/`) — a separate product tree, not a library template. `royalty-sale` remains here as the standalone single-module variant and the interface standard's reference implementation; the framework generalizes its settlement discipline behind a shared-ledger policy architecture.
+**Building NFTs?** `royalty-sale` is the catalog's standalone single-module NFT marketplace and the interface standard's reference implementation. The NFT Framework that used to live in `contracts/nft/` has moved out of the catalog; it is now maintained by Smart Pacts.
 
 ---
 

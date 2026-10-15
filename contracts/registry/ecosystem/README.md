@@ -12,7 +12,7 @@ and were selected based on live blockchain census data from `mainnet01`.
 4. Excluded coin, meme tokens, and test modules.
 5. Selected the top 10 by frequency + ecosystem significance. (The two
    Marmalade-stack entries originally selected have since been removed from
-   the catalog — the catalog's NFT architecture is `contracts/nft/`.)
+   the catalog.)
 
 ## Modules
 
